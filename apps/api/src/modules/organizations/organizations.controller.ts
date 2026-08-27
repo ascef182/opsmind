@@ -16,8 +16,10 @@ export class OrganizationsController {
     return this.organizationsService.create(user.id, dto);
   }
 
-  // Sem TenantGuard ainda (chega no Passo 8) — o escopo por membership é
-  // aplicado aqui na própria query (findByIdForUser), não por um guard.
+  // Não usa TenantGuard (Passo 8): o guard é para recursos aninhados sob uma
+  // organização (`/organizations/:organizationId/...`), não para a própria
+  // organização como recurso. O escopo por membership é feito na query
+  // (findByIdForUser) — mesmo efeito, sem organização "pai" para checar.
   @Get(':id')
   async findOne(
     @Param('id') id: string,

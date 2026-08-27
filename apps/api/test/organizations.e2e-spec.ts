@@ -49,15 +49,16 @@ describe('Organizations flow (e2e)', () => {
 
   it('cria a organização, vira OWNER e audita a criação', async () => {
     const { accessToken, userId } = await registerUser(app, `org-owner-${randomUUID()}@opsmind.test`);
+    const slug = `acme-corp-${randomUUID()}`;
 
     const createRes = await request(app.getHttpServer())
       .post('/organizations')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ name: 'Acme Corp' })
+      .send({ name: 'Acme Corp', slug })
       .expect(201);
 
     expect(createRes.body.id).toEqual(expect.any(String));
-    expect(createRes.body.slug).toBe('acme-corp');
+    expect(createRes.body.slug).toBe(slug);
 
     const membership = await prisma.membership.findFirst({
       where: { organizationId: createRes.body.id, userId },
@@ -83,7 +84,7 @@ describe('Organizations flow (e2e)', () => {
     const createRes = await request(app.getHttpServer())
       .post('/organizations')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ name: 'Readable Org' })
+      .send({ name: 'Readable Org', slug: `readable-org-${randomUUID()}` })
       .expect(201);
 
     const getRes = await request(app.getHttpServer())
@@ -101,7 +102,7 @@ describe('Organizations flow (e2e)', () => {
     const createRes = await request(app.getHttpServer())
       .post('/organizations')
       .set('Authorization', `Bearer ${owner.accessToken}`)
-      .send({ name: 'Private Org' })
+      .send({ name: 'Private Org', slug: `private-org-${randomUUID()}` })
       .expect(201);
 
     await request(app.getHttpServer())
