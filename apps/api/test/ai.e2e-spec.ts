@@ -176,6 +176,59 @@ describe('AI assistant flow (e2e)', () => {
     expect(tasksRes.body.find((t: { title: string }) => t.title === 'Tarefa indevida')).toBeUndefined();
   });
 
+  it('cenário do critério de aceitação da Fase 3 (PRD §17): pergunta sobre clientes inativos + criação de tarefas de ponta a ponta', async () => {
+    const owner = await registerUser(app, `ai-owner5-${randomUUID()}@opsmind.test`);
+    const organizationId = await createOrg(app, owner.accessToken);
+    const auth = { Authorization: `Bearer ${owner.accessToken}` };
+
+    const customerRes = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/customers`)
+      .set(auth)
+      .send({ name: 'Cliente Sumido', status: 'ACTIVE' })
+      .expect(201);
+    const customerId = customerRes.body.id as string;
+
+    // Sem contato há 20 dias (> inactiveAfterDays padrão de 14) — direto via
+    // Prisma, fora de qualquer request HTTP, mesmo padrão do teste de
+    // orçamento acima.
+    const twentyDaysAgo = new Date();
+    twentyDaysAgo.setDate(twentyDaysAgo.getDate() - 20);
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { lastActivityAt: twentyDaysAgo },
+    });
+
+    gateway.sendMessage
+      .mockResolvedValueOnce(toolUse('list_inactive_customers', {}))
+      .mockResolvedValueOnce(toolUse('create_task', { title: 'Retomar contato', customerId }))
+      .mockResolvedValueOnce(endTurn('Achei 1 cliente inativo e criei uma tarefa de follow-up.'));
+
+    const chatRes = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/ai/chat`)
+      .set(auth)
+      .send({ message: 'quais clientes sem contato há 14 dias? crie tarefas de follow-up para eles' })
+      .expect(201);
+    expect(chatRes.body.reply).toContain('cliente inativo');
+
+    const tasksRes = await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/tasks`)
+      .set(auth)
+      .expect(200);
+    const createdTask = tasksRes.body.find((t: { title: string }) => t.title === 'Retomar contato');
+    expect(createdTask).toBeTruthy();
+    expect(createdTask.customerId).toBe(customerId);
+    expect(createdTask.actorType).toBe('AI');
+
+    const auditRes = await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/audit-logs`)
+      .set(auth)
+      .expect(200);
+    const actions = auditRes.body.map((log: { action: string }) => log.action);
+    expect(actions).toEqual(
+      expect.arrayContaining(['ai.tool.list_inactive_customers', 'ai.tool.create_task']),
+    );
+  });
+
   it('corta a conversa com 403 quando o orçamento mensal de IA da organização já foi atingido', async () => {
     const owner = await registerUser(app, `ai-owner4-${randomUUID()}@opsmind.test`);
     const organizationId = await createOrg(app, owner.accessToken);

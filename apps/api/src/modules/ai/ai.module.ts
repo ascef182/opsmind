@@ -12,6 +12,7 @@ import { AI_TOOLS, type AiTool } from './tools/ai-tool.interface';
 import { GetCustomerTool } from './tools/get-customer.tool';
 import { SearchCustomersTool } from './tools/search-customers.tool';
 import { GetCustomerActivityTool } from './tools/get-customer-activity.tool';
+import { ListInactiveCustomersTool } from './tools/list-inactive-customers.tool';
 import { ListTasksTool } from './tools/list-tasks.tool';
 import { CreateTaskTool } from './tools/create-task.tool';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
@@ -27,6 +28,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     GetCustomerTool,
     SearchCustomersTool,
     GetCustomerActivityTool,
+    ListInactiveCustomersTool,
     ListTasksTool,
     CreateTaskTool,
     {
@@ -35,10 +37,25 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         getCustomer: GetCustomerTool,
         searchCustomers: SearchCustomersTool,
         getCustomerActivity: GetCustomerActivityTool,
+        listInactiveCustomers: ListInactiveCustomersTool,
         listTasks: ListTasksTool,
         createTask: CreateTaskTool,
-      ): AiTool[] => [getCustomer, searchCustomers, getCustomerActivity, listTasks, createTask],
-      inject: [GetCustomerTool, SearchCustomersTool, GetCustomerActivityTool, ListTasksTool, CreateTaskTool],
+      ): AiTool[] => [
+        getCustomer,
+        searchCustomers,
+        getCustomerActivity,
+        listInactiveCustomers,
+        listTasks,
+        createTask,
+      ],
+      inject: [
+        GetCustomerTool,
+        SearchCustomersTool,
+        GetCustomerActivityTool,
+        ListInactiveCustomersTool,
+        ListTasksTool,
+        CreateTaskTool,
+      ],
     },
   ],
 })

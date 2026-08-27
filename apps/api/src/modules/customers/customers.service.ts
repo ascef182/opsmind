@@ -63,6 +63,28 @@ export class CustomersService {
     });
   }
 
+  /**
+   * Regra de negócio do PRD §8: cliente sem NENHUMA atividade há mais de
+   * `organization.inactiveAfterDays` dias — mesmo cálculo de
+   * `DashboardService.getOverview` ("inactiveByRule"), mas devolvendo os
+   * clientes de verdade, não só a contagem. Existe para a tool de IA
+   * `list_inactive_customers` responder ao cenário do critério de aceitação
+   * da Fase 3: "quais clientes sem contato há 14 dias?".
+   */
+  async listInactive(organizationId: string): Promise<Customer[]> {
+    const organization = await this.prisma.organization.findUniqueOrThrow({
+      where: { id: organizationId },
+    });
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - organization.inactiveAfterDays);
+
+    return this.prisma.customer.findMany({
+      where: { organizationId, deletedAt: null, lastActivityAt: { lt: cutoff } },
+      orderBy: { lastActivityAt: 'asc' },
+    });
+  }
+
   async update(
     organizationId: string,
     id: string,
