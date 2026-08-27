@@ -16,4 +16,7 @@ export type {
   Notification,
   CustomerStatus,
   TaskStatus,
+  AIRequest,
+  AIRequestToolCall,
+  AIRequestStatus,
 } from '@prisma/client';

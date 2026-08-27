@@ -66,6 +66,12 @@ enum TaskStatus {
   CANCELLED
 }
 
+enum AIRequestStatus {
+  SUCCESS
+  ERROR
+  BUDGET_EXCEEDED
+}
+
 // ── Core tenancy ─────────────────────────────────────────────────────────
 
 model Organization {
@@ -89,6 +95,7 @@ model Organization {
   tasks         Task[]
   activityLogs  ActivityLog[]
   notifications Notification[]
+  aiRequests    AIRequest[]
 
   @@map("organizations")
 }
@@ -109,6 +116,7 @@ model User {
   ownedCustomers          Customer[]                @relation("CustomerOwner")
   assignedTasks           Task[]                    @relation("TaskAssignee")
   notifications           Notification[]
+  aiRequests              AIRequest[]
 
   @@map("users")
 }
@@ -324,4 +332,59 @@ model Notification {
 
   @@index([organizationId, userId, readAt])
   @@map("notifications")
+}
+
+// ── AI Assistant (Fase 3 — chat com tool calling) ───────────────────────────
+// Observabilidade de IA (PRD §13): todo request de IA grava tokens, custo
+// estimado, latência e as tools chamadas — alimenta o painel de analytics
+// (Fase 7) e é a base dos evals. Campos além do esboço mínimo do PRD §9
+// (session_id, status, error_message, tool_calls normalizado numa tabela
+// própria) já decididos na síntese de planejamento da Fase 1
+// (sprint-1-2-plan.md §2, item 8) para entrar aqui, na Fase 3, e não como
+// retrofit na Fase 7.
+
+model AIRequest {
+  id             String          @id @default(uuid())
+  organizationId String          @map("organization_id")
+  userId         String          @map("user_id")
+  // Agrupa múltiplas mensagens da mesma conversa — nulo no MVP (cada chat()
+  // é uma troca isolada); passa a ser preenchido quando a UI de chat
+  // (apps/web) mantiver uma sessão entre mensagens.
+  sessionId      String?         @map("session_id")
+  model          String
+  inputTokens    Int             @default(0) @map("input_tokens")
+  outputTokens   Int             @default(0) @map("output_tokens")
+  latencyMs      Int             @map("latency_ms")
+  // numeric, nunca float (síntese de planejamento §2, item 9) — erro de
+  // arredondamento em custo estimado composta ao longo de milhares de
+  // requests.
+  estimatedCost  Decimal         @default(0) @map("estimated_cost") @db.Decimal(10, 4)
+  status         AIRequestStatus
+  errorMessage   String?         @map("error_message")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  toolCalls    AIRequestToolCall[]
+
+  @@index([organizationId, createdAt])
+  @@map("ai_requests")
+}
+
+// Tabela própria em vez de `tool_calls: Json[]` no AIRequest (síntese de
+// planejamento §2, item 8) — sem isso não dá para consultar "quantas vezes
+// a tool X foi chamada" ou "qual tool falha mais" sem parsear JSON solto.
+model AIRequestToolCall {
+  id          String   @id @default(uuid())
+  aiRequestId String   @map("ai_request_id")
+  toolName    String   @map("tool_name")
+  input       Json
+  output      Json?
+  isError     Boolean  @default(false) @map("is_error")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  aiRequest AIRequest @relation(fields: [aiRequestId], references: [id], onDelete: Cascade)
+
+  @@index([aiRequestId])
+  @@map("ai_request_tool_calls")
 }
