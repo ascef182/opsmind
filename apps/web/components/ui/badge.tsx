@@ -8,6 +8,9 @@ const COLORS: Record<string, string> = {
   IN_PROGRESS: 'bg-amber-100 text-amber-800',
   DONE: 'bg-green-100 text-green-800',
   CANCELLED: 'bg-slate-200 text-slate-500 line-through',
+  PROCESSING: 'bg-amber-100 text-amber-800',
+  READY: 'bg-green-100 text-green-800',
+  FAILED: 'bg-red-100 text-red-800',
 };
 
 export function Badge({ value }: { value: string }) {
