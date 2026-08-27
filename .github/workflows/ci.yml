@@ -43,9 +43,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Sem `version:` aqui de propósito: a v4 lê a versão do campo
+      # `packageManager` do package.json raiz. Fixar as duas ao mesmo tempo
+      # faz a action recusar rodar ("Multiple versions of pnpm specified").
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
