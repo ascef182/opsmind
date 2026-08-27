@@ -105,7 +105,7 @@ export class InvitationsService {
       throw new ForbiddenException('Este convite foi endereçado a outro email');
     }
 
-    const membership = await this.prisma.$transaction(async (tx) => {
+    const membership = await this.prisma.runInTransaction(async (tx) => {
       const created = await tx.membership.create({
         data: { userId, organizationId: invitation.organizationId, role: invitation.role },
       });

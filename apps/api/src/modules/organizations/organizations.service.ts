@@ -28,7 +28,7 @@ export class OrganizationsService {
     const slug = dto.slug ?? slugify(dto.name);
 
     try {
-      const organization = await this.prisma.$transaction(async (tx) => {
+      const organization = await this.prisma.runInTransaction(async (tx) => {
         const org = await tx.organization.create({ data: { name: dto.name, slug } });
         await tx.membership.create({
           data: { userId, organizationId: org.id, role: 'OWNER' },

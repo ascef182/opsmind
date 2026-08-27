@@ -35,7 +35,11 @@ jobs:
           --health-retries 10
 
     env:
+      # Dono das tabelas — só para migrations/seed (superuser, ignora RLS).
       DATABASE_URL: postgresql://opsmind:opsmind@localhost:5432/opsmind?schema=public
+      # Runtime da API — role restrita, criada pelo passo "Create restricted
+      # app role" abaixo. É essa que os testes e2e usam de fato.
+      DATABASE_URL_APP: postgresql://opsmind_app:opsmind_app@localhost:5432/opsmind?schema=public
       REDIS_URL: redis://localhost:6379
       JWT_ACCESS_SECRET: ci-only-secret-not-for-production-use-xx
       JWT_REFRESH_SECRET: ci-only-secret-not-for-production-use-yy
@@ -58,6 +62,13 @@ jobs:
       - run: pnpm --filter @opsmind/database exec prisma generate
 
       - run: pnpm --filter @opsmind/database exec prisma migrate deploy
+
+      # `services:` do GitHub Actions não monta volumes de init como o Docker
+      # Compose local monta — precisa deste passo separado para a role
+      # restrita (DATABASE_URL_APP) existir antes dos testes rodarem. Mesmo
+      # script usado localmente (infra/docker/init/02-app-role.sql).
+      - name: Create restricted app role for RLS
+        run: pnpm --filter @opsmind/database exec prisma db execute --file ../../infra/docker/init/02-app-role.sql --url "$DATABASE_URL"
 
       - run: pnpm lint
 

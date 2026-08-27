@@ -7,7 +7,7 @@ import { OrganizationsService } from './organizations.service';
 describe('OrganizationsService', () => {
   let service: OrganizationsService;
   let prisma: {
-    $transaction: jest.Mock;
+    runInTransaction: jest.Mock;
     organization: { findFirst: jest.Mock; findMany: jest.Mock };
   };
   type Tx = { organization: { create: jest.Mock }; membership: { create: jest.Mock } };
@@ -20,7 +20,7 @@ describe('OrganizationsService', () => {
       membership: { create: jest.fn() },
     };
     prisma = {
-      $transaction: jest.fn((callback: (tx: Tx) => unknown) => callback(tx)),
+      runInTransaction: jest.fn((callback: (tx: Tx) => unknown) => callback(tx)),
       organization: { findFirst: jest.fn(), findMany: jest.fn() },
     };
     auditService = { log: jest.fn() };
@@ -85,7 +85,7 @@ describe('OrganizationsService', () => {
 
     it('traduz colisão de slug (unique constraint) em ConflictException', async () => {
       const prismaError = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
-      prisma.$transaction.mockRejectedValue(prismaError);
+      prisma.runInTransaction.mockRejectedValue(prismaError);
 
       await expect(service.create('user-1', { name: 'Acme', slug: 'acme' })).rejects.toThrow(
         ConflictException,
