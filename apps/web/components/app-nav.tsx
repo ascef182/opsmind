@@ -9,6 +9,7 @@ const TABS = [
   { path: 'customers', label: 'Clientes' },
   { path: 'tasks', label: 'Tarefas' },
   { path: 'ai', label: 'Assistente IA' },
+  { path: 'team', label: 'Equipe' },
 ];
 
 export function AppNav({ organizationId }: { organizationId: string }) {
