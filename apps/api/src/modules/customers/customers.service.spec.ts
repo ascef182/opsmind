@@ -9,6 +9,7 @@ describe('CustomersService', () => {
   let service: CustomersService;
   let prisma: {
     customer: { create: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock; update: jest.Mock };
+    organization: { findUniqueOrThrow: jest.Mock };
   };
   let auditService: { log: jest.Mock };
   let activityService: { log: jest.Mock };
@@ -21,6 +22,7 @@ describe('CustomersService', () => {
         findMany: jest.fn(),
         update: jest.fn(),
       },
+      organization: { findUniqueOrThrow: jest.fn() },
     };
     auditService = { log: jest.fn() };
     activityService = { log: jest.fn() };
@@ -109,6 +111,27 @@ describe('CustomersService', () => {
         },
         orderBy: { createdAt: 'desc' },
       });
+    });
+  });
+
+  describe('listInactive', () => {
+    it('lista clientes sem atividade há mais dias que o inactiveAfterDays da organização', async () => {
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ id: 'org-1', inactiveAfterDays: 14 });
+      const inactiveCustomers = [{ id: 'cust-1', lastActivityAt: new Date('2026-01-01') }];
+      prisma.customer.findMany.mockResolvedValue(inactiveCustomers);
+
+      const result = await service.listInactive('org-1');
+
+      expect(prisma.organization.findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: 'org-1' } });
+      expect(prisma.customer.findMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          deletedAt: null,
+          lastActivityAt: { lt: expect.any(Date) },
+        },
+        orderBy: { lastActivityAt: 'asc' },
+      });
+      expect(result).toBe(inactiveCustomers);
     });
   });
 

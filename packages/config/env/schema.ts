@@ -38,6 +38,15 @@ export const envSchema = z.object({
 
   // Email
   EMAIL_PROVIDER: z.enum(['console', 'resend']).default('console'),
+
+  // IA (Fase 3) — deliberadamente OPCIONAL, ao contrário de toda outra
+  // variável acima: IA é um recurso adicional, não uma dependência do resto
+  // da aplicação (Fase 1/2 funcionam inteiramente sem ela). Exigi-la no
+  // fail-fast do boot bloquearia a API inteira num ambiente sem chave
+  // configurada (ex.: este próprio ambiente de desenvolvimento). A falta da
+  // chave só falha, alto e claro, no primeiro uso real do endpoint de IA —
+  // ver ClaudeGatewayService.
+  ANTHROPIC_API_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

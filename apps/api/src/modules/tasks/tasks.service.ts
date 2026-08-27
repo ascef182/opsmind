@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Task, TaskStatus } from '@opsmind/database';
+import type { AuditActorType, Task, TaskStatus } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ActivityService } from '../activity/activity.service';
@@ -11,6 +11,17 @@ export interface ListTasksFilter {
   status?: TaskStatus;
   assigneeId?: string;
   customerId?: string;
+}
+
+/**
+ * Quem está agindo — nunca só um `userId`, porque a partir da Fase 3 a IA
+ * também cria tarefas (`ai.tools.create_task`), em nome do usuário que a
+ * invocou, mas sem se passar por ele no audit trail (PRD §14: "toda ação da
+ * IA é logada com o mesmo nível de detalhe de uma ação humana").
+ */
+export interface TaskActor {
+  type: AuditActorType;
+  id: string;
 }
 
 /**
@@ -26,7 +37,7 @@ export class TasksService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  async create(organizationId: string, dto: CreateTaskDto, actorUserId: string): Promise<Task> {
+  async create(organizationId: string, dto: CreateTaskDto, actor: TaskActor): Promise<Task> {
     if (dto.customerId) {
       await this.assertCustomerInOrg(organizationId, dto.customerId);
     }
@@ -35,18 +46,18 @@ export class TasksService {
     }
 
     const task = await this.prisma.task.create({
-      data: { organizationId, ...dto, actorType: 'USER', actorId: actorUserId },
+      data: { organizationId, ...dto, actorType: actor.type, actorId: actor.id },
     });
 
     await this.auditService.log({
-      actorType: 'USER',
-      actorId: actorUserId,
+      actorType: actor.type,
+      actorId: actor.id,
       organizationId,
       action: 'task.created',
       resource: `Task:${task.id}`,
     });
 
-    if (task.assigneeId && task.assigneeId !== actorUserId) {
+    if (task.assigneeId && task.assigneeId !== actor.id) {
       await this.notifyAssignee(organizationId, task);
     }
 

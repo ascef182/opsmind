@@ -46,7 +46,11 @@ describe('TasksService', () => {
       const created = { id: 'task-1', organizationId: 'org-1', title: 'Ligar' };
       prisma.task.create.mockResolvedValue(created);
 
-      const result = await service.create('org-1', { title: 'Ligar' }, 'user-1');
+      const result = await service.create(
+        'org-1',
+        { title: 'Ligar' },
+        { type: 'USER', id: 'user-1' },
+      );
 
       expect(prisma.task.create).toHaveBeenCalledWith({
         data: { organizationId: 'org-1', title: 'Ligar', actorType: 'USER', actorId: 'user-1' },
@@ -62,6 +66,24 @@ describe('TasksService', () => {
       expect(notificationsService.create).not.toHaveBeenCalled();
     });
 
+    it('registra actorType AI quando a tarefa é criada por uma tool de IA em nome do usuário', async () => {
+      const created = { id: 'task-1', organizationId: 'org-1', title: 'Ligar' };
+      prisma.task.create.mockResolvedValue(created);
+
+      await service.create('org-1', { title: 'Ligar' }, { type: 'AI', id: 'user-1' });
+
+      expect(prisma.task.create).toHaveBeenCalledWith({
+        data: { organizationId: 'org-1', title: 'Ligar', actorType: 'AI', actorId: 'user-1' },
+      });
+      expect(auditService.log).toHaveBeenCalledWith({
+        actorType: 'AI',
+        actorId: 'user-1',
+        organizationId: 'org-1',
+        action: 'task.created',
+        resource: 'Task:task-1',
+      });
+    });
+
     it('notifica o responsável quando a tarefa é criada já atribuída a outra pessoa', async () => {
       prisma.task.create.mockResolvedValue({
         id: 'task-1',
@@ -69,7 +91,11 @@ describe('TasksService', () => {
         assigneeId: 'user-2',
       });
 
-      await service.create('org-1', { title: 'Ligar', assigneeId: 'user-2' }, 'user-1');
+      await service.create(
+        'org-1',
+        { title: 'Ligar', assigneeId: 'user-2' },
+        { type: 'USER', id: 'user-1' },
+      );
 
       expect(notificationsService.create).toHaveBeenCalledWith({
         organizationId: 'org-1',
@@ -86,7 +112,11 @@ describe('TasksService', () => {
         assigneeId: 'user-1',
       });
 
-      await service.create('org-1', { title: 'Ligar', assigneeId: 'user-1' }, 'user-1');
+      await service.create(
+        'org-1',
+        { title: 'Ligar', assigneeId: 'user-1' },
+        { type: 'USER', id: 'user-1' },
+      );
 
       expect(notificationsService.create).not.toHaveBeenCalled();
     });
@@ -95,7 +125,11 @@ describe('TasksService', () => {
       prisma.customer.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.create('org-1', { title: 'Ligar', customerId: 'cust-x' }, 'user-1'),
+        service.create(
+          'org-1',
+          { title: 'Ligar', customerId: 'cust-x' },
+          { type: 'USER', id: 'user-1' },
+        ),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.task.create).not.toHaveBeenCalled();
     });
@@ -104,7 +138,11 @@ describe('TasksService', () => {
       prisma.membership.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.create('org-1', { title: 'Ligar', assigneeId: 'user-x' }, 'user-1'),
+        service.create(
+          'org-1',
+          { title: 'Ligar', assigneeId: 'user-x' },
+          { type: 'USER', id: 'user-1' },
+        ),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.task.create).not.toHaveBeenCalled();
     });
