@@ -55,9 +55,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm --filter @opsmind/database prisma generate
+      - run: pnpm --filter @opsmind/database exec prisma generate
 
-      - run: pnpm --filter @opsmind/database prisma migrate deploy
+      - run: pnpm --filter @opsmind/database exec prisma migrate deploy
 
       - run: pnpm lint
 
