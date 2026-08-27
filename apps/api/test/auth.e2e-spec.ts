@@ -3,13 +3,24 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import { PrismaService } from '../src/infrastructure/database/prisma.service';
 
-// Marco testável do Passo 5 (docs/planning/sprint-1-2-plan.md §4): fluxo
+function decodeJwtPayload(token: string): { sub: string; email: string } {
+  const payload = token.split('.').at(1);
+  if (!payload) {
+    throw new Error('Token JWT malformado: sem payload');
+  }
+  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+}
+
+// Marco testável dos Passos 5-6 (docs/planning/sprint-1-2-plan.md §4): fluxo
 // completo — registrar, logar, chamar rota protegida, dar refresh, dar
-// logout (refresh token revogado) — contra a app real (Postgres via Docker
-// Compose), não mocks.
+// logout (refresh token revogado), e um registro em audit_logs para
+// "user.registered" — contra a app real (Postgres via Docker Compose), não
+// mocks.
 describe('Auth flow (e2e)', () => {
   let app: INestApplication;
+  let prisma: PrismaService;
   const email = `auth-e2e-${randomUUID()}@opsmind.test`;
   const password = 'correct horse battery staple';
 
@@ -21,6 +32,7 @@ describe('Auth flow (e2e)', () => {
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
     await app.init();
+    prisma = app.get(PrismaService);
   });
 
   afterAll(async () => {
@@ -35,6 +47,13 @@ describe('Auth flow (e2e)', () => {
 
     expect(registerRes.body.accessToken).toEqual(expect.any(String));
     expect(registerRes.body.refreshToken).toEqual(expect.any(String));
+
+    const { sub: userId } = decodeJwtPayload(registerRes.body.accessToken);
+    const registrationAuditLog = await prisma.auditLog.findFirst({
+      where: { actorId: userId, action: 'user.registered' },
+    });
+    expect(registrationAuditLog).not.toBeNull();
+    expect(registrationAuditLog?.resource).toBe(`User:${userId}`);
 
     const loginRes = await request(app.getHttpServer())
       .post('/auth/login')

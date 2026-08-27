@@ -1,6 +1,7 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { UsersService } from '../users/users.service';
+import { AuditService } from '../audit/audit.service';
 import { PasswordService } from './services/password.service';
 import { TokenService } from './services/token.service';
 import { AuthService } from './auth.service';
@@ -15,6 +16,7 @@ describe('AuthService', () => {
     rotateRefreshToken: jest.Mock;
     revokeRefreshToken: jest.Mock;
   };
+  let auditService: { log: jest.Mock };
 
   beforeEach(async () => {
     usersService = { findByEmail: jest.fn(), findById: jest.fn(), create: jest.fn() };
@@ -25,6 +27,7 @@ describe('AuthService', () => {
       rotateRefreshToken: jest.fn(),
       revokeRefreshToken: jest.fn(),
     };
+    auditService = { log: jest.fn() };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -32,6 +35,7 @@ describe('AuthService', () => {
         { provide: UsersService, useValue: usersService },
         { provide: PasswordService, useValue: passwordService },
         { provide: TokenService, useValue: tokenService },
+        { provide: AuditService, useValue: auditService },
       ],
     }).compile();
 
@@ -58,11 +62,10 @@ describe('AuthService', () => {
         expiresAt: new Date(),
       });
 
-      const result = await service.register({
-        email: 'a@b.com',
-        password: 'correct horse',
-        name: 'Ada',
-      });
+      const result = await service.register(
+        { email: 'a@b.com', password: 'correct horse', name: 'Ada' },
+        '127.0.0.1',
+      );
 
       expect(usersService.create).toHaveBeenCalledWith({
         email: 'a@b.com',
@@ -71,6 +74,30 @@ describe('AuthService', () => {
       });
       expect(tokenService.signAccessToken).toHaveBeenCalledWith('user-1', 'a@b.com');
       expect(result).toEqual({ accessToken: 'access-token', refreshToken: 'refresh-token' });
+    });
+
+    it('audita o registro (marco testável do Passo 6)', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      passwordService.hash.mockResolvedValue('hashed-password');
+      usersService.create.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+      tokenService.signAccessToken.mockReturnValue('access-token');
+      tokenService.issueRefreshToken.mockResolvedValue({
+        token: 'refresh-token',
+        expiresAt: new Date(),
+      });
+
+      await service.register(
+        { email: 'a@b.com', password: 'correct horse', name: 'Ada' },
+        '127.0.0.1',
+      );
+
+      expect(auditService.log).toHaveBeenCalledWith({
+        actorType: 'USER',
+        actorId: 'user-1',
+        action: 'user.registered',
+        resource: 'User:user-1',
+        ipAddress: '127.0.0.1',
+      });
     });
   });
 
@@ -109,9 +136,36 @@ describe('AuthService', () => {
         expiresAt: new Date(),
       });
 
-      const result = await service.login({ email: 'a@b.com', password: 'correct horse' });
+      const result = await service.login(
+        { email: 'a@b.com', password: 'correct horse' },
+        '127.0.0.1',
+      );
 
       expect(result).toEqual({ accessToken: 'access-token', refreshToken: 'refresh-token' });
+    });
+
+    it('audita o login (marco testável do Passo 6)', async () => {
+      usersService.findByEmail.mockResolvedValue({
+        id: 'user-1',
+        email: 'a@b.com',
+        passwordHash: 'hashed',
+      });
+      passwordService.verify.mockResolvedValue(true);
+      tokenService.signAccessToken.mockReturnValue('access-token');
+      tokenService.issueRefreshToken.mockResolvedValue({
+        token: 'refresh-token',
+        expiresAt: new Date(),
+      });
+
+      await service.login({ email: 'a@b.com', password: 'correct horse' }, '127.0.0.1');
+
+      expect(auditService.log).toHaveBeenCalledWith({
+        actorType: 'USER',
+        actorId: 'user-1',
+        action: 'user.logged_in',
+        resource: 'User:user-1',
+        ipAddress: '127.0.0.1',
+      });
     });
   });
 

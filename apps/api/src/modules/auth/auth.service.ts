@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
+import { AuditService } from '../audit/audit.service';
 import { PasswordService } from './services/password.service';
 import { TokenService } from './services/token.service';
 import { RegisterDto } from './dto/register.dto';
@@ -11,16 +12,13 @@ export interface AuthResult {
   refreshToken: string;
 }
 
-/**
- * As chamadas a `AuditService.log()` (Passo 6) entram aqui em `register()` e
- * `login()` na próxima iteração — ver docs/planning/sprint-1-2-plan.md §4.
- */
 @Injectable()
 export class AuthService {
   constructor(
     private readonly usersService: UsersService,
     private readonly passwordService: PasswordService,
     private readonly tokenService: TokenService,
+    private readonly auditService: AuditService,
   ) {}
 
   async register(dto: RegisterDto, ip?: string): Promise<AuthResult> {
@@ -34,6 +32,14 @@ export class AuthService {
       email: dto.email,
       name: dto.name,
       passwordHash,
+    });
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: user.id,
+      action: 'user.registered',
+      resource: `User:${user.id}`,
+      ipAddress: ip,
     });
 
     return this.issueTokens(user.id, user.email, ip);
@@ -51,6 +57,14 @@ export class AuthService {
     if (!passwordValid) {
       throw new UnauthorizedException('Credenciais inválidas');
     }
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: user.id,
+      action: 'user.logged_in',
+      resource: `User:${user.id}`,
+      ipAddress: ip,
+    });
 
     return this.issueTokens(user.id, user.email, ip);
   }
