@@ -76,6 +76,29 @@ describe('Organizations flow (e2e)', () => {
     expect(getRes.body.id).toBe(createRes.body.id);
   });
 
+  it('lista só as organizações das quais o usuário é membro', async () => {
+    const a = await registerUser(app, `org-list-a-${randomUUID()}@opsmind.test`);
+    const b = await registerUser(app, `org-list-b-${randomUUID()}@opsmind.test`);
+
+    const orgRes = await request(app.getHttpServer())
+      .post('/organizations')
+      .set('Authorization', `Bearer ${a.accessToken}`)
+      .send({ name: 'A Co', slug: `a-co-${randomUUID()}` })
+      .expect(201);
+
+    const listA = await request(app.getHttpServer())
+      .get('/organizations')
+      .set('Authorization', `Bearer ${a.accessToken}`)
+      .expect(200);
+    expect(listA.body.map((org: { id: string }) => org.id)).toContain(orgRes.body.id);
+
+    const listB = await request(app.getHttpServer())
+      .get('/organizations')
+      .set('Authorization', `Bearer ${b.accessToken}`)
+      .expect(200);
+    expect(listB.body.map((org: { id: string }) => org.id)).not.toContain(orgRes.body.id);
+  });
+
   it('nega leitura da organização por um usuário que não é membro (404, não confirma existência)', async () => {
     const owner = await registerUser(app, `org-private-${randomUUID()}@opsmind.test`);
     const stranger = await registerUser(app, `org-stranger-${randomUUID()}@opsmind.test`);

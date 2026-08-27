@@ -11,7 +11,8 @@
     "JWT_REFRESH_EXPIRES_IN",
     "PORT",
     "CORS_ORIGIN",
-    "EMAIL_PROVIDER"
+    "EMAIL_PROVIDER",
+    "NEXT_PUBLIC_API_URL"
   ],
   "tasks": {
     "build": {

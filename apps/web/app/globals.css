@@ -1,0 +1,18 @@
+@import 'tailwindcss';
+
+/* Paleta mínima do workspace — sem design system pesado (shadcn/ui completo
+   fica para quando houver tempo de sobra); só o suficiente pra não parecer
+   HTML sem estilo enquanto testamos o fluxo de ponta a ponta. */
+@theme {
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background-color: #f8fafc;
+  color: #0f172a;
+}

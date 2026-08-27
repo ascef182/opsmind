@@ -7,6 +7,12 @@
       "esnext"
     ],
     "incremental": true,
+    // `baseUrl` precisa ser redeclarado aqui, não só herdado do base.json
+    // compartilhado: TS resolve caminhos relativos de cada tsconfig contra o
+    // arquivo ONDE ELES FORAM DEFINIDOS, não contra quem os herda — o
+    // "baseUrl": "." do base.json aponta pra packages/config/typescript/, não
+    // pra apps/web. Sem isso, o alias "@/*" abaixo resolve pro lugar errado.
+    "baseUrl": ".",
     "paths": {
       "@/*": [
         "./*"
