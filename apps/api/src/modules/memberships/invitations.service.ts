@@ -17,6 +17,14 @@ import { canAssignRole } from '../../shared/utils/can-assign-role';
 const INVITATION_TOKEN_BYTES = 32;
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias (PRD §8)
 
+export interface PendingInvitation {
+  id: string;
+  email: string;
+  role: Role;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
 export interface CreateInvitationInput {
   organizationId: string;
   invitedByUserId: string;
@@ -125,5 +133,19 @@ export class InvitationsService {
     });
 
     return membership;
+  }
+
+  /**
+   * `select` explícito (nunca um `findMany` genérico + descartar campos
+   * depois) — `tokenHash` é a única coisa que autentica um `accept()`, então
+   * não pode vazar por nenhuma rota de leitura, nem por engano numa mudança
+   * futura de schema que adicione um campo novo ao model.
+   */
+  listPendingForOrganization(organizationId: string): Promise<PendingInvitation[]> {
+    return this.prisma.invitation.findMany({
+      where: { organizationId, status: 'PENDING' },
+      select: { id: true, email: true, role: true, expiresAt: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 }

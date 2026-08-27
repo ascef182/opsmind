@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Invitation, Membership } from '@opsmind/database';
-import { InvitationsService } from './invitations.service';
+import { InvitationsService, type PendingInvitation } from './invitations.service';
 import { MembershipsService, type MembershipWithUser } from './memberships.service';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
@@ -52,6 +52,18 @@ export class MembershipsController {
   @Get('members')
   listMembers(@Param('organizationId') organizationId: string): Promise<MembershipWithUser[]> {
     return this.membershipsService.listForOrganization(organizationId);
+  }
+
+  // Mesma restrição do próprio convite (OWNER/ADMIN): a lista expõe e-mails
+  // de gente que ainda nem é membro, então segue o mesmo nível de acesso de
+  // quem gerencia a equipe — não o de "qualquer membro pode ver".
+  @Roles('OWNER', 'ADMIN')
+  @UseGuards(RolesGuard)
+  @Get('invitations')
+  listPendingInvitations(
+    @Param('organizationId') organizationId: string,
+  ): Promise<PendingInvitation[]> {
+    return this.invitationsService.listPendingForOrganization(organizationId);
   }
 
   @Roles('OWNER', 'ADMIN')

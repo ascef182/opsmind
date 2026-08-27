@@ -155,4 +155,57 @@ describe('Memberships flow (e2e)', () => {
       .set('Authorization', `Bearer ${wrongUser.accessToken}`)
       .expect(403);
   });
+
+  it('lista convites pendentes sem o tokenHash, some da lista depois de aceito, e barra quem não é OWNER/ADMIN', async () => {
+    // Só 2 registerUser aqui (reaproveita invitedUser, depois de aceitar o
+    // convite, pra checar o 403 de não-OWNER/ADMIN) — este arquivo inteiro já
+    // soma 8 registros nos outros 3 testes, e /auth/register tem um throttle
+    // de 10/60s (checklist de segurança da Fase 1); um terceiro registro
+    // aqui estouraria esse limite dentro da mesma execução do arquivo.
+    const owner = await registerUser(app, `pending-owner-${randomUUID()}@opsmind.test`);
+    const invitedEmail = `pending-invited-${randomUUID()}@opsmind.test`;
+
+    const orgRes = await request(app.getHttpServer())
+      .post('/organizations')
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ name: 'Pending Co', slug: `pending-co-${randomUUID()}` })
+      .expect(201);
+    const organizationId = orgRes.body.id;
+
+    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/invite`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ email: invitedEmail, role: 'MEMBER' })
+      .expect(201);
+    const invitationToken = extractInvitationToken(logSpy);
+    logSpy.mockRestore();
+
+    const beforeAccept = await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/invitations`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(200);
+    expect(beforeAccept.body).toHaveLength(1);
+    expect(beforeAccept.body[0].email).toBe(invitedEmail);
+    expect(beforeAccept.body[0].tokenHash).toBeUndefined();
+
+    const invitedUser = await registerUser(app, invitedEmail);
+    await request(app.getHttpServer())
+      .post(`/invitations/${invitationToken}/accept`)
+      .set('Authorization', `Bearer ${invitedUser.accessToken}`)
+      .expect(201);
+
+    const afterAccept = await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/invitations`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(200);
+    expect(afterAccept.body).toHaveLength(0);
+
+    // invitedUser já é MEMBER da organização agora (acabou de aceitar) —
+    // reaproveitado em vez de registrar mais alguém só pra este 403.
+    await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/invitations`)
+      .set('Authorization', `Bearer ${invitedUser.accessToken}`)
+      .expect(403);
+  });
 });
