@@ -3,15 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
-
-async function registerUser(app: INestApplication, email: string) {
-  const res = await request(app.getHttpServer())
-    .post('/auth/register')
-    .send({ email, password: 'correct horse battery staple', name: 'Membership E2E' })
-    .expect(201);
-
-  return { accessToken: res.body.accessToken as string, email };
-}
+import { registerUser } from './helpers/auth';
 
 /** Extrai o token bruto do convite logado pelo ConsoleEmailProvider (dev). */
 function extractInvitationToken(logSpy: jest.SpyInstance): string {

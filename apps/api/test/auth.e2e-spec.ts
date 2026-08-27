@@ -4,14 +4,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/infrastructure/database/prisma.service';
-
-function decodeJwtPayload(token: string): { sub: string; email: string } {
-  const payload = token.split('.').at(1);
-  if (!payload) {
-    throw new Error('Token JWT malformado: sem payload');
-  }
-  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-}
+import { decodeJwtPayload } from './helpers/auth';
 
 // Marco testável dos Passos 5-6 (docs/planning/sprint-1-2-plan.md §4): fluxo
 // completo — registrar, logar, chamar rota protegida, dar refresh, dar

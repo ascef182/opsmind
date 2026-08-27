@@ -10,4 +10,10 @@ export type {
   Role,
   InvitationStatus,
   AuditActorType,
+  Customer,
+  Task,
+  ActivityLog,
+  Notification,
+  CustomerStatus,
+  TaskStatus,
 } from '@prisma/client';
