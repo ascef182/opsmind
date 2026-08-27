@@ -8,6 +8,7 @@ import { PrismaModule } from './infrastructure/database/prisma.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditModule } from './modules/audit/audit.module';
+import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
 
 @Module({
@@ -28,8 +29,9 @@ import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
     AuditModule,
     UsersModule,
     AuthModule,
-    // Módulos de domínio restantes (organizations, memberships) entram aqui
-    // incrementalmente — ver docs/planning/sprint-1-2-plan.md §4.
+    OrganizationsModule,
+    // Módulos de domínio restantes (memberships) entram aqui incrementalmente
+    // — ver docs/planning/sprint-1-2-plan.md §4.
   ],
   controllers: [AppController],
   providers: [
