@@ -16,7 +16,7 @@ describe('InvitationsService', () => {
     membership: { findFirst: jest.Mock; create: jest.Mock };
     organization: { findUniqueOrThrow: jest.Mock };
     invitation: { create: jest.Mock; findUnique: jest.Mock; update: jest.Mock };
-    $transaction: jest.Mock;
+    runInTransaction: jest.Mock;
   };
   let auditService: { log: jest.Mock };
   let emailService: { sendInvitationEmail: jest.Mock };
@@ -26,7 +26,7 @@ describe('InvitationsService', () => {
       membership: { findFirst: jest.fn(), create: jest.fn() },
       organization: { findUniqueOrThrow: jest.fn() },
       invitation: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
-      $transaction: jest.fn(),
+      runInTransaction: jest.fn(),
     };
     auditService = { log: jest.fn() };
     emailService = { sendInvitationEmail: jest.fn() };
@@ -174,7 +174,7 @@ describe('InvitationsService', () => {
         membership: { create: jest.fn().mockResolvedValue(membership) },
         invitation: { update: jest.fn() },
       };
-      prisma.$transaction.mockImplementation((cb: (tx: Tx) => unknown) => cb(tx));
+      prisma.runInTransaction.mockImplementation((cb: (tx: Tx) => unknown) => cb(tx));
 
       const result = await service.accept('user-2', 'b@b.com', 'good-token');
 

@@ -13,7 +13,15 @@ export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
   // Database
+  // Dono das tabelas — só para `prisma migrate`/seed (packages/database).
+  // Nunca deve ser a conexão usada pela API em runtime: essa role bypassa
+  // Row-Level Security (docs/planning/reviews/database-reviewer-review.md §1.3).
   DATABASE_URL: z.string().url().startsWith('postgresql://'),
+  // Runtime da API — role restrita (sem BYPASSRLS), criada por
+  // infra/docker/init/02-app-role.sql. É essa que faz as policies de RLS
+  // valerem de verdade; PrismaService (apps/api) conecta com esta, não com
+  // DATABASE_URL.
+  DATABASE_URL_APP: z.string().url().startsWith('postgresql://'),
 
   // Redis (BullMQ workers chegam na Fase 5; conexão já validada desde já)
   REDIS_URL: z.string().url().startsWith('redis://'),

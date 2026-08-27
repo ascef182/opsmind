@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { validateEnv } from '@opsmind/config/env/schema';
@@ -15,6 +15,7 @@ import { TasksModule } from './modules/tasks/tasks.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
+import { TenantContextInterceptor } from './shared/interceptors/tenant-context.interceptor';
 
 @Module({
   imports: [
@@ -47,6 +48,11 @@ import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
     // Global: toda rota exige access token válido, exceto as marcadas @Public()
     // (register/login/refresh/logout, health check).
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Roda depois dos guards (JwtAuthGuard populou req.user; TenantGuard, nas
+    // rotas que o usam, populou req.membership) — abre a transação de request
+    // que faz o RLS do Postgres valer (docs/planning/reviews/
+    // database-reviewer-review.md §1.3).
+    { provide: APP_INTERCEPTOR, useClass: TenantContextInterceptor },
   ],
 })
 export class AppModule {}

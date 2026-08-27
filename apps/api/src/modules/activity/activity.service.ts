@@ -22,14 +22,14 @@ export class ActivityService {
   constructor(private readonly prisma: PrismaService) {}
 
   async log(input: LogActivityInput): Promise<ActivityLog> {
-    const [activity] = await this.prisma.$transaction([
-      this.prisma.activityLog.create({ data: input }),
-      this.prisma.customer.update({
+    return this.prisma.runInTransaction(async (tx) => {
+      const activity = await tx.activityLog.create({ data: input });
+      await tx.customer.update({
         where: { id: input.customerId },
         data: { lastActivityAt: new Date() },
-      }),
-    ]);
-    return activity;
+      });
+      return activity;
+    });
   }
 
   listForCustomer(organizationId: string, customerId: string): Promise<ActivityLog[]> {

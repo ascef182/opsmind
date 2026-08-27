@@ -5,14 +5,14 @@ import { ActivityService } from './activity.service';
 describe('ActivityService', () => {
   let service: ActivityService;
   let prisma: {
-    $transaction: jest.Mock;
+    runInTransaction: jest.Mock;
     activityLog: { create: jest.Mock; findMany: jest.Mock };
     customer: { update: jest.Mock };
   };
 
   beforeEach(async () => {
     prisma = {
-      $transaction: jest.fn((operations: Promise<unknown>[]) => Promise.all(operations)),
+      runInTransaction: jest.fn((callback: (tx: typeof prisma) => unknown) => callback(prisma)),
       activityLog: { create: jest.fn(), findMany: jest.fn() },
       customer: { update: jest.fn() },
     };
