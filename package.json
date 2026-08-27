@@ -11,8 +11,8 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "db:migrate": "pnpm --filter @opsmind/database prisma migrate dev",
-    "db:studio": "pnpm --filter @opsmind/database prisma studio",
+    "db:migrate": "pnpm --filter @opsmind/database run migrate",
+    "db:studio": "pnpm --filter @opsmind/database exec prisma studio",
     "seed": "pnpm --filter @opsmind/database run seed"
   },
   "devDependencies": {
