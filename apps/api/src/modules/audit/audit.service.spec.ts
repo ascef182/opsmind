@@ -4,10 +4,10 @@ import { AuditService } from './audit.service';
 
 describe('AuditService', () => {
   let service: AuditService;
-  let prisma: { auditLog: { create: jest.Mock } };
+  let prisma: { auditLog: { create: jest.Mock; findMany: jest.Mock } };
 
   beforeEach(async () => {
-    prisma = { auditLog: { create: jest.fn() } };
+    prisma = { auditLog: { create: jest.fn(), findMany: jest.fn() } };
 
     const module = await Test.createTestingModule({
       providers: [AuditService, { provide: PrismaService, useValue: prisma }],
@@ -47,6 +47,21 @@ describe('AuditService', () => {
       await service.log(entry);
 
       expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: entry });
+    });
+  });
+
+  describe('listForOrganization', () => {
+    it('lista os eventos da organização, mais recentes primeiro', async () => {
+      const logs = [{ id: 'log-2' }, { id: 'log-1' }];
+      prisma.auditLog.findMany.mockResolvedValue(logs);
+
+      const result = await service.listForOrganization('org-1');
+
+      expect(prisma.auditLog.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result).toBe(logs);
     });
   });
 });

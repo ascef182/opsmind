@@ -28,4 +28,13 @@ export class AuditService {
   log(input: AuditLogInput): Promise<AuditLog> {
     return this.prisma.auditLog.create({ data: input });
   }
+
+  // GET /organizations/:organizationId/audit-logs (Passo 9) — protegido por
+  // TenantGuard + RolesGuard no controller, não aqui.
+  listForOrganization(organizationId: string): Promise<AuditLog[]> {
+    return this.prisma.auditLog.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
 }
