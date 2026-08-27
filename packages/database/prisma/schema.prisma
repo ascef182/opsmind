@@ -1,0 +1,194 @@
+// OpsMind — schema Prisma da Fase 1 (Foundation)
+//
+// Cobre exatamente as entidades necessárias ao critério de aceitação da Fase 1
+// (PRD §17): "um usuário consegue criar uma organização, convidar outro usuário
+// com um papel específico, e uma ação sensível gera um registro de auditoria."
+//
+// `Customer`, `Task`, `Document`, `DocumentChunk`, `Automation*`, `AIRequest`,
+// `Notification` entram nas fases correspondentes (ver docs/planning/PRD.md §17
+// e docs/planning/sprint-1-2-plan.md §2 para as correções de schema já decididas
+// para essas entidades antes de serem criadas — em particular: `organization_id`
+// denormalizado obrigatório em DocumentChunk e AutomationRun desde a criação).
+//
+// Referência de design: docs/planning/reviews/code-architect-review.md
+// e docs/planning/reviews/database-reviewer-review.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ─────────────────────────────────────────────────────────────────
+
+enum Role {
+  OWNER
+  ADMIN
+  MANAGER
+  MEMBER
+  VIEWER
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum AuditActorType {
+  USER
+  AI
+  SYSTEM
+  AUTOMATION
+}
+
+// ── Core tenancy ─────────────────────────────────────────────────────────
+
+model Organization {
+  id     String @id @default(uuid())
+  name   String
+  slug   String @unique
+  plan   String @default("free")
+
+  aiMonthlyBudget   Decimal? @map("ai_monthly_budget") @db.Decimal(10, 2)
+  // Regra de negócio (PRD §8): "cliente inativo há mais de N dias, configurável
+  // por organização, padrão 14" — sem este campo não há onde configurar o N.
+  inactiveAfterDays Int      @default(14) @map("inactive_after_days")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  memberships Membership[]
+  invitations Invitation[]
+  auditLogs   AuditLog[]
+
+  @@map("organizations")
+}
+
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  passwordHash    String    @map("password_hash")
+  name            String
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  memberships             Membership[]
+  refreshTokens           RefreshToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  sentInvitations         Invitation[]              @relation("InvitedBy")
+
+  @@map("users")
+}
+
+model Membership {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  organizationId String   @map("organization_id")
+  role           Role
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("memberships")
+}
+
+// ── Auth support ─────────────────────────────────────────────────────────
+// Nenhuma destas três entidades está listada no PRD §9 ("entidades principais"),
+// mas são pré-requisitos diretos do escopo funcional da própria Fase 1 (Auth com
+// refresh, verificação de e-mail, convite de membros). Ver
+// docs/planning/sprint-1-2-plan.md §2, itens 3-4.
+
+model RefreshToken {
+  id                String    @id @default(uuid())
+  userId            String    @map("user_id")
+  // Nunca o token bruto — só o hash (SHA-256). O valor bruto existe apenas no
+  // cookie httpOnly emitido ao cliente.
+  tokenHash         String    @unique @map("token_hash")
+  expiresAt         DateTime  @map("expires_at")
+  revokedAt         DateTime? @map("revoked_at")
+  // Rotação: ao usar um refresh token, um novo é emitido e este campo aponta
+  // para ele. Reapresentar um token já "substituído" é sinal de roubo — revoga
+  // a família inteira (security-reviewer, achado A2/M2).
+  replacedByTokenId String?   @map("replaced_by_token_id")
+  createdByIp       String?   @map("created_by_ip")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model EmailVerificationToken {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+// ── Invitations (org membership onboarding) ────────────────────────────────
+// Regra de negócio (PRD §8): convites expiram em 7 dias. `Membership` pressupõe
+// um `userId` existente, mas o convite acontece antes de a pessoa ter conta —
+// por isso é uma entidade própria, promovida a Membership só na aceitação.
+
+model Invitation {
+  id              String           @id @default(uuid())
+  organizationId  String           @map("organization_id")
+  email           String
+  role            Role
+  tokenHash       String           @unique @map("token_hash")
+  status          InvitationStatus @default(PENDING)
+  invitedByUserId String           @map("invited_by_user_id")
+  expiresAt       DateTime         @map("expires_at")
+  acceptedAt      DateTime?        @map("accepted_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitedBy", fields: [invitedByUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([email])
+  @@map("invitations")
+}
+
+// ── Audit (append-only, imutável — PRD §8) ──────────────────────────────────
+
+model AuditLog {
+  id             String         @id @default(uuid())
+  // Nullable: alguns eventos acontecem antes de qualquer organização existir
+  // (ex.: "user.registered"). Desvio intencional do PRD §9, documentado em
+  // docs/planning/reviews/code-architect-review.md, Decisão #8.
+  organizationId String?        @map("organization_id")
+  actorType      AuditActorType @map("actor_type")
+  // Não é FK: o ator pode ser AI/system/automation, não só um User.
+  actorId        String?        @map("actor_id")
+  action         String
+  resource       String
+  metadata       Json?
+  ipAddress      String?        @map("ip_address")
+  userAgent      String?        @map("user_agent")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([action])
+  @@map("audit_logs")
+}

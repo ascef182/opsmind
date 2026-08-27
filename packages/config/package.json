@@ -1,0 +1,10 @@
+{
+  "name": "@opsmind/config",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./env/schema.ts",
+  "types": "./env/schema.ts",
+  "dependencies": {
+    "zod": "^3.23.8"
+  }
+}
