@@ -19,4 +19,8 @@ export type {
   AIRequest,
   AIRequestToolCall,
   AIRequestStatus,
+  Automation,
+  AutomationRun,
+  AutomationTrigger,
+  AutomationRunStatus,
 } from '@prisma/client';
