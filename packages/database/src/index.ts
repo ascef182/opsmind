@@ -19,4 +19,7 @@ export type {
   AIRequest,
   AIRequestToolCall,
   AIRequestStatus,
+  Document,
+  DocumentChunk,
+  DocumentStatus,
 } from '@prisma/client';

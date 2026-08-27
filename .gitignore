@@ -36,3 +36,6 @@ packages/database/prisma/dev.db
 
 # Isolated worktrees for subagent-driven-development
 .worktrees/
+
+# uploads locais (LocalStorageService — Fase 4, STORAGE_PROVIDER=local)
+.data/

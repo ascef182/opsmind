@@ -47,6 +47,22 @@ export const envSchema = z.object({
   // chave só falha, alto e claro, no primeiro uso real do endpoint de IA —
   // ver ClaudeGatewayService.
   ANTHROPIC_API_KEY: z.string().optional(),
+
+  // Documentos + RAG (Fase 4) — embeddings via OpenAI (Anthropic não tem
+  // endpoint de embeddings; PRD §16 já lista "OpenAI/Anthropic" lado a lado
+  // no AI Gateway). Mesma filosofia do ANTHROPIC_API_KEY: opcional, falha
+  // alto e claro só no primeiro upload de documento — ver OpenAiEmbeddingGateway.
+  OPENAI_API_KEY: z.string().optional(),
+
+  // Storage de arquivos: PRD §16 decide Google Cloud Storage pra produção,
+  // mas dev/CI não tem (nem deveria precisar de) um bucket real — mesmo
+  // espírito de EMAIL_PROVIDER (console local vs. Resend real). `local`
+  // grava em disco (LocalStorageService); `gcs` fica para quando o deploy
+  // em GCP acontecer (Fase 6).
+  STORAGE_PROVIDER: z.enum(['local', 'gcs']).default('local'),
+  // Só usado quando STORAGE_PROVIDER=local. Caminho relativo à raiz do
+  // monorepo por padrão — fora de qualquer pasta versionada (.gitignore).
+  LOCAL_STORAGE_DIR: z.string().default('.data/uploads'),
 });
 
 export type Env = z.infer<typeof envSchema>;
