@@ -16,6 +16,7 @@ import { TasksModule } from './modules/tasks/tasks.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { AiModule } from './modules/ai/ai.module';
+import { AutomationsModule } from './modules/automations/automations.module';
 import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
 import { TenantContextInterceptor } from './shared/interceptors/tenant-context.interceptor';
 
@@ -45,6 +46,7 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     NotificationsModule,
     DashboardModule,
     AiModule,
+    AutomationsModule,
   ],
   controllers: [AppController],
   providers: [

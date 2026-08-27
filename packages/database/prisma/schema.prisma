@@ -72,13 +72,27 @@ enum AIRequestStatus {
   BUDGET_EXCEEDED
 }
 
+enum AutomationTrigger {
+  // Único trigger do MVP (PRD §17, Fase 5) — mais tipos entram conforme
+  // surgir necessidade real, não especulativamente.
+  CUSTOMER_INACTIVE
+}
+
+enum AutomationRunStatus {
+  SUCCESS
+  FAILED
+  // Condição não bateu mais entre o enfileiramento e a execução (ex.: o
+  // cliente teve atividade nova nesse meio-tempo) — não é erro.
+  SKIPPED
+}
+
 // ── Core tenancy ─────────────────────────────────────────────────────────
 
 model Organization {
-  id     String @id @default(uuid())
-  name   String
-  slug   String @unique
-  plan   String @default("free")
+  id   String @id @default(uuid())
+  name String
+  slug String @unique
+  plan String @default("free")
 
   aiMonthlyBudget   Decimal? @map("ai_monthly_budget") @db.Decimal(10, 2)
   // Regra de negócio (PRD §8): "cliente inativo há mais de N dias, configurável
@@ -88,14 +102,16 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships   Membership[]
-  invitations   Invitation[]
-  auditLogs     AuditLog[]
-  customers     Customer[]
-  tasks         Task[]
-  activityLogs  ActivityLog[]
-  notifications Notification[]
-  aiRequests    AIRequest[]
+  memberships    Membership[]
+  invitations    Invitation[]
+  auditLogs      AuditLog[]
+  customers      Customer[]
+  tasks          Task[]
+  activityLogs   ActivityLog[]
+  notifications  Notification[]
+  aiRequests     AIRequest[]
+  automations    Automation[]
+  automationRuns AutomationRun[]
 
   @@map("organizations")
 }
@@ -112,9 +128,9 @@ model User {
   memberships             Membership[]
   refreshTokens           RefreshToken[]
   emailVerificationTokens EmailVerificationToken[]
-  sentInvitations         Invitation[]              @relation("InvitedBy")
-  ownedCustomers          Customer[]                @relation("CustomerOwner")
-  assignedTasks           Task[]                    @relation("TaskAssignee")
+  sentInvitations         Invitation[]             @relation("InvitedBy")
+  ownedCustomers          Customer[]               @relation("CustomerOwner")
+  assignedTasks           Task[]                   @relation("TaskAssignee")
   notifications           Notification[]
   aiRequests              AIRequest[]
 
@@ -267,23 +283,23 @@ model Customer {
 }
 
 model Task {
-  id             String     @id @default(uuid())
-  organizationId String     @map("organization_id")
-  customerId     String?    @map("customer_id")
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
+  customerId     String?        @map("customer_id")
   title          String
   description    String?
-  status         TaskStatus @default(OPEN)
-  assigneeId     String?    @map("assignee_id")
-  dueDate        DateTime?  @map("due_date")
-  completedAt    DateTime?  @map("completed_at")
+  status         TaskStatus     @default(OPEN)
+  assigneeId     String?        @map("assignee_id")
+  dueDate        DateTime?      @map("due_date")
+  completedAt    DateTime?      @map("completed_at")
   // Ator polimórfico (database-reviewer-review.md §4.2): substitui o
   // `created_by (user|ai|automation)` do PRD §9 por actor_type/actor_id,
   // replicando o padrão já correto de AuditLog — sem FK rígida, o ator pode
   // ser AI/automation, não só um User.
   actorType      AuditActorType @map("actor_type")
   actorId        String?        @map("actor_id")
-  createdAt      DateTime   @default(now()) @map("created_at")
-  updatedAt      DateTime   @updatedAt @map("updated_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -387,4 +403,61 @@ model AIRequestToolCall {
 
   @@index([aiRequestId])
   @@map("ai_request_tool_calls")
+}
+
+// ── Automations (Fase 5) ─────────────────────────────────────────────────
+// PRD §17, critério de aceitação: "um cliente sem atividade há N dias
+// dispara automaticamente criação de tarefa + notificação, visível no log
+// de execução." Motor event-driven (PRD §10.4): Trigger -> Condition ->
+// Action -> AutomationRun. `apps/worker` roda o scan periódico (trigger) e
+// consome a fila BullMQ `automation-execution` (action); apps/api só cria
+// automações e permite disparo manual (enfileira na mesma fila).
+//
+// `conditions`/`actions` ficam como JSON livre (PRD §9) mas com forma fixa
+// pro único trigger existente — ver apps/worker/src/automation-processor.ts:
+//   conditions: { inactiveForDays?: number }  (default: organization.inactiveAfterDays)
+//   actions:    { createTask?: boolean, notify?: boolean }
+
+model Automation {
+  id             String            @id @default(uuid())
+  organizationId String            @map("organization_id")
+  name           String
+  trigger        AutomationTrigger
+  conditions     Json              @default("{}")
+  actions        Json
+  enabled        Boolean           @default(true)
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  runs         AutomationRun[]
+
+  @@index([organizationId, trigger, enabled])
+  @@map("automations")
+}
+
+// `organizationId` denormalizado (não só via Automation) — decisão já
+// registrada no topo deste arquivo desde a Fase 1 (mesmo motivo de
+// DocumentChunk): RLS precisa valer direto nesta tabela. `customerId`
+// também é coluna própria (não só dentro de `result`) — é o que permite a
+// checagem de dedup do scan (nunca reabrir a mesma automação pro mesmo
+// cliente sem atividade nova) ser uma query indexada, não um filtro em JSON.
+model AutomationRun {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  automationId   String              @map("automation_id")
+  customerId     String?             @map("customer_id")
+  status         AutomationRunStatus
+  actorType      AuditActorType      @map("actor_type")
+  actorId        String?             @map("actor_id")
+  result         Json?
+  errorMessage   String?             @map("error_message")
+  createdAt      DateTime            @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  automation   Automation   @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, automationId, createdAt])
+  @@index([automationId, customerId, status])
+  @@map("automation_runs")
 }
