@@ -13,6 +13,7 @@ export class ApiError extends Error {
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  /** FormData (upload de arquivo) passa direto, sem JSON.stringify. */
   body?: unknown;
   /** false para /auth/register e /auth/login — não há token pra anexar ainda. */
   auth?: boolean;
@@ -34,13 +35,20 @@ async function parseErrorMessage(response: Response): Promise<string> {
 }
 
 function rawFetch(path: string, options: RequestOptions, accessToken?: string): Promise<Response> {
+  const isFormData = options.body instanceof FormData;
   return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
     method: options.method ?? 'GET',
     headers: {
-      'Content-Type': 'application/json',
+      // FormData define seu próprio Content-Type (com boundary) — setar
+      // manualmente aqui quebraria o multipart. O browser cuida disso.
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     },
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    body: isFormData
+      ? (options.body as FormData)
+      : options.body !== undefined
+        ? JSON.stringify(options.body)
+        : undefined,
   });
 }
 
@@ -100,4 +108,27 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   }
 
   return (await response.json()) as T;
+}
+
+/** Downloads binários (ex.: documentos) não passam pelo parser JSON de apiFetch. */
+export async function apiDownload(path: string): Promise<{ blob: Blob; filename: string }> {
+  const tokens = getStoredTokens();
+  let response = await rawFetch(path, {}, tokens?.accessToken);
+
+  if (response.status === 401 && tokens) {
+    const newAccessToken = await refreshAccessToken(tokens);
+    if (newAccessToken) {
+      response = await rawFetch(path, {}, newAccessToken);
+    }
+  }
+
+  if (!response.ok) {
+    throw new ApiError(await parseErrorMessage(response), response.status);
+  }
+
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  const filename = match?.[1] ? decodeURIComponent(match[1]) : 'download';
+  const blob = await response.blob();
+  return { blob, filename };
 }
