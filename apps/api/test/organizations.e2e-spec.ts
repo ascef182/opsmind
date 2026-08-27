@@ -4,26 +4,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/infrastructure/database/prisma.service';
-
-function decodeJwtPayload(token: string): { sub: string; email: string } {
-  const payload = token.split('.').at(1);
-  if (!payload) {
-    throw new Error('Token JWT malformado: sem payload');
-  }
-  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-}
-
-async function registerUser(app: INestApplication, email: string) {
-  const res = await request(app.getHttpServer())
-    .post('/auth/register')
-    .send({ email, password: 'correct horse battery staple', name: 'Org E2E' })
-    .expect(201);
-
-  return {
-    accessToken: res.body.accessToken as string,
-    userId: decodeJwtPayload(res.body.accessToken).sub,
-  };
-}
+import { registerUser } from './helpers/auth';
 
 // Marco testável do Passo 7 (docs/planning/sprint-1-2-plan.md §4): usuário
 // autenticado cria uma organização e vira OWNER — contra a app real

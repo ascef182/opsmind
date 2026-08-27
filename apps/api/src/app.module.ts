@@ -10,6 +10,10 @@ import { AuthModule } from './modules/auth/auth.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { MembershipsModule } from './modules/memberships/memberships.module';
+import { CustomersModule } from './modules/customers/customers.module';
+import { TasksModule } from './modules/tasks/tasks.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
 
 @Module({
@@ -32,6 +36,10 @@ import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
     AuthModule,
     OrganizationsModule,
     MembershipsModule,
+    CustomersModule,
+    TasksModule,
+    NotificationsModule,
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [
