@@ -16,6 +16,14 @@ export class OrganizationsController {
     return this.organizationsService.create(user.id, dto);
   }
 
+  // Front-end precisa disso para o onboarding (login → "de quais orgs você
+  // já é membro?" → dashboard ou tela de criar organização) — existia como
+  // OrganizationsService.listForUser desde a Fase 1, mas nunca tinha rota.
+  @Get()
+  list(@CurrentUser() user: { id: string }): Promise<Organization[]> {
+    return this.organizationsService.listForUser(user.id);
+  }
+
   // Não usa TenantGuard (Passo 8): o guard é para recursos aninhados sob uma
   // organização (`/organizations/:organizationId/...`), não para a própria
   // organização como recurso. O escopo por membership é feito na query
