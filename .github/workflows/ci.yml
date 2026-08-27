@@ -61,6 +61,15 @@ jobs:
 
       - run: pnpm --filter @opsmind/database exec prisma generate
 
+      # Mesma lacuna do passo "Create restricted app role" abaixo: `services:`
+      # não monta os init scripts do Docker Compose local. A imagem
+      # pgvector/pgvector já tem o binário da extensão, mas precisa do
+      # `CREATE EXTENSION` rodar antes de qualquer migration que use o tipo
+      # `vector` (Fase 4 — documents_rag). Sem isso: "type vector does not
+      # exist" no meio do `migrate deploy`.
+      - name: Enable pgvector extension
+        run: pnpm --filter @opsmind/database exec prisma db execute --file ../../infra/docker/init/01-extensions.sql --url "$DATABASE_URL"
+
       - run: pnpm --filter @opsmind/database exec prisma migrate deploy
 
       # `services:` do GitHub Actions não monta volumes de init como o Docker
