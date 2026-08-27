@@ -8,11 +8,10 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
+import { WRITE_ROLES } from '../../shared/constants/roles.constant';
 
 // Mesma política de RBAC de customers: leitura aberta a qualquer membro,
 // escrita exige papel acima de VIEWER.
-const WRITE_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'] as const;
-
 @UseGuards(TenantGuard)
 @Controller('organizations/:organizationId/tasks')
 export class TasksController {
@@ -26,7 +25,7 @@ export class TasksController {
     @CurrentUser() user: { id: string },
     @Body() dto: CreateTaskDto,
   ): Promise<Task> {
-    return this.tasksService.create(organizationId, dto, user.id);
+    return this.tasksService.create(organizationId, dto, { type: 'USER', id: user.id });
   }
 
   @Get()

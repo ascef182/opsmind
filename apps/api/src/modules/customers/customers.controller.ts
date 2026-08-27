@@ -21,12 +21,11 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
+import { WRITE_ROLES } from '../../shared/constants/roles.constant';
 
 // Toda rota exige vínculo com a organização (TenantGuard). Leitura é aberta a
 // qualquer papel, inclusive VIEWER; escrita exige papel acima de VIEWER
 // (RolesGuard) — CRM é trabalho operacional, não administração de conta.
-const WRITE_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'] as const;
-
 @UseGuards(TenantGuard)
 @Controller('organizations/:organizationId/customers')
 export class CustomersController {
