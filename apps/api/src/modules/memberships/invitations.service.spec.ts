@@ -15,7 +15,7 @@ describe('InvitationsService', () => {
   let prisma: {
     membership: { findFirst: jest.Mock; create: jest.Mock };
     organization: { findUniqueOrThrow: jest.Mock };
-    invitation: { create: jest.Mock; findUnique: jest.Mock; update: jest.Mock };
+    invitation: { create: jest.Mock; findUnique: jest.Mock; update: jest.Mock; findMany: jest.Mock };
     runInTransaction: jest.Mock;
   };
   let auditService: { log: jest.Mock };
@@ -25,7 +25,7 @@ describe('InvitationsService', () => {
     prisma = {
       membership: { findFirst: jest.fn(), create: jest.fn() },
       organization: { findUniqueOrThrow: jest.fn() },
-      invitation: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
+      invitation: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn() },
       runInTransaction: jest.fn(),
     };
     auditService = { log: jest.fn() };
@@ -193,6 +193,24 @@ describe('InvitationsService', () => {
         resource: 'Membership:m-1',
       });
       expect(result).toBe(membership);
+    });
+  });
+
+  describe('listPendingForOrganization', () => {
+    it('lista só convites PENDING da organização, sem o tokenHash', async () => {
+      const pending = [
+        { id: 'inv-1', email: 'b@b.com', role: 'MEMBER', expiresAt: new Date(), createdAt: new Date() },
+      ];
+      prisma.invitation.findMany.mockResolvedValue(pending);
+
+      const result = await service.listPendingForOrganization('org-1');
+
+      expect(prisma.invitation.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', status: 'PENDING' },
+        select: { id: true, email: true, role: true, expiresAt: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result).toBe(pending);
     });
   });
 });

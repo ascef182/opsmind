@@ -33,3 +33,6 @@ coverage/
 
 # prisma
 packages/database/prisma/dev.db
+
+# Isolated worktrees for subagent-driven-development
+.worktrees/
