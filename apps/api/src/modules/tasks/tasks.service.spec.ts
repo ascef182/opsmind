@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ActivityService } from '../activity/activity.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { TasksService } from './tasks.service';
 
 describe('TasksService', () => {
@@ -14,6 +15,7 @@ describe('TasksService', () => {
   };
   let auditService: { log: jest.Mock };
   let activityService: { log: jest.Mock };
+  let notificationsService: { create: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -23,6 +25,8 @@ describe('TasksService', () => {
     };
     auditService = { log: jest.fn() };
     activityService = { log: jest.fn() };
+    notificationsService = { create: jest.fn() };
+    prisma.membership.findUnique.mockResolvedValue({ id: 'm-1' });
 
     const module = await Test.createTestingModule({
       providers: [
@@ -30,6 +34,7 @@ describe('TasksService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: AuditService, useValue: auditService },
         { provide: ActivityService, useValue: activityService },
+        { provide: NotificationsService, useValue: notificationsService },
       ],
     }).compile();
 
@@ -54,6 +59,36 @@ describe('TasksService', () => {
         resource: 'Task:task-1',
       });
       expect(result).toBe(created);
+      expect(notificationsService.create).not.toHaveBeenCalled();
+    });
+
+    it('notifica o responsável quando a tarefa é criada já atribuída a outra pessoa', async () => {
+      prisma.task.create.mockResolvedValue({
+        id: 'task-1',
+        title: 'Ligar',
+        assigneeId: 'user-2',
+      });
+
+      await service.create('org-1', { title: 'Ligar', assigneeId: 'user-2' }, 'user-1');
+
+      expect(notificationsService.create).toHaveBeenCalledWith({
+        organizationId: 'org-1',
+        userId: 'user-2',
+        type: 'task.assigned',
+        payload: { taskId: 'task-1', title: 'Ligar' },
+      });
+    });
+
+    it('não notifica quando o criador se autoatribui a tarefa', async () => {
+      prisma.task.create.mockResolvedValue({
+        id: 'task-1',
+        title: 'Ligar',
+        assigneeId: 'user-1',
+      });
+
+      await service.create('org-1', { title: 'Ligar', assigneeId: 'user-1' }, 'user-1');
+
+      expect(notificationsService.create).not.toHaveBeenCalled();
     });
 
     it('rejeita customerId de outra organização (ou inexistente)', async () => {
@@ -97,6 +132,42 @@ describe('TasksService', () => {
   });
 
   describe('update', () => {
+    it('notifica o novo responsável ao reatribuir a tarefa para outra pessoa', async () => {
+      prisma.task.findFirst.mockResolvedValue({
+        id: 'task-1',
+        organizationId: 'org-1',
+        status: 'OPEN',
+        customerId: null,
+        assigneeId: 'user-2',
+        title: 'Ligar',
+      });
+      prisma.task.update.mockResolvedValue({ id: 'task-1', assigneeId: 'user-3', title: 'Ligar' });
+
+      await service.update('org-1', 'task-1', { assigneeId: 'user-3' }, 'user-1');
+
+      expect(notificationsService.create).toHaveBeenCalledWith({
+        organizationId: 'org-1',
+        userId: 'user-3',
+        type: 'task.assigned',
+        payload: { taskId: 'task-1', title: 'Ligar' },
+      });
+    });
+
+    it('não notifica de novo quando o responsável não muda', async () => {
+      prisma.task.findFirst.mockResolvedValue({
+        id: 'task-1',
+        organizationId: 'org-1',
+        status: 'OPEN',
+        customerId: null,
+        assigneeId: 'user-2',
+      });
+      prisma.task.update.mockResolvedValue({ id: 'task-1', assigneeId: 'user-2' });
+
+      await service.update('org-1', 'task-1', { assigneeId: 'user-2', title: 'Só o título' }, 'user-1');
+
+      expect(notificationsService.create).not.toHaveBeenCalled();
+    });
+
     it('atualiza campos simples sem tocar em completedAt quando o status não muda', async () => {
       prisma.task.findFirst.mockResolvedValue({
         id: 'task-1',

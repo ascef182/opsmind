@@ -3,6 +3,7 @@ import type { Task, TaskStatus } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ActivityService } from '../activity/activity.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 
@@ -22,6 +23,7 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly activityService: ActivityService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async create(organizationId: string, dto: CreateTaskDto, actorUserId: string): Promise<Task> {
@@ -43,6 +45,10 @@ export class TasksService {
       action: 'task.created',
       resource: `Task:${task.id}`,
     });
+
+    if (task.assigneeId && task.assigneeId !== actorUserId) {
+      await this.notifyAssignee(organizationId, task);
+    }
 
     return task;
   }
@@ -108,7 +114,21 @@ export class TasksService {
       });
     }
 
+    const reassigned = dto.assigneeId !== undefined && dto.assigneeId !== existing.assigneeId;
+    if (reassigned && updated.assigneeId && updated.assigneeId !== actorUserId) {
+      await this.notifyAssignee(organizationId, updated);
+    }
+
     return updated;
+  }
+
+  private notifyAssignee(organizationId: string, task: Task): Promise<unknown> {
+    return this.notificationsService.create({
+      organizationId,
+      userId: task.assigneeId!,
+      type: 'task.assigned',
+      payload: { taskId: task.id, title: task.title },
+    });
   }
 
   private async assertCustomerInOrg(organizationId: string, customerId: string): Promise<void> {

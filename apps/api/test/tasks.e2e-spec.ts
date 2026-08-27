@@ -81,6 +81,59 @@ describe('Tasks flow (e2e)', () => {
     expect(timelineRes.body.some((a: { type: string }) => a.type === 'task.completed')).toBe(true);
   });
 
+  it('notifica o responsável ao atribuir a tarefa a outra pessoa', async () => {
+    const owner = await registerUser(app, `tasks-notif-owner-${randomUUID()}@opsmind.test`);
+    const member = await registerUser(app, `tasks-notif-member-${randomUUID()}@opsmind.test`);
+    const organizationId = await createOrg(app, owner.accessToken);
+
+    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/invite`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ email: member.email, role: 'MEMBER' })
+      .expect(201);
+    const token = /token: (\S+)/.exec(logSpy.mock.calls.map((c) => c.join(' ')).join('\n'))?.at(1);
+    logSpy.mockRestore();
+    await request(app.getHttpServer())
+      .post(`/invitations/${token}/accept`)
+      .set('Authorization', `Bearer ${member.accessToken}`)
+      .expect(201);
+
+    const taskRes = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/tasks`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ title: 'Responder o cliente', assigneeId: member.userId })
+      .expect(201);
+
+    const notificationsRes = await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/notifications`)
+      .set('Authorization', `Bearer ${member.accessToken}`)
+      .expect(200);
+    expect(notificationsRes.body).toHaveLength(1);
+    expect(notificationsRes.body[0].type).toBe('task.assigned');
+    expect(notificationsRes.body[0].readAt).toBeNull();
+
+    const notificationId = notificationsRes.body[0].id;
+    await request(app.getHttpServer())
+      .patch(`/organizations/${organizationId}/notifications/${notificationId}/read`)
+      .set('Authorization', `Bearer ${member.accessToken}`)
+      .expect(200)
+      .expect((res) => {
+        expect(res.body.readAt).not.toBeNull();
+      });
+
+    // O owner não vê a notificação de outro usuário.
+    await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/notifications`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(200)
+      .expect((res) => {
+        expect(res.body).toHaveLength(0);
+      });
+
+    expect(taskRes.body.assigneeId).toBe(member.userId);
+  });
+
   it('rejeita tarefa vinculada a cliente de outra organização', async () => {
     const owner = await registerUser(app, `tasks-cross-owner-${randomUUID()}@opsmind.test`);
     const orgA = await createOrg(app, owner.accessToken);
