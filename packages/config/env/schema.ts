@@ -47,6 +47,17 @@ export const envSchema = z.object({
   // chave só falha, alto e claro, no primeiro uso real do endpoint de IA —
   // ver ClaudeGatewayService.
   ANTHROPIC_API_KEY: z.string().optional(),
+
+  // Observabilidade (Fase 6 — PRD §15: "Sentry + logging estruturado").
+  // SENTRY_DSN opcional pelo mesmo motivo de ANTHROPIC_API_KEY: observabilidade
+  // é um recurso adicional, não uma dependência — o SDK do Sentry já trata
+  // `dsn` ausente/vazio como "desabilitado" silenciosamente (não lança), então
+  // dev local sem DSN configurado funciona normalmente, só sem reportar erros.
+  SENTRY_DSN: z.string().optional(),
+  // Nível mínimo de log emitido (pino) — 'info' em produção evita ruído de
+  // 'debug' em disco/agregador de logs; sobrescrito pra 'debug' em dev via
+  // .env.example, sem exigir rebuild pra mudar verbosidade.
+  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
 });
 
 export type Env = z.infer<typeof envSchema>;
