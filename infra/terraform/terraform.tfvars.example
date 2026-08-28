@@ -1,0 +1,31 @@
+# Copie pra terraform.tfvars (gitignored) e preencha antes de rodar
+# `terraform plan`/`apply` de verdade. Nunca comite terraform.tfvars —
+# tem senha de banco de dados e segredos de JWT em texto puro.
+
+gcp_project_id = "opsmind-506917"
+gcp_region     = "us-central1"
+environment    = "production"
+
+# Gerar com: openssl rand -hex 32
+database_password  = "CHANGE-ME"
+app_role_password  = "CHANGE-ME"
+jwt_access_secret  = "CHANGE-ME-32-CHARS-MINIMUM"
+jwt_refresh_secret = "CHANGE-ME-32-CHARS-MINIMUM"
+
+# Opcionais — "" desabilita o recurso correspondente (mesma filosofia do
+# schema de env: assistente de IA/RAG/Sentry são recursos adicionais).
+anthropic_api_key = ""
+openai_api_key    = ""
+sentry_dsn         = ""
+
+# Preencher DEPOIS do primeiro apply (outputs.api_url / outputs.web_url) —
+# na primeira vez, um valor provisório (ex.: "https://placeholder.invalid")
+# resolve a dependência circular (a URL da API só existe depois do apply,
+# mas o build do web precisa dela).
+cors_origin         = "https://placeholder.invalid"
+web_public_api_url  = "https://placeholder.invalid"
+
+# false (padrão): usa var.redis_url (ex.: Upstash gratuito) em vez de
+# provisionar Memorystore (tem custo mínimo recorrente).
+enable_memorystore = false
+redis_url          = "redis://CHANGE-ME"

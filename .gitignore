@@ -39,3 +39,12 @@ packages/database/prisma/dev.db
 
 # uploads locais (LocalStorageService — Fase 4, STORAGE_PROVIDER=local)
 .data/
+
+# terraform (Fase 6) — state e vars têm segredos/IPs reais, nunca versionados.
+# .terraform.lock.hcl NÃO entra aqui — esse sim é pra versionar (fixa as
+# versões de provider, garante reprodutibilidade entre máquinas).
+infra/terraform/.terraform/
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/terraform.tfvars
+infra/terraform/*.tfplan
