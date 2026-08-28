@@ -1,7 +1,16 @@
 {
   "extends": "@opsmind/config/typescript/nestjs.json",
   "compilerOptions": {
-    "baseUrl": "./src"
+    "baseUrl": "./src",
+    // Sem isso, `nest build` (tsc puro) emite .js/.d.ts DENTRO de src/, ao
+    // lado de cada .ts — bug descoberto ao preparar o Dockerfile de produção
+    // (Fase 6): "pnpm run build" nunca tinha sido rodado localmente até
+    // agora (dev sempre usou tsnd --transpile-only, que não emite arquivo
+    // nenhum). 420 arquivos compilados poluindo src/ foram limpos neste
+    // commit — não deveriam ter sido versionados de qualquer forma
+    // (.gitignore já ignora *.js fora daqui, mas src/**/*.js nunca tinha
+    // sido gerado antes pra isso importar).
+    "outDir": "./dist"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "test"]

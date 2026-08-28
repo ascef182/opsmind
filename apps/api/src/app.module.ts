@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { ConfigModule } from '@nestjs/config';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { validateEnv } from '@opsmind/config/env/schema';
+import { LoggerModule } from 'nestjs-pino';
+import { SentryModule, SentryGlobalFilter } from '@sentry/nestjs/setup';
+import { validateEnv, type Env } from '@opsmind/config/env/schema';
+import { buildLoggerOptions } from './infrastructure/logging/logger-options';
 import { AppController } from './app.controller';
 import { PrismaModule } from './infrastructure/database/prisma.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
@@ -26,6 +29,21 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     // main.ts, expondo os valores validados via ConfigService para os módulos
     // que precisam deles em injeção de dependência (ex.: AuthModule/JwtModule).
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
+    // Sentry captura exceptions (via SentryGlobalFilter abaixo) — precisa vir
+    // cedo na lista de imports, antes dos módulos de domínio.
+    SentryModule.forRoot(),
+    // Logging estruturado (PRD §15) — nível e formato via buildLoggerOptions
+    // (JSON puro em produção, pino-pretty em dev). `forRootAsync` porque a
+    // configuração depende de ConfigService (env validado), não de literais.
+    LoggerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService<Env, true>) => ({
+        pinoHttp: buildLoggerOptions({
+          NODE_ENV: configService.get('NODE_ENV', { infer: true }),
+          LOG_LEVEL: configService.get('LOG_LEVEL', { infer: true }),
+        }),
+      }),
+    }),
     // Rate limiting global (checklist de segurança da Fase 1); /auth/* recebe
     // um throttle mais estrito via @Throttle() no próprio controller.
     ThrottlerModule.forRoot([
@@ -50,6 +68,11 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
   ],
   controllers: [AppController],
   providers: [
+    // Sem exception filter global próprio ainda — SentryGlobalFilter reporta
+    // todo erro não tratado ao Sentry (quando SENTRY_DSN está configurado) e
+    // preserva o comportamento padrão de resposta HTTP do Nest pros demais
+    // casos. Precisa ser registrado ANTES de qualquer outro APP_FILTER.
+    { provide: APP_FILTER, useClass: SentryGlobalFilter },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     // Global: toda rota exige access token válido, exceto as marcadas @Public()
     // (register/login/refresh/logout, health check).

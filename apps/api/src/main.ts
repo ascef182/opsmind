@@ -1,6 +1,10 @@
+// Precisa ser o primeiro import de todo o processo (Sentry.init) — antes de
+// qualquer outro import, inclusive 'reflect-metadata'.
+import './instrument';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { Logger } from 'nestjs-pino';
 import { validateEnv } from '@opsmind/config/env/schema';
 import { AppModule } from './app.module';
 
@@ -9,7 +13,11 @@ async function bootstrap() {
   // faltando ou mal formatada — antes de qualquer módulo do Nest subir.
   const env = validateEnv(process.env);
 
-  const app = await NestFactory.create(AppModule);
+  // `bufferLogs: true` + `useLogger()` logo em seguida: bufferiza os logs do
+  // próprio bootstrap do Nest (antes do logger do pino estar pronto) em vez
+  // de perdê-los ou deixar o Nest usar o console.log padrão nesse meio-tempo.
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app.useLogger(app.get(Logger));
 
   app.enableCors({
     origin: env.CORS_ORIGIN,
@@ -27,8 +35,7 @@ async function bootstrap() {
   );
 
   await app.listen(env.PORT);
-  // eslint-disable-next-line no-console
-  console.log(`OpsMind API rodando em http://localhost:${env.PORT}`);
+  app.get(Logger).log(`OpsMind API rodando em http://localhost:${env.PORT}`);
 }
 
 bootstrap();
