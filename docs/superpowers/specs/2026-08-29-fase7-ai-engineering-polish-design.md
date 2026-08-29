@@ -14,12 +14,16 @@ Sem corte de escopo (a nota de corte do PRD §17 não se aplica — build comple
 
 ## Contexto de branch
 
-A branch atual (`feat/fase6-production-readiness`) diverge de `feat/fase4-documents-rag` no
-mesmo ponto de `main` (commit `7f5fcbb`) — não inclui RAG/documentos. Como o teste de prompt
-injection do critério de aceitação depende de documento real, a Fase 7 nasce de uma branch nova
-(`feat/fase7-ai-engineering-polish`) que combina `feat/fase4-documents-rag` com a pilha atual
-(`fase5-automations` → `fase6-production-readiness`). Resolver esse merge/rebase é o primeiro
-passo da implementação, antes de qualquer código novo da Fase 7 em si.
+A branch `feat/fase6-production-readiness` divergia de `feat/fase4-documents-rag` no mesmo ponto
+de `main` (commit `7f5fcbb`) — não incluía RAG/documentos. Como o teste de prompt injection do
+critério de aceitação depende de documento real, a Fase 7 nasce em `feat/fase7-ai-engineering-polish`
+(criada a partir de `feat/fase6-production-readiness`), já com `feat/fase4-documents-rag`
+mesclada (commit `ae51975`) — conflitos em `.gitignore`, `apps/api/package.json`,
+`packages/config/env/schema.ts`, `packages/database/prisma/schema.prisma` e
+`packages/database/src/index.ts` (todos aditivos: cada fase tocou seções diferentes do mesmo
+arquivo), resolvidos mantendo os dois lados. `pnpm install` + `prisma generate` + `pnpm typecheck`
++ `pnpm test` (218 testes) rodaram limpos contra a árvore mesclada antes de qualquer código novo
+da Fase 7 em si.
 
 **Pré-requisito operacional (fora do meu alcance):** o CI vai precisar de dois secrets novos no
 GitHub — `ANTHROPIC_API_KEY` e `OPENAI_API_KEY` (esta última já é usada pela Fase 4 para
@@ -46,9 +50,9 @@ para configurá-lo — hoje só dá para editar direto no banco.
 `inputTokens`, `outputTokens`, `latencyMs`, `estimatedCost`, `status`. Não precisa de tabela
 nova — só agregação.
 
-- `GET /organizations/:id/ai/usage` — novo endpoint (módulo `ai`, ex. `AiUsageService`), leitura
-  liberada a qualquer membro da organização (`TenantGuard`, sem restrição de papel — é
-  visibilidade, não mutação). Retorna:
+- `GET /organizations/:organizationId/ai/usage` — endpoint **já existe** (`AiController.usage()`,
+  hoje devolve só `{ monthSpend }` via `BudgetService.getMonthSpend`). Estendo o mesmo endpoint
+  (não crio um novo) para devolver, além do que já tem hoje:
   - gasto do mês corrente (soma `estimatedCost` do mês) vs. `aiMonthlyBudget` atual;
   - série diária de custo e contagem de requests (para gráfico);
   - breakdown por usuário (nome/id, custo, requests, tokens) — via `groupBy` do Prisma.
