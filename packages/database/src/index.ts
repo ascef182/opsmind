@@ -23,4 +23,7 @@ export type {
   AutomationRun,
   AutomationTrigger,
   AutomationRunStatus,
+  Document,
+  DocumentChunk,
+  DocumentStatus,
 } from '@prisma/client';
