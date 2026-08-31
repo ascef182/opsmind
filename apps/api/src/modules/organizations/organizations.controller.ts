@@ -1,8 +1,12 @@
-import { Body, Controller, Get, NotFoundException, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import type { Organization } from '@opsmind/database';
 import { OrganizationsService } from './organizations.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
+import { TenantGuard } from '../../shared/guards/tenant.guard';
+import { RolesGuard } from '../../shared/guards/roles.guard';
+import { Roles } from '../../shared/decorators/roles.decorator';
 
 @Controller('organizations')
 export class OrganizationsController {
@@ -38,5 +42,19 @@ export class OrganizationsController {
       throw new NotFoundException();
     }
     return organization;
+  }
+
+  // Único endpoint desta controller que precisa de TenantGuard/RolesGuard —
+  // por isso o param se chama `:organizationId` aqui (o que TenantGuard
+  // exige) e não `:id` como as rotas acima, que não checam papel.
+  @Roles('OWNER', 'ADMIN')
+  @UseGuards(TenantGuard, RolesGuard)
+  @Patch(':organizationId')
+  update(
+    @Param('organizationId') organizationId: string,
+    @CurrentUser() user: { id: string },
+    @Body() dto: UpdateOrganizationDto,
+  ): Promise<Organization> {
+    return this.organizationsService.updateBudget(organizationId, user.id, dto.aiMonthlyBudget);
   }
 }
