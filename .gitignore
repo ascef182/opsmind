@@ -37,6 +37,9 @@ packages/database/prisma/dev.db
 # Isolated worktrees for subagent-driven-development
 .worktrees/
 
+# Scratch workspace (ledger, briefs, review packages) for subagent-driven-development
+.superpowers/
+
 # uploads locais (LocalStorageService — Fase 4, STORAGE_PROVIDER=local)
 .data/
 
