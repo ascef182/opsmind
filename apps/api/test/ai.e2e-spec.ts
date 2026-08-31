@@ -251,4 +251,49 @@ describe('AI assistant flow (e2e)', () => {
 
     expect(gateway.sendMessage).not.toHaveBeenCalled();
   });
+
+  it('GET .../ai/usage devolve orçamento, série diária e breakdown por usuário', async () => {
+    const { accessToken } = await registerUser(app, `usage-${randomUUID()}@opsmind.test`);
+    const organizationId = await createOrg(app, accessToken);
+
+    gateway.sendMessage.mockResolvedValueOnce(endTurn('oi'));
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/ai/chat`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ message: 'oi' })
+      .expect(201);
+
+    const res = await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/ai/usage`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
+    expect(res.body.monthlyBudget).toBeNull();
+    expect(res.body.dailySeries.length).toBeGreaterThan(0);
+    expect(res.body.byUser[0].requests).toBe(1);
+  });
+
+  it('GET .../ai/requests lista a conversa recente com o trace de tool calls', async () => {
+    const { accessToken } = await registerUser(app, `requests-${randomUUID()}@opsmind.test`);
+    const organizationId = await createOrg(app, accessToken);
+
+    gateway.sendMessage
+      .mockResolvedValueOnce(toolUse('list_tasks', {}))
+      .mockResolvedValueOnce(endTurn('nenhuma tarefa'));
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/ai/chat`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ message: 'quais tarefas existem?' })
+      .expect(201);
+
+    const res = await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/ai/requests`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].toolCalls).toEqual([
+      expect.objectContaining({ toolName: 'list_tasks', isError: false }),
+    ]);
+  });
 });

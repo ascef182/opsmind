@@ -2,20 +2,17 @@ import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import type { Membership } from '@opsmind/database';
 import type { Role } from '@opsmind/shared-types';
 import { AiService, type ChatResult } from './ai.service';
-import { BudgetService } from './services/budget.service';
+import { AiUsageService, type RecentAiRequest, type UsageSummary } from './services/ai-usage.service';
 import { ChatDto } from './dto/chat.dto';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { CurrentMembership } from '../../shared/decorators/current-membership.decorator';
 
-export interface UsageResponse {
-  monthSpend: number;
-}
-
 /**
  * Sem `@Roles()` — qualquer membro (até VIEWER) pode conversar com a IA e
- * pedir para ela ler dados (mesmo nível de acesso que ele já teria batendo
- * direto nos endpoints de leitura). A única ação de escrita disponível às
+ * pedir para ela ler dados, e qualquer membro pode ver o painel de custo
+ * (visibilidade, não mutação — configurar o orçamento é que exige papel,
+ * ver OrganizationsController.update). A única ação de escrita disponível às
  * tools (create_task) tem seu próprio RBAC checado dentro do
  * `CreateTaskTool`, não aqui — ver comentário lá.
  */
@@ -24,7 +21,7 @@ export interface UsageResponse {
 export class AiController {
   constructor(
     private readonly aiService: AiService,
-    private readonly budgetService: BudgetService,
+    private readonly aiUsageService: AiUsageService,
   ) {}
 
   @Post('chat')
@@ -41,11 +38,12 @@ export class AiController {
   }
 
   @Get('usage')
-  async usage(
-    @Param('organizationId') organizationId: string,
-    @CurrentMembership() _membership: Membership,
-  ): Promise<UsageResponse> {
-    const monthSpend = await this.budgetService.getMonthSpend(organizationId);
-    return { monthSpend };
+  usage(@Param('organizationId') organizationId: string): Promise<UsageSummary> {
+    return this.aiUsageService.getSummary(organizationId);
+  }
+
+  @Get('requests')
+  recentRequests(@Param('organizationId') organizationId: string): Promise<RecentAiRequest[]> {
+    return this.aiUsageService.listRecent(organizationId);
   }
 }

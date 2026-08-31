@@ -7,6 +7,7 @@ import { DocumentsModule } from '../documents/documents.module';
 import { AiService } from './ai.service';
 import { AiController } from './ai.controller';
 import { BudgetService } from './services/budget.service';
+import { AiUsageService } from './services/ai-usage.service';
 import { AI_GATEWAY } from './gateway/ai-gateway.interface';
 import { ClaudeGatewayService } from './gateway/claude-gateway.service';
 import { AI_TOOLS, type AiTool } from './tools/ai-tool.interface';
@@ -25,6 +26,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
   providers: [
     AiService,
     BudgetService,
+    AiUsageService,
     TenantGuard,
     { provide: AI_GATEWAY, useClass: ClaudeGatewayService },
     GetCustomerTool,
