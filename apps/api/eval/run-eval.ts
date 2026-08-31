@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { Test } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import request from 'supertest';
 import PDFDocument from 'pdfkit';
 import Anthropic from '@anthropic-ai/sdk';
@@ -12,11 +13,13 @@ import { computeMetrics } from './compute-metrics';
 import { DOCUMENT_FIXTURES, EVAL_DATASET } from './dataset';
 import type { EvalCase, EvalCaseResult, SeededFixtures } from './types';
 
-// Modelo barato pro eval inteiro (chat + judge) — produção continua em
-// claude-opus-5 (ver ANTHROPIC_MODEL, Task 5). Setado ANTES de qualquer
-// import do Nest resolver o ConfigModule (main() é a primeira coisa a rodar).
-process.env.ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-haiku-4-5';
-
+// Modelo do chat de eval é claude-sonnet-5 (~2.5x mais barato que a produção
+// em claude-opus-5, e ainda suporta `thinking: adaptive` — ver script "eval"
+// em package.json, que exporta ANTHROPIC_MODEL=claude-sonnet-5 ANTES do
+// processo Node iniciar; setar isso aqui dentro do script não funcionaria,
+// porque o import de AppModule acima já resolve o ConfigModule primeiro).
+// JUDGE_MODEL é independente — usado só para as chamadas simples de
+// classificação SIM/NAO do judge, não para o chat com tools.
 const JUDGE_MODEL = 'claude-haiku-4-5';
 
 let judgeClient: Anthropic | undefined;
@@ -45,7 +48,10 @@ async function judge(systemPrompt: string, userContent: string): Promise<boolean
     system: systemPrompt,
     messages: [{ role: 'user', content: userContent }],
   });
-  return extractText(response.content).trim().toUpperCase().startsWith('SIM');
+  const text = extractText(response.content).trim().toUpperCase();
+  if (text.startsWith('SIM')) return true;
+  if (text.startsWith('NAO') || text.startsWith('NÃO')) return false;
+  throw new Error(`Resposta do judge não começou com SIM/NAO: "${text.slice(0, 100)}"`);
 }
 
 function judgeHallucination(reply: string, toolOutputs: unknown[]): Promise<boolean> {
@@ -244,6 +250,21 @@ async function main(): Promise<void> {
   const app = moduleFixture.createNestApplication();
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   await app.init();
+
+  // Prova, lendo de volta pelo container do Nest (não process.env direto),
+  // que o override de ANTHROPIC_MODEL feito no shell (script "eval" em
+  // package.json) realmente chegou ao ConfigService. Se isto falhar, a
+  // suite está prestes a rodar contra o modelo de produção (5x mais caro)
+  // silenciosamente — melhor abortar alto e claro aqui.
+  const resolvedModel = app.get(ConfigService).get('ANTHROPIC_MODEL', { infer: true });
+  console.log(`[eval] usando modelo: ${resolvedModel}`);
+  if (resolvedModel === 'claude-opus-5') {
+    throw new Error(
+      'ANTHROPIC_MODEL resolveu para claude-opus-5 (o default de produção) — o override não teve efeito. ' +
+        'Verifique se ANTHROPIC_MODEL está setada no ambiente/shell ANTES do processo Node iniciar (não dentro deste script).',
+    );
+  }
+
   const prisma = app.get(PrismaService);
 
   try {
@@ -253,9 +274,24 @@ async function main(): Promise<void> {
 
     const results: EvalCaseResult[] = [];
     for (const evalCase of EVAL_DATASET) {
-      const result = await runCase(app, accessToken, organizationId, evalCase, fixtures, prisma);
-      results.push(result);
-      console.log(`[${result.passed ? 'PASS' : 'FAIL'}] ${evalCase.id}`);
+      try {
+        const result = await runCase(app, accessToken, organizationId, evalCase, fixtures, prisma);
+        results.push(result);
+        console.log(`[${result.passed ? 'PASS' : 'FAIL'}] ${evalCase.id}`);
+      } catch (error) {
+        // Um caso falhando (HTTP .expect() rejeitado, judge lançando por
+        // resposta inesperada, etc.) não pode derrubar a suite inteira antes
+        // do relatório ser escrito — registra como falho e segue pro próximo.
+        console.error(`[ERROR] ${evalCase.id}:`, error);
+        results.push({
+          id: evalCase.id,
+          category: evalCase.category,
+          passed: false,
+          hallucinated: false,
+          cost: 0,
+          latencyMs: 0,
+        });
+      }
     }
 
     const metrics = computeMetrics(results);

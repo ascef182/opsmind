@@ -122,6 +122,9 @@ export function AiUsagePanel({
     <div className="flex flex-col gap-4">
       <Card>
         <BudgetBar monthSpend={usage.data.monthSpend} monthlyBudget={usage.data.monthlyBudget} />
+        <p className="mt-1 text-xs text-slate-400">
+          {usage.data.totalRequests} requests · {usage.data.avgLatencyMs.toFixed(0)}ms médio
+        </p>
         {canManageBudget && (
           <form onSubmit={onSubmitBudget} className="mt-3 flex items-center gap-2">
             <Input

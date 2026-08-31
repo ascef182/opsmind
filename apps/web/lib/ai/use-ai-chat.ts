@@ -28,6 +28,8 @@ export interface UsageResult {
   monthlyBudget: number | null;
   dailySeries: DailyUsagePoint[];
   byUser: UserUsageBreakdown[];
+  avgLatencyMs: number;
+  totalRequests: number;
 }
 
 export interface RecentAiRequestToolCall {

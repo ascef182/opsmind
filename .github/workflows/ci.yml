@@ -89,6 +89,12 @@ jobs:
 
   eval-suite:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # PRs de forks não recebem secrets do repositório — ANTHROPIC_API_KEY/
+    # OPENAI_API_KEY ficariam vazias e o job falharia alto em toda contribuição
+    # externa por um motivo que não é dela. Só roda em push (branch própria) ou
+    # em PR cuja branch de origem é deste mesmo repositório.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
 
     services:
       postgres:

@@ -124,11 +124,17 @@ describe('Organizations flow (e2e)', () => {
       .expect(201);
     const organizationId = orgRes.body.id as string;
 
-    await request(app.getHttpServer())
+    const setRes = await request(app.getHttpServer())
       .patch(`/organizations/${organizationId}`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ aiMonthlyBudget: 150 })
       .expect(200);
+
+    // aiMonthlyBudget é um Decimal do Prisma — sem conversão explícita na
+    // controller, JSON.stringify(Decimal) vira STRING ("150"), não number,
+    // quebrando o contrato de OrganizationDto (packages/shared-types).
+    expect(typeof setRes.body.aiMonthlyBudget).toBe('number');
+    expect(setRes.body.aiMonthlyBudget).toBe(150);
 
     const afterSet = await prisma.organization.findUniqueOrThrow({ where: { id: organizationId } });
     expect(Number(afterSet.aiMonthlyBudget)).toBe(150);

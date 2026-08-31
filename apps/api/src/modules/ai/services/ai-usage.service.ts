@@ -25,6 +25,10 @@ export interface UsageSummary {
   monthlyBudget: number | null;
   dailySeries: DailyUsagePoint[];
   byUser: UserUsageBreakdown[];
+  // PRD §18.6 ("latência média"): agregado do mês inteiro, não por-request
+  // (isso já existe em RecentAiRequest/listRecent, via a trace expansível).
+  avgLatencyMs: number;
+  totalRequests: number;
 }
 
 export interface RecentAiRequestToolCall {
@@ -70,11 +74,12 @@ export class AiUsageService {
   ) {}
 
   async getSummary(organizationId: string): Promise<UsageSummary> {
-    const [organization, monthSpend, dailySeries, byUser] = await Promise.all([
+    const [organization, monthSpend, dailySeries, byUser, latency] = await Promise.all([
       this.prisma.organization.findUniqueOrThrow({ where: { id: organizationId } }),
       this.budgetService.getMonthSpend(organizationId),
       this.getDailySeries(organizationId),
       this.getByUser(organizationId),
+      this.getMonthLatency(organizationId),
     ]);
 
     return {
@@ -82,6 +87,8 @@ export class AiUsageService {
       monthlyBudget: organization.aiMonthlyBudget ? Number(organization.aiMonthlyBudget) : null,
       dailySeries,
       byUser,
+      avgLatencyMs: latency.avgLatencyMs,
+      totalRequests: latency.totalRequests,
     };
   }
 
@@ -131,6 +138,22 @@ export class AiUsageService {
       cost: Number(row.cost),
       requests: Number(row.requests),
     }));
+  }
+
+  // Agregado do mês inteiro (não por-dia) — PRD §18.6, "latência média".
+  // `_avg.latencyMs` vem `null` do Prisma quando não há nenhuma request no
+  // mês (org nova); normalizado pra 0 aqui, não NaN.
+  private async getMonthLatency(organizationId: string): Promise<{ avgLatencyMs: number; totalRequests: number }> {
+    const monthStart = startOfCurrentMonthUtc();
+    const result = await this.prisma.aIRequest.aggregate({
+      where: { organizationId, createdAt: { gte: monthStart } },
+      _avg: { latencyMs: true },
+      _count: { _all: true },
+    });
+    return {
+      avgLatencyMs: result._avg.latencyMs ?? 0,
+      totalRequests: result._count._all,
+    };
   }
 
   private async getByUser(organizationId: string): Promise<UserUsageBreakdown[]> {

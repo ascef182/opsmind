@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "jest --passWithNoTests",
     "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json",
-    "eval": "tsx eval/run-eval.ts"
+    "eval": "ANTHROPIC_MODEL=claude-sonnet-5 tsx eval/run-eval.ts"
   },
   "jest": {
     "moduleFileExtensions": [

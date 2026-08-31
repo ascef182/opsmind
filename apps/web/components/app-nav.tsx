@@ -20,7 +20,9 @@ export function AppNav({ organizationId }: { organizationId: string }) {
     <nav className="flex gap-1 border-b border-slate-200 bg-white px-6">
       {TABS.map((tab) => {
         const href = `/organizations/${organizationId}/${tab.path}`;
-        const active = pathname?.startsWith(href) ?? false;
+        // Não usar só `startsWith(href)`: '/ai/usage' começa com '/ai', o que
+        // faria "Assistente IA" e "Uso de IA" acenderem juntos nessa rota.
+        const active = pathname === href || (pathname?.startsWith(href + '/') ?? false);
         return (
           <Link
             key={tab.path}

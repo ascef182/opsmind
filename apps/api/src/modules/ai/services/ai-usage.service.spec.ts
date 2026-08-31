@@ -6,7 +6,7 @@ describe('AiUsageService', () => {
   let service: AiUsageService;
   let prisma: {
     organization: { findUniqueOrThrow: jest.Mock };
-    aIRequest: { groupBy: jest.Mock; findMany: jest.Mock };
+    aIRequest: { groupBy: jest.Mock; findMany: jest.Mock; aggregate: jest.Mock };
     user: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
   };
@@ -15,7 +15,7 @@ describe('AiUsageService', () => {
   beforeEach(() => {
     prisma = {
       organization: { findUniqueOrThrow: jest.fn() },
-      aIRequest: { groupBy: jest.fn(), findMany: jest.fn() },
+      aIRequest: { groupBy: jest.fn(), findMany: jest.fn(), aggregate: jest.fn() },
       user: { findMany: jest.fn() },
       $queryRaw: jest.fn(),
     };
@@ -31,6 +31,7 @@ describe('AiUsageService', () => {
       prisma.aIRequest.groupBy.mockResolvedValue([
         { userId: 'user-1', _sum: { estimatedCost: '10', inputTokens: 100, outputTokens: 50 }, _count: { _all: 2 } },
       ]);
+      prisma.aIRequest.aggregate.mockResolvedValue({ _avg: { latencyMs: 823.5 }, _count: { _all: 2 } });
       prisma.user.findMany.mockResolvedValue([{ id: 'user-1', name: 'Ana' }]);
 
       const result = await service.getSummary('org-1');
@@ -40,6 +41,8 @@ describe('AiUsageService', () => {
         monthlyBudget: 100,
         dailySeries: [{ date: '2026-08-01', cost: 10, requests: 2 }],
         byUser: [{ userId: 'user-1', name: 'Ana', cost: 10, requests: 2, inputTokens: 100, outputTokens: 50 }],
+        avgLatencyMs: 823.5,
+        totalRequests: 2,
       });
     });
 
@@ -48,11 +51,16 @@ describe('AiUsageService', () => {
       budgetService.getMonthSpend.mockResolvedValue(0);
       prisma.$queryRaw.mockResolvedValue([]);
       prisma.aIRequest.groupBy.mockResolvedValue([]);
+      prisma.aIRequest.aggregate.mockResolvedValue({ _avg: { latencyMs: null }, _count: { _all: 0 } });
 
       const result = await service.getSummary('org-1');
 
       expect(result.monthlyBudget).toBeNull();
       expect(result.byUser).toEqual([]);
+      // Sem nenhuma request no mês: avgLatencyMs deve ser 0, não NaN — o
+      // Prisma devolve `_avg.latencyMs: null` quando não há linhas.
+      expect(result.avgLatencyMs).toBe(0);
+      expect(result.totalRequests).toBe(0);
     });
   });
 
