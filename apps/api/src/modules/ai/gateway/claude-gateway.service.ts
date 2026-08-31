@@ -4,7 +4,6 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Env } from '@opsmind/config/env/schema';
 import type { AiGateway, AiGatewayRequest } from './ai-gateway.interface';
 
-const MODEL = 'claude-opus-5';
 const MAX_TOKENS = 4096;
 
 /**
@@ -28,7 +27,7 @@ export class ClaudeGatewayService implements AiGateway {
   async sendMessage(request: AiGatewayRequest): Promise<Anthropic.Message> {
     const client = this.getClient();
     return client.messages.create({
-      model: MODEL,
+      model: this.configService.get('ANTHROPIC_MODEL', { infer: true }),
       max_tokens: MAX_TOKENS,
       thinking: { type: 'adaptive' },
       system: request.system,

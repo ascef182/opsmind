@@ -47,6 +47,10 @@ export const envSchema = z.object({
   // chave só falha, alto e claro, no primeiro uso real do endpoint de IA —
   // ver ClaudeGatewayService.
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Eval suite de IA (Fase 7) — permite ao script `pnpm --filter api eval`
+  // usar claude-haiku-4-5 (mais barato) sem tocar em código; produção
+  // continua em claude-opus-5 por default.
+  ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
 
   // Documentos + RAG (Fase 4) — embeddings via OpenAI (Anthropic não tem
   // endpoint de embeddings; PRD §16 já lista "OpenAI/Anthropic" lado a lado
