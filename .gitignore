@@ -30,6 +30,7 @@ pnpm-debug.log*
 
 # testing
 coverage/
+apps/api/eval-report.json
 
 # prisma
 packages/database/prisma/dev.db
