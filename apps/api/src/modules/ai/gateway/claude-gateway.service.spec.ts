@@ -25,6 +25,15 @@ describe('ClaudeGatewayService', () => {
     configService = { get: jest.fn() };
   });
 
+  function mockEnv(overrides: Record<string, string | undefined> = {}) {
+    const values: Record<string, string | undefined> = {
+      ANTHROPIC_API_KEY: 'sk-ant-test-key',
+      ANTHROPIC_MODEL: 'claude-opus-5',
+      ...overrides,
+    };
+    configService.get.mockImplementation((key: string) => values[key]);
+  }
+
   async function build(): Promise<ClaudeGatewayService> {
     const module = await Test.createTestingModule({
       providers: [
@@ -46,7 +55,7 @@ describe('ClaudeGatewayService', () => {
   });
 
   it('chama messages.create com model, thinking adaptativo e os parâmetros do request quando a chave existe', async () => {
-    configService.get.mockReturnValue('sk-ant-test-key');
+    mockEnv();
     mockCreate.mockResolvedValue({ id: 'msg_1', stop_reason: 'end_turn', content: [] });
     const service = await build();
 
@@ -68,7 +77,7 @@ describe('ClaudeGatewayService', () => {
   });
 
   it('reutiliza a mesma instância do client Anthropic entre chamadas (não recria a cada mensagem)', async () => {
-    configService.get.mockReturnValue('sk-ant-test-key');
+    mockEnv();
     mockCreate.mockResolvedValue({ id: 'msg_1', stop_reason: 'end_turn', content: [] });
     const service = await build();
     const AnthropicCtor = jest.requireMock('@anthropic-ai/sdk').default;
@@ -78,5 +87,15 @@ describe('ClaudeGatewayService', () => {
     await service.sendMessage({ system: 's', messages: [], tools: [] });
 
     expect(AnthropicCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('usa ANTHROPIC_MODEL do ambiente em vez do hardcode quando configurado', async () => {
+    mockEnv({ ANTHROPIC_MODEL: 'claude-haiku-4-5' });
+    mockCreate.mockResolvedValue({ id: 'msg_1', stop_reason: 'end_turn', content: [] });
+    const service = await build();
+
+    await service.sendMessage({ system: 's', messages: [], tools: [] });
+
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-haiku-4-5' }));
   });
 });

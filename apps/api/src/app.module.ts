@@ -9,6 +9,7 @@ import { buildLoggerOptions } from './infrastructure/logging/logger-options';
 import { AppController } from './app.controller';
 import { PrismaModule } from './infrastructure/database/prisma.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
+import { StorageModule } from './infrastructure/storage/storage.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditModule } from './modules/audit/audit.module';
@@ -18,6 +19,7 @@ import { CustomersModule } from './modules/customers/customers.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { DocumentsModule } from './modules/documents/documents.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AutomationsModule } from './modules/automations/automations.module';
 import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
@@ -54,6 +56,7 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     ]),
     PrismaModule,
     RedisModule,
+    StorageModule,
     AuditModule,
     UsersModule,
     AuthModule,
@@ -63,6 +66,7 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     TasksModule,
     NotificationsModule,
     DashboardModule,
+    DocumentsModule,
     AiModule,
     AutomationsModule,
   ],

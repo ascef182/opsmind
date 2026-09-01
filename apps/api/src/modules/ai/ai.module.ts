@@ -3,9 +3,11 @@ import { CustomersModule } from '../customers/customers.module';
 import { TasksModule } from '../tasks/tasks.module';
 import { ActivityModule } from '../activity/activity.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
+import { DocumentsModule } from '../documents/documents.module';
 import { AiService } from './ai.service';
 import { AiController } from './ai.controller';
 import { BudgetService } from './services/budget.service';
+import { AiUsageService } from './services/ai-usage.service';
 import { AI_GATEWAY } from './gateway/ai-gateway.interface';
 import { ClaudeGatewayService } from './gateway/claude-gateway.service';
 import { AI_TOOLS, type AiTool } from './tools/ai-tool.interface';
@@ -15,14 +17,16 @@ import { GetCustomerActivityTool } from './tools/get-customer-activity.tool';
 import { ListInactiveCustomersTool } from './tools/list-inactive-customers.tool';
 import { ListTasksTool } from './tools/list-tasks.tool';
 import { CreateTaskTool } from './tools/create-task.tool';
+import { SearchDocumentsTool } from './tools/search-documents.tool';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 
 @Module({
-  imports: [CustomersModule, TasksModule, ActivityModule, OrganizationsModule],
+  imports: [CustomersModule, TasksModule, ActivityModule, OrganizationsModule, DocumentsModule],
   controllers: [AiController],
   providers: [
     AiService,
     BudgetService,
+    AiUsageService,
     TenantGuard,
     { provide: AI_GATEWAY, useClass: ClaudeGatewayService },
     GetCustomerTool,
@@ -31,6 +35,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     ListInactiveCustomersTool,
     ListTasksTool,
     CreateTaskTool,
+    SearchDocumentsTool,
     {
       provide: AI_TOOLS,
       useFactory: (
@@ -40,6 +45,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         listInactiveCustomers: ListInactiveCustomersTool,
         listTasks: ListTasksTool,
         createTask: CreateTaskTool,
+        searchDocuments: SearchDocumentsTool,
       ): AiTool[] => [
         getCustomer,
         searchCustomers,
@@ -47,6 +53,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         listInactiveCustomers,
         listTasks,
         createTask,
+        searchDocuments,
       ],
       inject: [
         GetCustomerTool,
@@ -55,6 +62,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         ListInactiveCustomersTool,
         ListTasksTool,
         CreateTaskTool,
+        SearchDocumentsTool,
       ],
     },
   ],

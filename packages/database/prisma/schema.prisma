@@ -86,6 +86,12 @@ enum AutomationRunStatus {
   SKIPPED
 }
 
+enum DocumentStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
 // ── Core tenancy ─────────────────────────────────────────────────────────
 
 model Organization {
@@ -112,6 +118,8 @@ model Organization {
   aiRequests     AIRequest[]
   automations    Automation[]
   automationRuns AutomationRun[]
+  documents      Document[]
+  documentChunks DocumentChunk[]
 
   @@map("organizations")
 }
@@ -133,6 +141,7 @@ model User {
   assignedTasks           Task[]                   @relation("TaskAssignee")
   notifications           Notification[]
   aiRequests              AIRequest[]
+  uploadedDocuments       Document[]
 
   @@map("users")
 }
@@ -275,6 +284,7 @@ model Customer {
   owner        User?         @relation("CustomerOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   tasks        Task[]
   activityLogs ActivityLog[]
+  documents    Document[]
 
   @@index([organizationId, status])
   @@index([organizationId, lastActivityAt])
@@ -460,4 +470,71 @@ model AutomationRun {
   @@index([organizationId, automationId, createdAt])
   @@index([automationId, customerId, status])
   @@map("automation_runs")
+}
+
+// ── Documentos + RAG (Fase 4) ────────────────────────────────────────────
+// PRD §17, critério de aceitação: "perguntar sobre o conteúdo de um contrato
+// enviado retorna resposta correta citando o trecho/documento de origem."
+// Pipeline (PRD §13): upload → extração de texto (pdf-parse) → chunking
+// (parágrafo, com fallback de janela fixa + overlap para parágrafos longos)
+// → embeddings (OpenAI, 1536 dims) → DocumentChunk → busca por similaridade
+// de cosseno no momento da pergunta (tool `search_documents`) → resposta com
+// citação. Roda síncrono dentro do próprio request de upload — o worker
+// BullMQ (fila `document-processing`, seção 12 do PRD) só chega na Fase 5;
+// antecipar essa infra aqui seria puxar escopo de fase errada.
+
+model Document {
+  id               String         @id @default(uuid())
+  organizationId   String         @map("organization_id")
+  customerId       String?        @map("customer_id")
+  filename         String
+  mimeType         String         @map("mime_type")
+  sizeBytes        Int            @map("size_bytes")
+  // Nome espelha o esboço do PRD §12 ("storage_url"), mesmo o provider
+  // `local` (dev) guardando um caminho relativo, não uma URL de verdade —
+  // quando `gcs` existir (Fase 6), aqui vai a URL assinada. Nunca é servido
+  // como link direto: download sempre passa por
+  // GET .../documents/:id/download, atrás do TenantGuard.
+  storageUrl       String         @map("storage_url")
+  status           DocumentStatus @default(PROCESSING)
+  errorMessage     String?        @map("error_message")
+  uploadedByUserId String         @map("uploaded_by_user_id")
+  // Soft-delete (mesmo padrão de Customer) — preserva trilha de auditoria;
+  // não apaga o arquivo físico nem os chunks imediatamente.
+  deletedAt        DateTime?      @map("deleted_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  uploadedBy   User            @relation(fields: [uploadedByUserId], references: [id])
+  chunks       DocumentChunk[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+  @@map("documents")
+}
+
+// `embedding` é `Unsupported("vector(1536)")` — Prisma não tem tipo nativo
+// pra pgvector; a coluna e seu índice HNSW são criados via SQL cru na
+// migration, e só são lidos/escritos via $queryRaw/$executeRaw
+// (DocumentsService/SearchDocumentsTool), nunca pelo client gerado.
+// `organizationId` denormalizado (não só `documentId`) por decisão já
+// tomada na Fase 1 — ver comentário no topo deste arquivo — porque a busca
+// por similaridade roda direto nesta tabela e precisa filtrar por tenant
+// sem JOIN (RLS aplicada diretamente aqui, não herdada de Document).
+model DocumentChunk {
+  id             String                       @id @default(uuid())
+  organizationId String                       @map("organization_id")
+  documentId     String                       @map("document_id")
+  chunkIndex     Int                          @map("chunk_index")
+  content        String
+  embedding      Unsupported("vector(1536)")?
+  createdAt      DateTime                     @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, chunkIndex])
+  @@map("document_chunks")
 }

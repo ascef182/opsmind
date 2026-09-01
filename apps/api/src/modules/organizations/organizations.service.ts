@@ -87,4 +87,31 @@ export class OrganizationsService {
       where: { memberships: { some: { userId } } },
     });
   }
+
+  /**
+   * Fecha a lacuna do PRD §17 (Fase 7): `aiMonthlyBudget` já existia no schema
+   * e já era lido por `BudgetService`/`AiService` desde a Fase 3, mas não
+   * havia como configurá-lo — só editando o banco direto.
+   */
+  async updateBudget(
+    organizationId: string,
+    actorUserId: string,
+    aiMonthlyBudget: number | null | undefined,
+  ): Promise<Organization> {
+    const organization = await this.prisma.organization.update({
+      where: { id: organizationId },
+      data: { aiMonthlyBudget },
+    });
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: actorUserId,
+      organizationId,
+      action: 'organization.ai_budget_updated',
+      resource: `Organization:${organizationId}`,
+      metadata: { aiMonthlyBudget: aiMonthlyBudget ?? null },
+    });
+
+    return organization;
+  }
 }
