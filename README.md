@@ -12,6 +12,11 @@ Fase 1 (Foundation) em andamento. Veja:
 - [`docs/planning/sprint-1-2-plan.md`](docs/planning/sprint-1-2-plan.md) — síntese da rodada de planejamento (7 agentes especializados revisaram o PRD) e plano de execução da Fase 1.
 - [`docs/planning/reviews/`](docs/planning/reviews/) — pareceres completos de cada especialista (arquitetura, banco de dados, segurança, RAG, evals de IA).
 
+Em desenvolvimento na branch `feat/leads-prospecting`: geração de pipeline de vendas — busca de negócios
+locais por cidade/estado/tipo (priorizando quem não tem site) via fontes plugáveis (Apify, Explorium,
+camofox-browser), qualificação automática, e um Dashboard redesenhado com visual dark-mode. Plano completo em
+[`docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md`](docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md).
+
 ## Stack
 
 Next.js (web) + NestJS (api) + PostgreSQL/Prisma + pgvector + Redis/BullMQ — monorepo pnpm + Turborepo. Detalhes completos no PRD, seção 15.
@@ -32,12 +37,14 @@ pnpm dev
 
 ```
 apps/
-  web/              Next.js
-  api/               NestJS
+  web/                Next.js
+  api/                NestJS
+  worker/             BullMQ (automações, scrape jobs)
 packages/
-  database/          Prisma schema + client
+  database/           Prisma schema + client
   shared-types/       DTOs/tipos compartilhados
   config/             eslint, tsconfig, env schema
+  integrations/       gateways externos (Apify, Explorium, camofox-browser) — em desenvolvimento
 infra/
   docker/             docker-compose local
   terraform/          IaC (Fase 6)
