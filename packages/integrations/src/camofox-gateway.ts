@@ -32,6 +32,12 @@ export const CAMOFOX_GATEWAY = Symbol('CAMOFOX_GATEWAY');
 
 const DEFAULT_USER_ID = 'opsmind-leads';
 const DEFAULT_MIN_INTERVAL_MS = 2_000;
+// Mesmo valor default do `CamofoxScrapingClient` antigo
+// (`apps/api/src/infrastructure/scraping/camofox-scraping.client.ts`,
+// branch `feat/prospecting-outbound`) — uma chamada de rede a um processo
+// externo (o próprio camofox) nunca pode travar o worker indefinidamente se
+// o serviço parar de responder.
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -40,6 +46,10 @@ function sleep(ms: number): Promise<void> {
     // worker, que roda long-lived).
     timer.unref?.();
   });
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError';
 }
 
 /**
@@ -114,10 +124,16 @@ class CallQueue {
  *      estruturada de resultados com título/URL prontos. `parseCamofoxResults`
  *      abaixo tenta primeiro um formato estruturado (`results`/`items`/
  *      `posts` — array), e cai para um parser best-effort do texto da árvore
- *      quando não encontra nada estruturado. Nesse fallback, `url` fica como
- *      string vazia (o texto da árvore expõe só o `ref` do elemento, não o
- *      href) até alguém plugar uma correlação real com `GET /tabs/:id/links`
- *      (endpoint que existe no serviço mas não é chamado aqui).
+ *      quando não encontra nada estruturado. Nesse fallback, a árvore de
+ *      acessibilidade só expõe o `ref` do elemento (não o href real) — como
+ *      `CamofoxSearchResult.url` é tipado como `string` não-opcional
+ *      (contrato: "isto é uma URL usável"), NUNCA fabricamos uma string
+ *      vazia fingindo ser URL; entradas sem URL reconhecível no próprio
+ *      texto do link são descartadas (ver `parseAccessibilityTreeLinks`).
+ *      Na prática isso deve zerar (ou quase) os resultados de
+ *      `@google_search`/`@yelp_search` até alguém plugar uma correlação real
+ *      com `GET /tabs/:id/links` (endpoint que existe no serviço mas não é
+ *      chamado aqui) para resolver `ref` → href de verdade.
  *   2. Pela documentação pública, macros de Reddit devolvem o resultado como
  *      JSON diretamente na resposta do próprio `POST .../navigate` (sem
  *      precisar do snapshot depois) — diferente de `@google_search`/
@@ -138,6 +154,7 @@ export class CamofoxGatewayService implements CamofoxGateway {
     private readonly baseUrl: string,
     private readonly accessKey?: string,
     minIntervalMs: number = DEFAULT_MIN_INTERVAL_MS,
+    private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS,
   ) {
     this.rateLimiter = new CallQueue(minIntervalMs);
   }
@@ -204,18 +221,38 @@ export class CamofoxGatewayService implements CamofoxGateway {
     if (this.accessKey) {
       headers.Authorization = `Bearer ${this.accessKey}`;
     }
-    const response = await fetch(`${this.baseUrl.replace(/\/$/, '')}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!response.ok) {
-      throw new Error(`camofox respondeu ${response.status} ${response.statusText} para ${method} ${path}`);
+    // `AbortController` + timeout em toda chamada — sem isso, uma instância
+    // do camofox travada (processo externo, fora do nosso controle) travaria
+    // o job/request chamador para sempre. Mesma abordagem do
+    // `CamofoxScrapingClient` antigo (branch `feat/prospecting-outbound`),
+    // que tinha esse cuidado exatamente por isso.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    timer.unref?.();
+    try {
+      const response = await fetch(`${this.baseUrl.replace(/\/$/, '')}${path}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(
+          `camofox respondeu ${response.status} ${response.statusText} para ${method} ${path}`,
+        );
+      }
+      if (response.status === 204) {
+        return null;
+      }
+      return await response.json().catch(() => null);
+    } catch (err) {
+      if (isAbortError(err)) {
+        throw new Error(`camofox: timeout (${this.timeoutMs}ms) ao chamar ${method} ${path}`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    if (response.status === 204) {
-      return null;
-    }
-    return response.json().catch(() => null);
   }
 }
 
@@ -268,11 +305,23 @@ function extractSnapshotText(raw: unknown): string | null {
   return null;
 }
 
+// Reconhece uma URL http(s) dentro do texto visível de um link da árvore de
+// acessibilidade — às vezes o texto do link É a própria URL (comum em
+// resultados de busca que mostram o domínio/URL como label visível).
+const URL_IN_TEXT_PATTERN = /https?:\/\/[^\s)\]]+/;
+
 /**
  * Parser best-effort do formato de árvore de acessibilidade do camofox
- * (ex.: `[link e2] Learn more`) — extrai só o texto de cada link como
- * `title`; `url` fica vazio porque essa árvore só expõe o `ref` do
- * elemento, não o href real (ver ressalva 1 no comentário da classe).
+ * (ex.: `[link e2] Learn more` ou `[link e3] https://exemplo.com/pagina`).
+ *
+ * A árvore só expõe o `ref` do elemento, não o href real por trás dele — só
+ * produzimos um `CamofoxSearchResult` quando uma URL http(s) é reconhecível
+ * no próprio texto do link. Entradas sem URL reconhecível são DESCARTADAS
+ * (nunca fabricamos `url: ''`): `CamofoxSearchResult.url` é `string` não
+ * opcional justamente porque quem consome isso (criação de lead, dedup por
+ * URL, links na UI) trata o campo como uma URL real e usável — devolver um
+ * objeto com `url` vazio fingiria ter resolvido algo que não foi. Ver
+ * ressalva 1 no comentário da classe `CamofoxGatewayService`.
  */
 function parseAccessibilityTreeLinks(text: string, limit: number): CamofoxSearchResult[] {
   const linkPattern = /\[link\s+(\S+?)\]\s*(.*)/g;
@@ -280,12 +329,16 @@ function parseAccessibilityTreeLinks(text: string, limit: number): CamofoxSearch
   let match: RegExpExecArray | null;
   while ((match = linkPattern.exec(text)) !== null && results.length < limit) {
     const ref = match[1];
-    const title = match[2]?.trim() ?? '';
+    const rawText = match[2]?.trim() ?? '';
+    const urlMatch = rawText.match(URL_IN_TEXT_PATTERN);
+    if (!urlMatch) {
+      continue;
+    }
     results.push({
-      title: title || null,
-      url: '',
+      title: rawText || null,
+      url: urlMatch[0],
       textContent: null,
-      raw: { ref, text: title },
+      raw: { ref, text: rawText },
     });
   }
   return results;
