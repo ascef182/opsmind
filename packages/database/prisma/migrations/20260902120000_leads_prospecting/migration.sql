@@ -30,19 +30,73 @@
 -- reversível a qualquer momento (`SET SCHEMA public` de volta), e sem exigir
 -- renomear cada índice/constraint individualmente (eles migram junto com a
 -- tabela, e o namespace de nomes de índice é por schema, não global).
+--
+-- GUARDADO com existence checks (`DO $$ ... END $$` + `IF EXISTS (SELECT ...
+-- FROM pg_tables/pg_type) THEN ALTER ... END IF`): Postgres não tem um
+-- `ALTER TABLE IF EXISTS ... SET SCHEMA` de curto-circuito nativo, e sem essa
+-- guarda o bloco quebra com "relation/type does not exist" em QUALQUER banco
+-- que nunca teve essa contaminação — que é o caso de todo banco exceto esta
+-- única máquina local (CI roda `prisma migrate deploy` contra um Postgres
+-- recém-criado; o mesmo vale para o clone de qualquer outro dev, staging e
+-- produção). Com a guarda, este bloco inteiro é (e deve continuar sendo) um
+-- no-op permanente e inofensivo em todo ambiente daqui pra frente, exceto
+-- neste Postgres local específico onde a colisão foi encontrada em
+-- 2026-09-02. Vale manter esse no-op no histórico (em vez de resolver com um
+-- `psql` manual fora da migration) porque é exatamente isso que faz esta
+-- migration continuar aplicável de forma limpa via `prisma migrate deploy`
+-- neste worktree local sempre que o volume Docker for recriado do zero — sem
+-- depender de mais um passo manual documentado à parte.
 
 CREATE SCHEMA IF NOT EXISTS "orphan_prospecting_outbound";
 
-ALTER TABLE "outreach_messages" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TABLE "lead_enrichments" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TABLE "leads" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TABLE "scrape_jobs" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TABLE "service_offerings" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TYPE "OutreachStatus" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TYPE "OutreachChannel" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TYPE "LeadStatus" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TYPE "ScrapeJobStatus" SET SCHEMA "orphan_prospecting_outbound";
-ALTER TYPE "ScrapeSourceType" SET SCHEMA "orphan_prospecting_outbound";
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'outreach_messages') THEN
+    ALTER TABLE "outreach_messages" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'lead_enrichments') THEN
+    ALTER TABLE "lead_enrichments" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'leads') THEN
+    ALTER TABLE "leads" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'scrape_jobs') THEN
+    ALTER TABLE "scrape_jobs" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'service_offerings') THEN
+    ALTER TABLE "service_offerings" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typname = 'OutreachStatus'
+  ) THEN
+    ALTER TYPE "OutreachStatus" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typname = 'OutreachChannel'
+  ) THEN
+    ALTER TYPE "OutreachChannel" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typname = 'LeadStatus'
+  ) THEN
+    ALTER TYPE "LeadStatus" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typname = 'ScrapeJobStatus'
+  ) THEN
+    ALTER TYPE "ScrapeJobStatus" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typname = 'ScrapeSourceType'
+  ) THEN
+    ALTER TYPE "ScrapeSourceType" SET SCHEMA "orphan_prospecting_outbound";
+  END IF;
+END $$;
 
 -- CreateEnum
 CREATE TYPE "ScrapeSourceType" AS ENUM ('APIFY_GOOGLE_MAPS', 'EXPLORIUM_BUSINESS_SEARCH', 'CAMOFOX_GOOGLE_SEARCH', 'CAMOFOX_REDDIT_SEARCH', 'MANUAL');
