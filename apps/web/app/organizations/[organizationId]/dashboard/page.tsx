@@ -13,13 +13,22 @@ import { Badge } from '@/components/ui/badge';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
 import { BarChartHighlighted, DonutChart, LineChartWithTooltip, SparklineChart } from '@/components/ui/chart-card';
 
-// ── Widgets 1/2 (KPIs "Leads sem site" / "Leads encontrados (mês)") ────────
+// ── Widgets 1/2 (KPIs "Leads sem site" / "Leads encontrados (14 dias)") ────
 //
 // Fórmula de delta (não especificada no brief da Task 9, escolhida aqui):
 // soma dos últimos 7 dias corridos vs. soma dos 7 dias corridos IMEDIATAMENTE
 // anteriores, sobre a mesma série diária usada no sparkline/gráfico de linha.
 // `pct` fica `null` (não NaN/Infinity) quando a janela anterior é zero — o
 // badge mostra só a diferença absoluta nesse caso ("+3" sem "%").
+//
+// Fix round 1 (review da Task 9): o widget 2 era rotulado "(mês)" mas seu
+// headline era uma soma por mês-calendário enquanto o sparkline/delta
+// desenhados no MESMO card usavam uma janela rolante de 14 dias — dois
+// recortes de tempo incompatíveis, autocontraditórios no início de
+// qualquer mês (headline pequeno de "só esse mês" sobre um sparkline/delta
+// que refletia principalmente o mês anterior). Corrigido realinhando o
+// widget inteiro (rótulo + headline + sparkline + delta) pra descrever uma
+// única janela: os últimos 14 dias corridos.
 const DELTA_WINDOW_DAYS = 7;
 const SPARKLINE_DAYS = 14;
 const TREND_CHART_DAYS = 30;
@@ -76,16 +85,15 @@ function formatDayLabel(iso: string): string {
   return `${day}/${month}`;
 }
 
-// "Leads encontrados (mês)" — sem campo dedicado no backend (a Task 9 só
-// computa `leadsByDay` pra os últimos 30 dias corridos, não por mês
-// calendário); aproximado aqui somando os dias da série de 30 dias que caem
-// no mês corrente. Pode subestimar o começo de meses com mais de 30 dias
-// decorridos (nunca acontece: máximo de dias num mês é 31) — na prática,
-// correto sempre que o mês corrente tiver ≤ 30 dias já passados.
-function sumCurrentMonth(points: LeadsByDayPoint[]): number {
-  const now = new Date();
-  const prefix = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-  return points.filter((p) => p.date.startsWith(prefix)).reduce((sum, p) => sum + p.total, 0);
+// Soma o valor de todos os pontos de uma série diária já preenchida
+// (`buildDailySeries`) — usado pro headline do KPI "Leads encontrados",
+// que precisa somar EXATAMENTE a mesma janela de dias mostrada no sparkline
+// e usada no cálculo do delta abaixo dele (ver nota de correção no
+// relatório da Task 9, "Fix round 1": a primeira versão misturava um
+// headline por mês-calendário com sparkline/delta de 14 dias corridos —
+// dois recortes de tempo incompatíveis no mesmo card).
+function sumSeries(series: DailyPoint[]): number {
+  return series.reduce((sum, p) => sum + p.value, 0);
 }
 
 function DeltaBadge({ delta, colorCoded = false }: { delta: Delta; colorCoded?: boolean }) {
@@ -202,7 +210,11 @@ function LeadPipelineSection({ data }: { data: LeadPipelineOverview }) {
 
   const websiteDelta = computeDelta(withoutWebsiteSeries);
   const totalDelta = computeDelta(totalSeries14d);
-  const monthTotal = sumCurrentMonth(data.leadsByDay);
+  // Headline do KPI "Leads encontrados (14 dias)" — soma da MESMA janela de
+  // 14 dias plotada no sparkline logo abaixo e usada no cálculo do delta
+  // (`totalDelta`), pra o card inteiro (número, sparkline, delta) descrever
+  // um único recorte de tempo. Ver comentário de `sumSeries` acima.
+  const total14dCount = sumSeries(totalSeries14d);
   const qualificationTrend = recentQualificationTrend(data.recentLeads, data.qualificationRate);
 
   const statusData = (Object.entries(data.leadsByStatus) as Array<[LeadStatus, number]>)
@@ -233,8 +245,8 @@ function LeadPipelineSection({ data }: { data: LeadPipelineOverview }) {
           delta={websiteDelta}
         />
         <KpiCard
-          label="Leads encontrados (mês)"
-          value={monthTotal}
+          label="Leads encontrados (14 dias)"
+          value={total14dCount}
           sparklineData={totalSeries14d}
           delta={totalDelta}
           colorCodedDelta
