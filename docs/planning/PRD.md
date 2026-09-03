@@ -1,7 +1,11 @@
 # OpsMind — PRD + Arquitetura Técnica
 
-**AI-Powered Business Operations Platform**
-Versão 1.0 — 26/08/2026
+**AI-Powered Business Operations Platform → AI Revenue Intelligence Platform**
+Versão 1.1 — 02/09/2026
+
+**Changelog:** v1.1 adiciona o domínio de Revenue Intelligence — Leads/Prospecting (Fase 8) e Opportunity
+Intelligence & Feedback Loop (Fase 9) — como extensão do MVP original (Fases 1-7, completo). Não substitui
+nada do escopo já entregue.
 
 ---
 
@@ -18,6 +22,10 @@ Versão 1.0 — 26/08/2026
 
 **Por que esse conceito é mais forte que "AI SaaS genérico":** o projeto passa a demonstrar três competências simultâneas — engenharia de produto (CRM real, multi-tenant, RBAC), engenharia de backend/dados (fila, workers, eventos) e AI engineering aplicada (RAG, tool calling, evals, custo de IA, segurança de prompt) — em vez de ser só "chamei a API da OpenAI".
 
+**Evolução (v1.1) — Revenue Intelligence:** a partir da Fase 8, o OpsMind deixa de ser só "CRM genérico com IA" e ganha um caso de uso comercial explícito: encontrar empresas com potencial de compra a partir de fontes públicas/autorizadas, entender o negócio automaticamente, priorizar as melhores oportunidades com um score explicável e transformar isso em ações comerciais (outreach sempre aprovado por humano) — sem descartar nada do CRM/tarefas/automações/IA já construídos, que continuam sendo a base sobre a qual esse fluxo se apoia.
+
+> OpsMind is a multi-tenant Revenue Intelligence platform that discovers, enriches and scores business opportunities from public/authorized data sources, then turns the highest-value ones into actionable sales workflows — on top of the same CRM, automation and AI-agent foundation.
+
 ---
 
 ## 2. Problema
@@ -27,6 +35,7 @@ Pequenas e médias empresas (times de 3 a 50 pessoas: agências, consultorias, i
 1. **Dados existem, mas não geram ação.** Ninguém revisita clientes inativos, contratos vencendo ou tarefas esquecidas até que já seja tarde.
 2. **Contexto fica na cabeça de uma pessoa.** Quando alguém sai de férias ou da empresa, o histórico do cliente some junto.
 3. **Ferramentas de IA genéricas (ChatGPT, copilots soltos) não têm acesso aos dados reais da empresa**, então viram um brainstorm desconectado da operação, não uma ferramenta operacional.
+4. **Prospecção é manual e não sistemática.** Encontrar empresas com potencial de compra, entender seu momento digital e priorizar quem vale a pena contatar hoje depende de pesquisa manual ad hoc — não existe um pipeline que descobre, qualifica e prioriza oportunidades comerciais com a mesma disciplina que o CRM já aplica aos clientes existentes.
 
 **Hipótese de produto:** se a IA tiver acesso estruturado e seguro ao CRM, documentos e histórico de atividades de uma empresa, ela deixa de ser um assistente de texto e passa a ser uma camada operacional — que responde perguntas com dados reais, sugere e executa ações, e mantém tudo auditável.
 
@@ -53,6 +62,8 @@ Pequenas e médias empresas (times de 3 a 50 pessoas: agências, consultorias, i
 5. Como **Marina**, quero ver quanto a empresa está gastando com IA este mês, por usuário, e definir um teto de orçamento.
 6. Como **Rafael**, quero auditoria completa: quem viu o quê, quando a IA executou uma ação e sobre qual dado.
 7. Como **Marina**, quero ter certeza de que um documento malicioso (ex.: um PDF com uma instrução escondida) não pode fazer a IA vazar dados de outro cliente.
+8. Como **Diego**, quero perguntar *"quais são os 20 melhores leads pra prospectar amanhã?"* e receber uma lista real, ordenada por score, com o tipo de oportunidade sugerido — não um chute do modelo.
+9. Como **Marina**, quero ver quantos dos leads que o sistema classificou como "alta oportunidade" realmente viraram cliente, pra saber se posso confiar no scoring.
 
 ---
 
@@ -69,6 +80,7 @@ Automations            → triggers, condições, ações, execuções
 Notifications          → in-app, e-mail (WhatsApp depois)
 Analytics              → métricas de negócio + observabilidade de IA
 Audit                  → log imutável de eventos sensíveis
+Leads / Prospecting    → discovery, scoring explicável, outreach com aprovação humana (Fase 8+, ver §17)
 ```
 
 ---
@@ -97,6 +109,12 @@ Audit                  → log imutável de eventos sensíveis
 - Evals automatizados de qualidade da IA (dataset de perguntas, tool selection accuracy, hallucination rate)
 - Orçamento de IA por organização com alertas e corte automático
 - Exportação de relatórios, integrações externas (Zapier-like), SSO/SAML para clientes enterprise
+
+**Nota (v1.1):** o MVP acima (Fases 1-7) está completo. As próximas extensões do produto são o domínio de
+Revenue Intelligence: **Fase 8 — Leads/Prospecting** (discovery, enrichment, scoring, outreach — plano
+detalhado em `docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md`, branch
+`feat/leads-prospecting`) e **Fase 9 — Opportunity Intelligence & Feedback Loop** (taxonomia de tipo de
+oportunidade + captura de previsão-vs-resultado real, ver §17). Detalhes em §9 e §17.
 
 ---
 
@@ -159,6 +177,27 @@ AuditLog
 
 Notification
   id, organization_id, user_id, type, payload, read_at, created_at
+```
+
+### 9.1 Entidades de Revenue Intelligence (Fase 8 e 9)
+
+Definidas em detalhe no plano da Fase 8 (`docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md`)
+— resumo aqui para não duplicar o schema completo:
+
+```
+ServiceOffering   (Fase 8) — define o ICP: signals[], targetIndustries[], faixa de employees/revenue
+ScrapeJob         (Fase 8) — busca por cidade/estado/tipo de negócio, fonte plugável (Apify/Explorium/camofox)
+Lead              (Fase 8) — entidade separada de Customer; score + scoreBreakdown explicável; vira Customer
+                              só quando convertido (convertedCustomerId)
+LeadEnrichment    (Fase 8) — firmografia (Explorium) ou análise de IA anexada a um lead
+OutreachMessage   (Fase 8) — rascunho de contato gerado por IA; aprovação/envio sempre humano, nunca IA
+
+LeadOpportunity      (Fase 9) — classificação multi-label do tipo de necessidade do lead (ex.: WEBSITE,
+                                 BOOKING_SYSTEM, WHATSAPP_AUTOMATION, CRM...), com confidence e rationale;
+                                 sempre gerada por IA, sob demanda (nunca em massa automática)
+LeadOutcomeFeedback  (Fase 9) — snapshot gravado quando um Lead vira CONVERTED ou LOST: o que foi previsto
+                                 (score, opportunity types, offering sugerida) vs. o resultado real —
+                                 alimenta a métrica "taxa de conversão real por faixa de score" no dashboard
 ```
 
 ---
@@ -424,6 +463,26 @@ Docker para produção, CI/CD (GitHub Actions), deploy em GCP, Terraform básico
 **Fase 7 — AI Engineering Polish (Sprint 14)**
 Painel de custo/uso de IA por organização e usuário, orçamento mensal configurável, dataset de evals (10–20 casos) com script de execução e métricas (tool accuracy, hallucination rate, custo, latência), teste de prompt injection.
 *Critério de aceitação:* README/demo mostra o painel de custo de IA e os resultados do eval suite rodando via CI.
+
+**Fase 8 — Leads / Prospecting (Revenue Intelligence)**
+Discovery de negócios locais por cidade/estado/tipo via fontes plugáveis (Apify/Google Maps, Explorium B2B,
+camofox-browser), priorizando quem não tem site; scoring determinístico e explicável (`scoreLead()`);
+enrichment sob demanda; outreach gerado por IA com aprovação sempre humana (nenhuma tool de IA aprova ou
+envia mensagem); conversão de `Lead` para `Customer`; dashboard redesenhado com o pipeline de leads.
+*Critério de aceitação:* uma busca por cidade/tipo de negócio retorna leads reais com score e breakdown
+visíveis, um outreach gerado por IA só é enviado depois de aprovação humana explícita, e um lead qualificado
+pode ser convertido em cliente sem perder o histórico de origem.
+*Detalhe completo:* `docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md` (branch
+`feat/leads-prospecting`, 10 tasks).
+
+**Fase 9 — Opportunity Intelligence & Feedback Loop**
+*Depende do merge da Fase 8.* Taxonomia multi-label de tipo de oportunidade por lead (`OpportunityType`:
+website, booking, CRM, automação de WhatsApp, etc.), classificada por IA sob demanda com confiança e
+justificativa; captura de feedback comercial — quando um lead vira cliente (won) ou é marcado como perdido
+(lost), um snapshot do que foi previsto vs. o resultado real é gravado; dashboard ganha métricas agregadas
+de taxa de conversão real por faixa de score e por tipo de oportunidade.
+*Critério de aceitação:* um lead convertido ou perdido grava automaticamente um snapshot do que foi previsto
+vs. o resultado, e o dashboard mostra taxa de conversão real por faixa de score e por tipo de oportunidade.
 
 **Nota sobre corte de escopo:** se o prazo apertar, a versão "demo honesta" mínima corta Conversations/WhatsApp (já fora do MVP), reduz Automations a 1-2 regras fixas (sem builder), e reduz o eval suite a 10 casos — ainda assim entrega os quatro pilares (CRM real + RAG + tool calling + observabilidade de IA) que sustentam a conversa em entrevista.
 
