@@ -79,6 +79,71 @@ describe('CamofoxGatewayService', () => {
     });
   });
 
+  describe('toStructuredResult (via search) — nunca fabrica url no path estruturado', () => {
+    it('descarta itens sem url/postUrl/permalink e resolve permalink relativo contra reddit.com', async () => {
+      global.fetch = jest.fn(async (input: string) => {
+        const url = String(input);
+        if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
+        if (url.includes('/navigate')) {
+          // Formato "Reddit JSON direto no navigate" (ressalva 2 da classe).
+          return jsonResponse({
+            results: [
+              { title: 'Post com url absoluta', url: 'https://reddit.com/r/x/comments/1' },
+              {
+                title: 'Post só com permalink relativo',
+                permalink: '/r/x/comments/2/titulo/',
+              },
+              { title: 'Post sem nenhum campo de URL reconhecível', selftext: 'oi' },
+            ],
+          });
+        }
+        return jsonResponse(null, { status: 204 });
+      }) as unknown as typeof fetch;
+
+      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      const results = await gateway.search({ macro: '@reddit_search', query: 'padaria', limit: 10 });
+
+      expect(results).toEqual([
+        {
+          title: 'Post com url absoluta',
+          url: 'https://reddit.com/r/x/comments/1',
+          textContent: null,
+          raw: { title: 'Post com url absoluta', url: 'https://reddit.com/r/x/comments/1' },
+        },
+        {
+          title: 'Post só com permalink relativo',
+          url: 'https://www.reddit.com/r/x/comments/2/titulo/',
+          textContent: null,
+          raw: { title: 'Post só com permalink relativo', permalink: '/r/x/comments/2/titulo/' },
+        },
+      ]);
+      expect(results.every((r) => r.url.length > 0)).toBe(true);
+    });
+
+    it('respeita o limit contando só os itens com URL resolvida (não os descartados)', async () => {
+      global.fetch = jest.fn(async (input: string) => {
+        const url = String(input);
+        if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
+        if (url.includes('/navigate')) {
+          return jsonResponse({
+            results: [
+              { title: 'sem url', selftext: 'oi' },
+              { title: 'a', url: 'https://exemplo.com/a' },
+              { title: 'sem url 2', selftext: 'oi' },
+              { title: 'b', url: 'https://exemplo.com/b' },
+            ],
+          });
+        }
+        return jsonResponse(null, { status: 204 });
+      }) as unknown as typeof fetch;
+
+      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      const results = await gateway.search({ macro: '@reddit_search', query: 'padaria', limit: 2 });
+
+      expect(results.map((r) => r.url)).toEqual(['https://exemplo.com/a', 'https://exemplo.com/b']);
+    });
+  });
+
   describe('request() timeout — Finding 2: never hangs indefinitely', () => {
     it('lança erro de timeout em vez de travar quando o fetch nunca resolve', async () => {
       // Timers reais (curtos, 50ms) em vez de fake timers: o `AbortController`

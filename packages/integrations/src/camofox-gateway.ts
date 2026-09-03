@@ -134,6 +134,13 @@ class CallQueue {
  *      `@google_search`/`@yelp_search` até alguém plugar uma correlação real
  *      com `GET /tabs/:id/links` (endpoint que existe no serviço mas não é
  *      chamado aqui) para resolver `ref` → href de verdade.
+ *      Este mesmo invariante ("nunca fabricar `url: ''`") vale também no
+ *      path estruturado (`toStructuredResult`, usado por `extractItemsArray`
+ *      → `results`/`items`/`posts`): itens sem `url`/`postUrl`/`permalink`
+ *      reconhecível são descartados em vez de virar um resultado com URL
+ *      vazia. `permalink` é resolvido contra `https://www.reddit.com` quando
+ *      vem como path relativo (formato comum de APIs estilo Reddit) — ver
+ *      `resolveStructuredUrl`.
  *   2. Pela documentação pública, macros de Reddit devolvem o resultado como
  *      JSON diretamente na resposta do próprio `POST .../navigate` (sem
  *      precisar do snapshot depois) — diferente de `@google_search`/
@@ -267,7 +274,17 @@ export class CamofoxGatewayService implements CamofoxGateway {
 function parseCamofoxResults(raw: unknown, limit: number): CamofoxSearchResult[] {
   const items = extractItemsArray(raw);
   if (items) {
-    return items.slice(0, limit).map(toStructuredResult);
+    const results: CamofoxSearchResult[] = [];
+    for (const item of items) {
+      if (results.length >= limit) {
+        break;
+      }
+      const result = toStructuredResult(item);
+      if (result) {
+        results.push(result);
+      }
+    }
+    return results;
   }
   const text = extractSnapshotText(raw);
   if (!text) {
@@ -344,15 +361,44 @@ function parseAccessibilityTreeLinks(text: string, limit: number): CamofoxSearch
   return results;
 }
 
-function toStructuredResult(item: Record<string, unknown>): CamofoxSearchResult {
+// Reddit-style APIs (o formato que motivou o path estruturado, ver ressalva 2
+// no comentário da classe) tipicamente expõem `permalink` como um PATH
+// relativo ao site (ex.: "/r/subreddit/comments/abc123/titulo/"), não uma URL
+// absoluta — resolvemos contra `https://www.reddit.com` quando não já vier
+// como `http(s)://`. Um `permalink` absoluto (formato incomum, mas possível)
+// é usado como está.
+function resolveStructuredUrl(item: Record<string, unknown>): string | null {
+  if (typeof item.url === 'string' && item.url.length > 0) {
+    return item.url;
+  }
+  if (typeof item.postUrl === 'string' && item.postUrl.length > 0) {
+    return item.postUrl;
+  }
+  if (typeof item.permalink === 'string' && item.permalink.length > 0) {
+    return item.permalink.startsWith('http')
+      ? item.permalink
+      : `https://www.reddit.com${item.permalink.startsWith('/') ? '' : '/'}${item.permalink}`;
+  }
+  return null;
+}
+
+/**
+ * Mesma disciplina de `parseAccessibilityTreeLinks`: `CamofoxSearchResult.url`
+ * é `string` não-opcional porque quem consome isso (criação de lead, dedup
+ * por URL, links na UI) trata o campo como uma URL real e usável — NUNCA
+ * fabricamos `url: ''`. Quando nenhum campo de URL reconhecível existe no
+ * item (`url`/`postUrl`/`permalink`), a entrada é descartada (`null`) em vez
+ * de virar um `CamofoxSearchResult` com URL vazia — ver `parseCamofoxResults`,
+ * que filtra os `null`s.
+ */
+function toStructuredResult(item: Record<string, unknown>): CamofoxSearchResult | null {
+  const url = resolveStructuredUrl(item);
+  if (!url) {
+    return null;
+  }
   return {
     title: typeof item.title === 'string' ? item.title : null,
-    url:
-      typeof item.url === 'string'
-        ? item.url
-        : typeof item.postUrl === 'string'
-          ? item.postUrl
-          : '',
+    url,
     textContent:
       typeof item.textContent === 'string'
         ? item.textContent
