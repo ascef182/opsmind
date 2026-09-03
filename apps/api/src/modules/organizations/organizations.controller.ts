@@ -8,21 +8,26 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
 
-// `Organization.aiMonthlyBudget` é um Prisma `Decimal` — JSON.stringify chama
-// Decimal.toJSON(), que devolve STRING (ex.: "150"), não number. Não há
-// serializer interceptor global nesta app, então cada rota HTTP que devolve
-// uma Organization precisa converter explicitamente antes da resposta sair,
-// pra bater com `OrganizationDto.aiMonthlyBudget: number | null`
-// (packages/shared-types). Consumidores internos (ex.: AiService, que lê
-// organization.aiMonthlyBudget como Decimal cru via Number(...)) continuam
-// recebendo a Organization do Prisma sem passar por este mapper — só a
-// fronteira HTTP desta controller converte.
-export type OrganizationResponse = Omit<Organization, 'aiMonthlyBudget'> & { aiMonthlyBudget: number | null };
+// `Organization.aiMonthlyBudget`/`scrapingMonthlyBudget` são `Decimal` do
+// Prisma — JSON.stringify chama Decimal.toJSON(), que devolve STRING (ex.:
+// "150"), não number. Não há serializer interceptor global nesta app, então
+// cada rota HTTP que devolve uma Organization precisa converter
+// explicitamente antes da resposta sair, pra bater com
+// `OrganizationDto.aiMonthlyBudget: number | null` (packages/shared-types).
+// Consumidores internos (ex.: AiService, que lê organization.aiMonthlyBudget
+// como Decimal cru via Number(...)) continuam recebendo a Organization do
+// Prisma sem passar por este mapper — só a fronteira HTTP desta controller
+// converte.
+export type OrganizationResponse = Omit<Organization, 'aiMonthlyBudget' | 'scrapingMonthlyBudget'> & {
+  aiMonthlyBudget: number | null;
+  scrapingMonthlyBudget: number | null;
+};
 
 function toOrganizationResponse(org: Organization): OrganizationResponse {
   return {
     ...org,
     aiMonthlyBudget: org.aiMonthlyBudget ? Number(org.aiMonthlyBudget) : null,
+    scrapingMonthlyBudget: org.scrapingMonthlyBudget ? Number(org.scrapingMonthlyBudget) : null,
   };
 }
 
@@ -75,7 +80,10 @@ export class OrganizationsController {
     @CurrentUser() user: { id: string },
     @Body() dto: UpdateOrganizationDto,
   ): Promise<OrganizationResponse> {
-    const organization = await this.organizationsService.updateBudget(organizationId, user.id, dto.aiMonthlyBudget);
+    const organization = await this.organizationsService.updateBudget(organizationId, user.id, {
+      aiMonthlyBudget: dto.aiMonthlyBudget,
+      scrapingMonthlyBudget: dto.scrapingMonthlyBudget,
+    });
     return toOrganizationResponse(organization);
   }
 }

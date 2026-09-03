@@ -4,6 +4,7 @@ import { TasksModule } from '../tasks/tasks.module';
 import { ActivityModule } from '../activity/activity.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { DocumentsModule } from '../documents/documents.module';
+import { LeadsModule } from '../leads/leads.module';
 import { AiService } from './ai.service';
 import { AiController } from './ai.controller';
 import { BudgetService } from './services/budget.service';
@@ -18,10 +19,21 @@ import { ListInactiveCustomersTool } from './tools/list-inactive-customers.tool'
 import { ListTasksTool } from './tools/list-tasks.tool';
 import { CreateTaskTool } from './tools/create-task.tool';
 import { SearchDocumentsTool } from './tools/search-documents.tool';
+import { FindLeadsTool } from './tools/find-leads.tool';
+import { ScoreLeadTool } from './tools/score-lead.tool';
+import { AnalyzeLeadPotentialTool } from './tools/analyze-lead-potential.tool';
+import { GenerateOutreachMessageTool } from './tools/generate-outreach-message.tool';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 
 @Module({
-  imports: [CustomersModule, TasksModule, ActivityModule, OrganizationsModule, DocumentsModule],
+  imports: [
+    CustomersModule,
+    TasksModule,
+    ActivityModule,
+    OrganizationsModule,
+    DocumentsModule,
+    LeadsModule,
+  ],
   controllers: [AiController],
   providers: [
     AiService,
@@ -36,6 +48,10 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     ListTasksTool,
     CreateTaskTool,
     SearchDocumentsTool,
+    FindLeadsTool,
+    ScoreLeadTool,
+    AnalyzeLeadPotentialTool,
+    GenerateOutreachMessageTool,
     {
       provide: AI_TOOLS,
       useFactory: (
@@ -46,6 +62,10 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         listTasks: ListTasksTool,
         createTask: CreateTaskTool,
         searchDocuments: SearchDocumentsTool,
+        findLeads: FindLeadsTool,
+        scoreLead: ScoreLeadTool,
+        analyzeLeadPotential: AnalyzeLeadPotentialTool,
+        generateOutreachMessage: GenerateOutreachMessageTool,
       ): AiTool[] => [
         getCustomer,
         searchCustomers,
@@ -54,6 +74,10 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         listTasks,
         createTask,
         searchDocuments,
+        findLeads,
+        scoreLead,
+        analyzeLeadPotential,
+        generateOutreachMessage,
       ],
       inject: [
         GetCustomerTool,
@@ -63,6 +87,10 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         ListTasksTool,
         CreateTaskTool,
         SearchDocumentsTool,
+        FindLeadsTool,
+        ScoreLeadTool,
+        AnalyzeLeadPotentialTool,
+        GenerateOutreachMessageTool,
       ],
     },
   ],

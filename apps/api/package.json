@@ -43,6 +43,7 @@
     "@nestjs/throttler": "^6.2.1",
     "@opsmind/config": "workspace:*",
     "@opsmind/database": "workspace:*",
+    "@opsmind/integrations": "workspace:*",
     "@opsmind/shared-types": "workspace:*",
     "@sentry/nestjs": "^10.72.0",
     "@sentry/node": "^10.72.0",

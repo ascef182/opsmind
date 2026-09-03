@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import type { LeadScoreBreakdown } from '@opsmind/shared-types';
 import { apiFetch } from '../api-client';
 
 // Espelha DashboardOverview de apps/api/src/modules/dashboard/dashboard.service.ts —
@@ -32,6 +33,77 @@ export function useDashboard(organizationId: string) {
   return useQuery({
     queryKey: ['organizations', organizationId, 'dashboard'],
     queryFn: () => apiFetch<DashboardOverview>(`/organizations/${organizationId}/dashboard`),
+    enabled: Boolean(organizationId),
+  });
+}
+
+// Espelha `LeadPipelineOverview` de
+// apps/api/src/modules/dashboard/dashboard.service.ts (Task 9) — mesma
+// decisão de tipos duplicados ao front que `DashboardOverview` acima e
+// `lib/leads/types.ts`.
+export type LeadStatus =
+  | 'DISCOVERED'
+  | 'QUALIFIED'
+  | 'DISQUALIFIED'
+  | 'OUTREACH_DRAFTED'
+  | 'OUTREACH_APPROVED'
+  | 'CONTACTED'
+  | 'REPLIED'
+  | 'CONVERTED'
+  | 'LOST';
+
+export type ScrapeJobStatus = 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface LeadPipelineLead {
+  id: string;
+  name: string;
+  city: string | null;
+  state: string | null;
+  website: string | null;
+  status: LeadStatus;
+  score: number | null;
+  scoreBreakdown: LeadScoreBreakdown | null;
+  discoveredAt: string;
+}
+
+export interface LeadPipelineScrapeJob {
+  id: string;
+  status: ScrapeJobStatus;
+  city: string;
+  state: string;
+  businessType: string;
+  leadsFound: number;
+  createdAt: string;
+}
+
+export interface LeadsByCityBucket {
+  city: string | null;
+  state: string | null;
+  count: number;
+  withoutWebsite: number;
+}
+
+export interface LeadsByDayPoint {
+  date: string;
+  total: number;
+  withoutWebsite: number;
+}
+
+export interface LeadPipelineOverview {
+  totalLeads: number;
+  leadsWithoutWebsite: number;
+  qualificationRate: number;
+  leadsByStatus: Record<LeadStatus, number>;
+  leadsByCity: LeadsByCityBucket[];
+  leadsByDay: LeadsByDayPoint[];
+  recentLeads: LeadPipelineLead[];
+  recentScrapeJobs: LeadPipelineScrapeJob[];
+}
+
+export function useLeadPipelineOverview(organizationId: string) {
+  return useQuery({
+    queryKey: ['organizations', organizationId, 'dashboard', 'leads'],
+    queryFn: () => apiFetch<LeadPipelineOverview>(`/organizations/${organizationId}/dashboard/leads`),
     enabled: Boolean(organizationId),
   });
 }

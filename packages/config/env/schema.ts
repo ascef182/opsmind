@@ -68,6 +68,37 @@ export const envSchema = z.object({
   // monorepo por padrão — fora de qualquer pasta versionada (.gitignore).
   LOCAL_STORAGE_DIR: z.string().default('.data/uploads'),
 
+  // Leads / prospecção (branch feat/leads-prospecting) — três integrações
+  // externas plugáveis por `ScrapeJob.sourceType`, todas OPCIONAIS, mesmo
+  // espírito de ANTHROPIC_API_KEY: nenhuma delas é dependência do resto da
+  // aplicação (Fase 1/2 e o restante do produto funcionam sem a feature de
+  // leads). Cada uma falha alto e claro só no primeiro scrape que a usa —
+  // ver os gateways em packages/integrations.
+  // Apify (actor de Google Maps — dados estruturados: telefone/rating/site/
+  // categoria). Sem o token, ScrapeJob com sourceType=APIFY_GOOGLE_MAPS
+  // falha ao disparar; outras fontes continuam funcionando normalmente.
+  APIFY_API_TOKEN: z.string().optional(),
+  // Id do actor Apify usado para a busca — tem default porque é o mesmo
+  // actor público pra qualquer organização (não é segredo, só configuração),
+  // ao contrário do token acima; existe como env var em vez de constante
+  // hardcoded só pra permitir apontar pra uma versão/fork do actor sem
+  // rebuild.
+  APIFY_GOOGLE_MAPS_ACTOR_ID: z.string().default('compass/google-maps-extractor'),
+  // Explorium (mesma API por trás das tools MCP "Vibe Prospecting" — busca +
+  // enrichment B2B com firmografia). Opcional pelo mesmo motivo do token
+  // Apify acima: só bloqueia ScrapeJob com sourceType=EXPLORIUM_BUSINESS_SEARCH.
+  EXPLORIUM_API_KEY: z.string().optional(),
+  // camofox-browser (navegador stealth self-hosted, https://github.com/jo-inc/camofox-browser)
+  // — cobertura ampla via macros (@google_search/@yelp_search/@reddit_search)
+  // quando não há API estruturada pra fonte desejada. URL do serviço
+  // self-hosted; opcional pelo mesmo motivo das outras duas acima.
+  CAMOFOX_API_URL: z.string().url().optional(),
+  // Chave de acesso do camofox-browser self-hosted. Só faz sentido em par
+  // com CAMOFOX_API_URL; validada aqui sem exigir a outra porque o Zod
+  // schema não expressa "obrigatório junto" facilmente — o gateway
+  // (packages/integrations) que checa a combinação no primeiro uso real.
+  CAMOFOX_ACCESS_KEY: z.string().optional(),
+
   // Observabilidade (Fase 6 — PRD §15: "Sentry + logging estruturado").
   // SENTRY_DSN opcional pelo mesmo motivo de ANTHROPIC_API_KEY: observabilidade
   // é um recurso adicional, não uma dependência — o SDK do Sentry já trata

@@ -33,6 +33,34 @@ services:
       timeout: 5s
       retries: 10
 
+  # Navegador stealth self-hosted usado pela fonte de scraping CAMOFOX (ver
+  # packages/integrations/src/camofox-gateway.ts). Builda direto do
+  # repositório oficial via git URL — não testado nesta sessão (build de
+  # verdade não roda aqui); se o build a partir da URL falhar, ver o fallback
+  # manual documentado em infra/docker/README.md.
+  camofox:
+    build:
+      context: https://github.com/jo-inc/camofox-browser.git
+    restart: unless-stopped
+    ports:
+      - "9377:9377"
+    environment:
+      CAMOFOX_PORT: "9377"
+    # Não sabemos se a imagem final tem `curl` ou `wget` instalado (build via
+    # URL git, não inspecionado nesta sessão — ver ressalva acima) — tenta os
+    # dois; se nenhum existir, o healthcheck falha sempre e o serviço fica
+    # "unhealthy" mesmo up, o que ainda é mais honesto que não ter healthcheck
+    # nenhum. Mesmos `interval`/`timeout`/`retries` de `postgres`/`redis`.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:9377/ >/dev/null 2>&1 || curl -fsS http://localhost:9377/ >/dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   opsmind_postgres_data:
   opsmind_redis_data:

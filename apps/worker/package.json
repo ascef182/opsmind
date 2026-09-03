@@ -28,6 +28,7 @@
   "dependencies": {
     "@opsmind/config": "workspace:*",
     "@opsmind/database": "workspace:*",
+    "@opsmind/integrations": "workspace:*",
     "@opsmind/shared-types": "workspace:*",
     "@sentry/node": "^10.72.0",
     "bullmq": "^5.34.1",
