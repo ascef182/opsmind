@@ -46,6 +46,20 @@ services:
       - "9377:9377"
     environment:
       CAMOFOX_PORT: "9377"
+    # Não sabemos se a imagem final tem `curl` ou `wget` instalado (build via
+    # URL git, não inspecionado nesta sessão — ver ressalva acima) — tenta os
+    # dois; se nenhum existir, o healthcheck falha sempre e o serviço fica
+    # "unhealthy" mesmo up, o que ainda é mais honesto que não ter healthcheck
+    # nenhum. Mesmos `interval`/`timeout`/`retries` de `postgres`/`redis`.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:9377/ >/dev/null 2>&1 || curl -fsS http://localhost:9377/ >/dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   opsmind_postgres_data:
