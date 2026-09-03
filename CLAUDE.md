@@ -140,8 +140,9 @@ Feature de geração de pipeline: busca negócios locais por cidade/estado/tipo 
 site), qualifica automaticamente, e permite promover um `Lead` a `Customer`. `Lead` é uma entidade separada
 de `Customer` (não polui o CRM com resultado bruto de busca) — segue o mesmo padrão RLS/multi-tenant de todo
 o resto do schema, com um `convertedCustomerId` nullable marcando a promoção quando ocorre. O módulo da API
-tem cinco serviços (`service-offerings`, `scrape-jobs`, `leads`, `outreach`, `lead-analysis`), cada um com
-controller próprio.
+tem cinco serviços (`service-offerings`, `scrape-jobs`, `leads`, `outreach`, `lead-analysis`), mas só quatro
+controllers (`service-offerings`, `scrape-jobs`, `leads`, `outreach-messages`) — `LeadAnalysisService` não
+tem controller próprio, é injetado e exposto via `POST .../leads/:leadId/analyze` do `LeadsController`.
 
 **Fontes de busca são plugáveis, escolhidas pelo usuário por `ScrapeJob.sourceType`** (`ScrapeSourceType`:
 `APIFY_GOOGLE_MAPS`, `EXPLORIUM_BUSINESS_SEARCH`, `CAMOFOX_GOOGLE_SEARCH`, `CAMOFOX_REDDIT_SEARCH`, e
