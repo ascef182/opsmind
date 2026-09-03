@@ -53,6 +53,6 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     TenantGuard,
     RolesGuard,
   ],
-  exports: [LeadsService, ServiceOfferingsService, OutreachService, LeadAnalysisService],
+  exports: [LeadsService, ServiceOfferingsService, ScrapeJobsService, OutreachService, LeadAnalysisService],
 })
 export class LeadsModule {}
