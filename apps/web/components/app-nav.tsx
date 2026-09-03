@@ -6,6 +6,8 @@ import clsx from 'clsx';
 
 const TABS = [
   { path: 'dashboard', label: 'Dashboard' },
+  { path: 'leads', label: 'Leads' },
+  { path: 'outreach', label: 'Aprovações' },
   { path: 'customers', label: 'Clientes' },
   { path: 'tasks', label: 'Tarefas' },
   { path: 'ai', label: 'Assistente IA' },
