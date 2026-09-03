@@ -10,6 +10,7 @@ import type {
   CamofoxSearchResult,
 } from '@opsmind/integrations';
 import type Redis from 'ioredis';
+import * as Sentry from '@sentry/node';
 import { withTenantContext } from './tenant-context';
 import { isOverBudget, recordSpend } from './budget';
 
@@ -50,6 +51,17 @@ const STRUCTURED_WEBSITE_SOURCES: ReadonlySet<ScrapeSourceType> = new Set([
 ]);
 
 /**
+ * Único `sourceType` que precisa de uma chamada de enrichment separada
+ * (`explorium.matchBusiness`) para obter firmographics — Apify não devolve
+ * firmografia nenhuma na própria busca. `EXPLORIUM_BUSINESS_SEARCH` NÃO
+ * entra aqui: a própria busca já devolve `employeeCount`/`revenueUsd`
+ * (ver `mapExploriumResult`), então uma segunda chamada de match por nome/
+ * endereço seria (a) redundante e (b) arriscaria PERDER dado que a busca já
+ * tinha, caso o match fuzzy não re-encontre o mesmo negócio.
+ */
+const NEEDS_MATCH_ENRICHMENT: ReadonlySet<ScrapeSourceType> = new Set(['APIFY_GOOGLE_MAPS']);
+
+/**
  * Shape intermediário e estável ao qual TODO resultado bruto de gateway
  * (Apify/Explorium/Camoufox) é normalizado antes de virar `Lead` — é o que
  * permite ao passo de persistência (upsert + score) ser genérico por
@@ -62,6 +74,12 @@ const STRUCTURED_WEBSITE_SOURCES: ReadonlySet<ScrapeSourceType> = new Set([
  * resultado Camoufox vai em `url` (usado só para dedup, nunca para
  * `Lead.website`) e o texto em `rawContent` (fallback de keyword-match do
  * `scoreLead`).
+ *
+ * `firmographics`/`enrichmentSource`: preenchidos JÁ NA MAPEAÇÃO quando a
+ * própria busca do gateway devolve firmografia (hoje só Explorium) — usados
+ * diretamente pelo scoring sem precisar de uma chamada de enrichment
+ * adicional. `null` para fontes que não trazem firmografia na busca (Apify,
+ * que passa por `matchBusiness` depois; Camoufox, que nunca tem).
  */
 interface RawCandidate {
   name: string;
@@ -78,6 +96,8 @@ interface RawCandidate {
   url: string | null;
   rawContent: string | null;
   rawSnapshot: Record<string, unknown>;
+  firmographics: LeadScoringInput['firmographics'];
+  enrichmentSource: ExploriumBusinessResult | null;
 }
 
 function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
@@ -95,6 +115,10 @@ function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
     url: null,
     rawContent: null,
     rawSnapshot: r.raw,
+    // Apify não devolve firmografia nenhuma — só chega via `matchBusiness`
+    // no passo de enrichment (ver `NEEDS_MATCH_ENRICHMENT`).
+    firmographics: null,
+    enrichmentSource: null,
   };
 }
 
@@ -107,9 +131,7 @@ function mapExploriumResult(r: ExploriumBusinessResult): RawCandidate {
     phone: null,
     website: r.website,
     // Explorium não devolve uma "categoria Google" — `industry` é o análogo
-    // mais próximo disponível na própria resposta de busca; ainda assim
-    // tentamos o enrichment via `matchBusiness` depois (mesma chamada usada
-    // para Apify), que é a fonte "oficial" de firmographics pro scoring.
+    // mais próximo disponível na própria resposta de busca.
     googleCategory: r.industry,
     rating: null,
     reviewCount: null,
@@ -117,6 +139,12 @@ function mapExploriumResult(r: ExploriumBusinessResult): RawCandidate {
     url: null,
     rawContent: null,
     rawSnapshot: r.raw,
+    // A própria busca da Explorium já devolve firmografia — usada direto,
+    // SEM uma segunda chamada de `matchBusiness` (ver `NEEDS_MATCH_ENRICHMENT`
+    // acima pro racional: uma segunda chamada fuzzy poderia falhar/não
+    // re-encontrar o negócio e apagar um dado que a busca já tinha).
+    firmographics: { industry: r.industry, employeeCount: r.employeeCount, revenueUsd: r.revenueUsd },
+    enrichmentSource: r,
   };
 }
 
@@ -135,6 +163,8 @@ function mapCamofoxResult(r: CamofoxSearchResult): RawCandidate {
     url: r.url,
     rawContent: [r.title, r.textContent].filter((v): v is string => !!v).join('\n\n') || null,
     rawSnapshot: r.raw,
+    firmographics: null,
+    enrichmentSource: null,
   };
 }
 
@@ -361,6 +391,18 @@ interface FinalizeParams {
  * `AuditLog` — nenhum dos dois depende de RLS/tenant-context nem precisa
  * reverter junto com a atualização do job, então não há razão pra
  * prendê-los na mesma transação.
+ *
+ * IMPORTANTE: uma vez que a tx acima confirma o status terminal (e, no
+ * caminho COMPLETED, os `Lead`/`LeadEnrichment` do passo 3 já foram
+ * commitados antes disso), o trabalho "de verdade" do job já aconteceu e já
+ * está correto no banco. `recordSpend`/`AuditLog` são bookkeeping
+ * SECUNDÁRIO — uma falha neles NUNCA pode se propagar pro `catch` externo
+ * de `processLeadScrapeJob`, que reescreveria o job pra `FAILED` mesmo com
+ * os leads já salvos (um status terminal mentiroso, que enganaria qualquer
+ * lógica futura de "retentar jobs FAILED" a duplicar leads). Por isso esse
+ * trecho tem seu próprio try/catch: reporta pro Sentry (e stderr, caso o
+ * Sentry esteja desabilitado por falta de `SENTRY_DSN`) e segue — nunca
+ * relança.
  */
 async function finalizeJob(
   prisma: PrismaClient,
@@ -380,19 +422,34 @@ async function finalizeJob(
     }),
   );
 
-  if (params.cost > 0) {
-    await recordSpend(redis, data.organizationId, params.cost);
+  try {
+    if (params.cost > 0) {
+      await recordSpend(redis, data.organizationId, params.cost);
+    }
+    await prisma.auditLog.create({
+      data: {
+        organizationId: data.organizationId,
+        actorType: data.actorType,
+        actorId: data.actorId ?? null,
+        action: 'lead_scrape.finished',
+        resource: `ScrapeJob:${data.scrapeJobId}`,
+        metadata: { status: params.status, leadsFound: params.leadsFound, cost: params.cost },
+      },
+    });
+  } catch (bookkeepingError) {
+    Sentry.captureException(bookkeepingError, {
+      extra: {
+        scrapeJobId: data.scrapeJobId,
+        organizationId: data.organizationId,
+        phase: 'lead-scrape-finalize-bookkeeping',
+      },
+    });
+    // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
+    console.error(
+      `[lead-scrape-processor] falha ao registrar gasto/audit log do ScrapeJob ${data.scrapeJobId} (status "${params.status}" já commitado corretamente, NÃO revertido):`,
+      bookkeepingError,
+    );
   }
-  await prisma.auditLog.create({
-    data: {
-      organizationId: data.organizationId,
-      actorType: data.actorType,
-      actorId: data.actorId ?? null,
-      action: 'lead_scrape.finished',
-      resource: `ScrapeJob:${data.scrapeJobId}`,
-      metadata: { status: params.status, leadsFound: params.leadsFound, cost: params.cost },
-    },
-  });
 
   return updated;
 }
@@ -474,13 +531,18 @@ export async function processLeadScrapeJob(
 
     const enriched: EnrichedCandidate[] = [];
     for (const candidate of candidates) {
-      let firmographics: LeadScoringInput['firmographics'] = null;
-      let enrichmentRaw: ExploriumBusinessResult | null = null;
-      // Enrichment só é tentado para candidatos de fonte ESTRUTURADA
-      // (Apify/Explorium) — Camoufox cai direto pro fallback de
-      // keyword-match do `scoreLead` (não há `name`/`address` confiáveis o
-      // bastante pra tentar um match de negócio).
-      if (isStructuredWebsiteSource) {
+      // Ponto de partida: firmografia que a própria busca do gateway já
+      // trouxe (hoje só Explorium — ver `mapExploriumResult`). `null` pra
+      // Apify/Camoufox, que não trazem nada na busca.
+      let firmographics: LeadScoringInput['firmographics'] = candidate.firmographics;
+      let enrichmentRaw: ExploriumBusinessResult | null = candidate.enrichmentSource;
+      // Só Apify precisa de uma chamada de enrichment SEPARADA
+      // (`matchBusiness`) — Explorium já tem firmografia da própria busca
+      // (não repete a chamada: ver `NEEDS_MATCH_ENRICHMENT`); Camoufox cai
+      // direto pro fallback de keyword-match do `scoreLead` (não há
+      // `name`/`address` confiáveis o bastante pra tentar um match de
+      // negócio).
+      if (NEEDS_MATCH_ENRICHMENT.has(scrapeJob.sourceType)) {
         try {
           const match = await gateways.explorium.matchBusiness(
             candidate.name,

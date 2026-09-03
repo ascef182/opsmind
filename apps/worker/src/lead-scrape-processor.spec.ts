@@ -291,4 +291,96 @@ describe('processLeadScrapeJob', () => {
     );
     expect(result.status).toBe('COMPLETED');
   });
+
+  it('Explorium: usa a firmografia já trazida pela própria busca, sem chamar matchBusiness de novo', async () => {
+    const tx = setupTx();
+    (isOverBudget as jest.Mock).mockResolvedValue(false);
+    const prisma = buildPrisma();
+    const exploriumJob = { ...baseScrapeJob, sourceType: 'EXPLORIUM_BUSINESS_SEARCH' as const };
+    prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(exploriumJob);
+    prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+    tx.scrapeJob.update.mockResolvedValue({ ...exploriumJob, status: 'COMPLETED' });
+    // Leads da Explorium nunca têm `placeId` — passam pelo caminho de dedup
+    // via findFirst (mock devolve null, ou seja "não existe ainda") +
+    // create, não pelo `lead.upsert` de chave composta.
+    tx.lead.create.mockImplementation((args: { data: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'lead-1', ...args.data }),
+    );
+
+    const gateways = fakeGateways();
+    gateways.explorium.searchBusinesses.mockResolvedValue([
+      {
+        name: 'Padaria Explorium',
+        website: null,
+        industry: 'Alimentação',
+        employeeCount: 12,
+        revenueUsd: 500_000,
+        matchConfidence: 0.95,
+        raw: {},
+      },
+    ]);
+
+    const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+    // Firmografia vem direto do resultado de busca — NUNCA uma segunda
+    // chamada de matchBusiness (que poderia falhar/não re-encontrar e
+    // apagar um dado que a busca já tinha, ver comentário de
+    // NEEDS_MATCH_ENRICHMENT).
+    expect(gateways.explorium.matchBusiness).not.toHaveBeenCalled();
+    expect(tx.leadEnrichment.create).toHaveBeenCalledTimes(1);
+    expect(tx.leadEnrichment.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'explorium_firmographics',
+          data: expect.objectContaining({ employeeCount: 12, revenueUsd: 500_000 }),
+        }),
+      }),
+    );
+    expect(result.status).toBe('COMPLETED');
+  });
+
+  it('bookkeeping pós-conclusão (recordSpend) falhando NÃO reverte um job que já terminou com sucesso', async () => {
+    const tx = setupTx();
+    (isOverBudget as jest.Mock).mockResolvedValue(false);
+    const prisma = buildPrisma();
+    prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+    prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+    tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED', leadsFound: 1 });
+    tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'lead-1', ...args.create }),
+    );
+    (recordSpend as jest.Mock).mockRejectedValue(new Error('Redis indisponível'));
+
+    const gateways = fakeGateways();
+    gateways.apify.searchBusinesses.mockResolvedValue([
+      {
+        name: 'Padaria Sem Site',
+        address: null,
+        city: 'Campinas',
+        state: 'SP',
+        phone: null,
+        website: null,
+        googleCategory: 'Padaria',
+        rating: 4.5,
+        reviewCount: 20,
+        placeId: 'place-1',
+        raw: {},
+      },
+    ]);
+    gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+    const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+    // O job já tinha sido commitado como COMPLETED (leads já salvos) ANTES
+    // de recordSpend falhar — o `catch` externo NUNCA deve sobrescrever isso
+    // pra FAILED (mentiria sobre o resultado real do job).
+    expect(result.status).toBe('COMPLETED');
+    // O `catch` externo (que grava via prisma.scrapeJob.update direto,
+    // diferente do tx.scrapeJob.update usado no fluxo normal) nunca foi
+    // acionado.
+    expect(prisma.scrapeJob.update).not.toHaveBeenCalled();
+    // AuditLog nunca chega a ser escrito neste cenário (recordSpend, que
+    // vem antes dele em finalizeJob, já lançou) — mas isso não derruba o job.
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
 });
