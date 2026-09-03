@@ -55,9 +55,10 @@ Three deployables share two workspace packages:
   `lib/api-client.ts`, which hits `apps/api`. No server-side business logic; domain types are duplicated
   locally per feature folder (`lib/<domain>/types.ts`) rather than imported from Prisma, deliberately — see
   the comment in `apps/web/lib/customers/types.ts`.
-- `apps/worker` — BullMQ consumer for automations (`automation-processor.ts`, `automation-scan.ts`). Owns its
-  own tenant-context helper (`apps/worker/src/tenant-context.ts`) separate from the API's, because jobs process
-  one at a time (no concurrent-request AsyncLocalStorage needed) — see its own commented rationale.
+- `apps/worker` — BullMQ consumer for automations (`automation-processor.ts`, `automation-scan.ts`) and for
+  lead scraping (`lead-scrape-processor.ts`, `lead-scrape-queue.ts`). Owns its own tenant-context helper
+  (`apps/worker/src/tenant-context.ts`) separate from the API's, because jobs process one at a time (no
+  concurrent-request AsyncLocalStorage needed) — see its own commented rationale.
 - `packages/database` — Prisma schema (`schema.prisma`) + generated client, re-exported as `@opsmind/database`.
   Migrations are hand-annotated with the reasoning behind schema decisions; read the top-of-file comment
   before adding a model.
@@ -66,7 +67,7 @@ Three deployables share two workspace packages:
   `apps/api` and `apps/worker` need to agree on bit-for-bit.
 - `packages/config` — Zod env schema (`env/schema.ts`, validated fail-fast at boot in both `main.ts` and
   `AppModule`) + shared eslint/tsconfig.
-- `packages/integrations` (`@opsmind/integrations`, in development) — external-API gateway classes
+- `packages/integrations` (`@opsmind/integrations`) — external-API gateway classes
   (Apify/Explorium/camofox-browser) shared between `apps/api` and `apps/worker`, which can't import each
   other. Plain `new`-able classes, not NestJS providers — `apps/api` wraps them in DI tokens, `apps/worker`
   instantiates them directly.
@@ -133,40 +134,61 @@ Upload → extract PDF text (`utils/extract-pdf-text.ts`) → chunk (`utils/chun
 because Anthropic has no embeddings endpoint) → store in `DocumentChunk` (pgvector). Upload is synchronous
 (processes fully within the request) rather than queued through the worker.
 
-### Leads / prospecção (em desenvolvimento, branch `feat/leads-prospecting`)
+### Leads / prospecção (`apps/api/src/modules/leads/`, `apps/web/.../leads`+`.../outreach`)
 
 Feature de geração de pipeline: busca negócios locais por cidade/estado/tipo (priorizando quem não tem
 site), qualifica automaticamente, e permite promover um `Lead` a `Customer`. `Lead` é uma entidade separada
 de `Customer` (não polui o CRM com resultado bruto de busca) — segue o mesmo padrão RLS/multi-tenant de todo
-o resto do schema, com um `convertedCustomerId` nullable marcando a promoção quando ocorre.
+o resto do schema, com um `convertedCustomerId` nullable marcando a promoção quando ocorre. O módulo da API
+tem cinco serviços (`service-offerings`, `scrape-jobs`, `leads`, `outreach`, `lead-analysis`), cada um com
+controller próprio.
 
-**Fontes de busca são plugáveis, escolhidas pelo usuário por `ScrapeJob`** (`ScrapeSourceType`): Apify (actor
-de Google Maps, dados estruturados: telefone/rating/site/categoria), Explorium (a mesma API por trás das
-tools MCP "Vibe Prospecting" — busca+enrichment B2B com firmografia), e camofox-browser (navegador stealth
-self-hosted, https://github.com/jo-inc/camofox-browser, para cobertura ampla via macros como
-`@google_search`/`@yelp_search`/`@reddit_search`). O worker despacha por um registry
-`sourceType → gateway`, nunca um switch crescente. Os três gateways vivem em `packages/integrations`
-(`@opsmind/integrations`) — pacote novo, necessário porque `apps/worker` não pode importar módulos de
-`apps/api` e ambos processos precisam dos mesmos clients (worker faz busca em lote, api expõe enrich/analyze
-sob demanda de um lead específico).
+**Fontes de busca são plugáveis, escolhidas pelo usuário por `ScrapeJob.sourceType`** (`ScrapeSourceType`:
+`APIFY_GOOGLE_MAPS`, `EXPLORIUM_BUSINESS_SEARCH`, `CAMOFOX_GOOGLE_SEARCH`, `CAMOFOX_REDDIT_SEARCH`, e
+`MANUAL` que nunca chega a rodar/gerar custo). Apify (actor de Google Maps, dados estruturados:
+telefone/rating/site/categoria), Explorium (a mesma API por trás das tools MCP "Vibe Prospecting" —
+busca+enrichment B2B com firmografia), e camofox-browser (navegador stealth self-hosted,
+https://github.com/jo-inc/camofox-browser, para cobertura ampla via macros como `@google_search`/
+`@reddit_search`). `apps/worker/src/lead-scrape-processor.ts` despacha por um registry `SOURCE_REGISTRY:
+Record<ScrapeSourceType, SourceHandler>`, nunca um switch crescente. Os três gateways vivem em
+`packages/integrations` (`@opsmind/integrations`) — pacote necessário porque `apps/worker` não pode importar
+módulos de `apps/api` e ambos processos precisam dos mesmos clients (worker faz busca em lote via
+`lead-scrape-queue.ts`, api expõe enrich/analyze sob demanda de um lead específico).
 
 **Scoring é híbrido e sempre determinístico** (nunca AI automática em massa — custaria budget sem controle
 em milhares de leads por job): `scoreLead()` (função pura, `packages/shared-types/src/lead-scoring.ts`) usa
 fórmula por firmografia quando o lead vem de fonte estruturada (Apify/Explorium), e cai para o fallback de
-match de palavra-chave contra `ServiceOffering.signals` quando vem de fonte não-estruturada (Camoufox) — a
+match de palavra-chave contra `ServiceOffering.signals` quando vem de fonte não-estruturada (Camofox) — a
 mesma função é usada por `apps/worker` (scraping em lote) e `apps/api` (`/leads/:id/score` sob demanda) para
 nunca divergir. Uma análise de IA por lead (`analyze_lead_potential`, opt-in, nunca automática) fica separada
 do scoring — grava o resultado como `LeadEnrichment{type:'ai_analysis'}`, nunca muta `Lead` direto.
 
 `apps/worker`'s `lead-scrape-processor.ts` diverge deliberadamente do padrão de uma-transação-só de
-`automation-processor.ts`: usa 3 transações curtas ao redor de 1 fase sem transação (a chamada de rede ao
-gateway externo), porque seria arriscado segurar uma transação Postgres aberta durante uma chamada de rede
-potencialmente longa.
+`automation-processor.ts`: usa 3 transações curtas (`withTenantContext`) ao redor de 1 fase sem transação (a
+chamada de rede ao gateway externo), porque seria arriscado segurar uma transação Postgres aberta durante
+uma chamada de rede potencialmente longa.
 
-`OutreachMessage` (rascunho de contato gerado por IA, aprovação sempre humana — nenhuma AI tool pode
-aprovar/enviar, só gerar rascunho) reaproveita quase verbatim a máquina de estados de um branch anterior não
-mergeado (`feat/prospecting-outbound`, focado em Reddit) — ver `docs/superpowers/plans/
-2026-09-02-leads-prospecting-dashboard.md` para o plano completo desta feature.
+`OutreachMessage` (rascunho de contato gerado por IA) tem uma máquina de estados
+(`DRAFT → APPROVED → SENT → REPLIED`, ou `DRAFT → REJECTED`/regenerate) cuja regra dura é: **aprovação é
+sempre humana** — `OutreachService` (`outreach.service.ts`, comentário no topo do arquivo) só expõe
+`approve`/`reject`/`regenerate`/`markSent`/`markReplied` via endpoint HTTP autenticado; não existe (e não
+pode existir) uma AI tool `approve_outreach_message`/`send_outreach_message` — a única tool de IA para
+outreach é `generate_outreach_message`, que sempre grava em `DRAFT` e nunca avança o status sozinha. A
+máquina de estados reaproveita quase verbatim a de um branch anterior não mergeado
+(`feat/prospecting-outbound`, focado em Reddit).
+
+**4 AI tools novas** (`apps/api/src/modules/ai/tools/`: `find-leads`, `score-lead`, `analyze-lead-potential`,
+`generate-outreach-message`), registradas no `AiModule` junto das já existentes — mesmo contrato de
+`AiTool`/`AiToolContext` descrito acima. `score_lead` é gated por `WRITE_ROLES` (grava `Lead.score`, não é
+read-only, apesar do nome sugerir uma consulta).
+
+Frontend: páginas em `apps/web/app/organizations/[organizationId]/leads` (lista + detalhe) e `.../outreach`,
+hooks em `lib/leads/use-*.ts`, componente de score com breakdown expansível
+(`components/leads/lead-score-bar.tsx`), e um painel de pipeline de leads no dashboard
+(`GET .../dashboard/leads`, `DashboardService.getLeadPipelineOverview()` — aditivo, não altera a rota/lógica
+do dashboard original).
+
+Plano completo desta feature (10 tasks): `docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md`.
 
 ### Env / config
 
