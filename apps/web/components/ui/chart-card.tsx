@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, XAxis } from 'recharts';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 
@@ -35,7 +36,17 @@ interface SparklineChartProps {
 // Area chart minimalista — sem eixo/grid/tooltip — pro shape de tendência
 // dentro de um KPI tile.
 export function SparklineChart({ data, dataKey, color = DEFAULT_ACCENT, height = 40 }: SparklineChartProps) {
-  const gradientId = `sparkline-${dataKey}`;
+  // `<linearGradient id>` é global ao documento inteiro — `dataKey` sozinho
+  // (tipicamente um nome de campo genérico tipo "value") colide entre
+  // instâncias irmãs (ex.: vários SparklineChart num grid de KPIs, mesmo
+  // dataKey, cores diferentes); o browser resolveria `url(#...)` sempre pro
+  // <def> que aparecer por último no DOM, fazendo alguns sparklines
+  // renderizarem com o gradiente/cor errados silenciosamente. `useId()` (o
+  // mesmo mecanismo que `ChartContainer`, em chart.tsx, já usa pro seu
+  // próprio `chartId`) garante unicidade por instância; `dataKey` continua
+  // no meio só por legibilidade ao inspecionar o DOM, não pela unicidade.
+  const uniqueId = useId();
+  const gradientId = `sparkline-${dataKey}-${uniqueId.replace(/:/g, '')}`;
   const config: ChartConfig = { [dataKey]: { color } };
   return (
     <ChartContainer config={config} className="aspect-auto" style={{ height }}>
