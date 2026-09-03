@@ -512,7 +512,13 @@ export async function processLeadScrapeJob(
       return finalizeJob(prisma, redis, data, {
         status: 'FAILED',
         leadsFound: 0,
-        errorMessage: `Orçamento mensal de scraping (US$ ${monthlyBudget}) já atingido para esta organização — job não executado, nada foi gasto.`,
+        // `monthlyBudget` só chega aqui não-nulo (`isOverBudget` nunca corta
+        // com orçamento null — ver `budget.ts`), mas o tipo é `number | null`;
+        // o `!== null` é só pra satisfazer o TypeScript sem um `!`, o ramo
+        // `else` (log do valor `null` cru) nunca deve de fato rodar em
+        // produção. `.toFixed(2)` formata o valor (ex.: "US$ 50.00", não
+        // "US$ 50").
+        errorMessage: `Orçamento mensal de scraping (US$ ${monthlyBudget !== null ? monthlyBudget.toFixed(2) : monthlyBudget}) já atingido para esta organização — job não executado, nada foi gasto.`,
         cost: 0,
       });
     }
