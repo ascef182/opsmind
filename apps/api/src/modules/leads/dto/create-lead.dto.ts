@@ -55,7 +55,16 @@ export class CreateLeadDto {
   @Min(0)
   reviewCount?: number;
 
+  // Sem precedente exato de limite em outro campo de texto livre deste DTO
+  // (os demais são campos curtos de cadastro, não texto livre) — 10_000
+  // chars é generoso o bastante pra qualquer descrição de negócio real, mas
+  // limita o quanto um `rawContent` criado manualmente pode inflar os
+  // prompts de IA que o consomem diretamente (`OutreachService`,
+  // `LeadAnalysisService` — ver `apps/api/src/modules/leads/outreach.service.ts`
+  // e `lead-analysis.service.ts`), evitando custo/latência desproporcional
+  // vindo de um único lead cadastrado manualmente.
   @IsOptional()
   @IsString()
+  @MaxLength(10_000)
   rawContent?: string;
 }
