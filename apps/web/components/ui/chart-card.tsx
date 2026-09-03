@@ -141,19 +141,48 @@ interface LineChartWithTooltipProps {
   xKey: string;
   color?: string;
   height?: number;
+  // Task 9 (dashboard de leads): desenha um ponto só no último item da série
+  // ("ponto mais recente destacado") — `false` por padrão preserva o
+  // comportamento original (`dot={false}`, sem pontos) pra qualquer chamador
+  // existente. Único consumidor até agora é o dashboard, então esta prop
+  // adicional não quebra nada.
+  highlightLast?: boolean;
 }
 
 // Linha de 30 dias com tooltip — pro gráfico de tendência do dashboard
 // (ex.: leads descobertos/qualificados por dia).
-export function LineChartWithTooltip({ data, dataKey, xKey, color = DEFAULT_ACCENT, height = 240 }: LineChartWithTooltipProps) {
+export function LineChartWithTooltip({
+  data,
+  dataKey,
+  xKey,
+  color = DEFAULT_ACCENT,
+  height = 240,
+  highlightLast = false,
+}: LineChartWithTooltipProps) {
   const config: ChartConfig = { [dataKey]: { color } };
+  const lastIndex = data.length - 1;
   return (
     <ChartContainer config={config} className="aspect-auto" style={{ height }}>
       <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid vertical={false} strokeDasharray="3 3" />
         <XAxis dataKey={xKey} tickLine={false} axisLine={false} minTickGap={24} />
         <ChartTooltip content={<ChartTooltipContent />} />
-        <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} />
+        <Line
+          type="monotone"
+          dataKey={dataKey}
+          stroke={color}
+          strokeWidth={2}
+          dot={
+            highlightLast
+              ? (dotProps) =>
+                  dotProps.index === lastIndex ? (
+                    <circle key={dotProps.index} cx={dotProps.cx} cy={dotProps.cy} r={4} fill={color} stroke="none" />
+                  ) : (
+                    <circle key={dotProps.index} cx={dotProps.cx} cy={dotProps.cy} r={0} fill="none" />
+                  )
+              : false
+          }
+        />
       </LineChart>
     </ChartContainer>
   );

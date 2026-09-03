@@ -27,6 +27,15 @@ const COLORS: Record<string, string> = {
   APPROVED: 'bg-blue-100 text-blue-800',
   REJECTED: 'bg-red-100 text-red-700',
   SENT: 'bg-cyan-100 text-cyan-800',
+
+  // ScrapeJobStatus (packages/database/prisma/schema.prisma) — faltavam
+  // entradas dedicadas (Task 8 review); QUEUED/RUNNING/COMPLETED/FAILED
+  // caíam no cinza default de `COLORS[value] ?? ...`. CANCELLED já tem cor
+  // (compartilhada com LOST/CANCELLED de tasks acima).
+  QUEUED: 'bg-slate-100 text-slate-600',
+  RUNNING: 'bg-blue-100 text-blue-800',
+  COMPLETED: 'bg-green-100 text-green-800',
+  FAILED: 'bg-red-100 text-red-700',
 };
 
 export function Badge({ value }: { value: string }) {
