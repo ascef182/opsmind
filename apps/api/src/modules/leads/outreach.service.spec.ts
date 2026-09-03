@@ -88,7 +88,8 @@ function mockGatewayResponse(text: string, inputTokens = 100, outputTokens = 50)
 describe('OutreachService', () => {
   describe('generateDraft', () => {
     it('gera um DRAFT citando evidência (scoreBreakdown.matchedSignals) e linka o AIRequest', async () => {
-      const { service, prisma, gateway, leadsService, serviceOfferingsService, budgetService } = buildDeps();
+      const { service, prisma, gateway, leadsService, serviceOfferingsService, budgetService, auditService } =
+        buildDeps();
       leadsService.findByIdOrThrow.mockResolvedValue(baseLead);
       serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
       gateway.sendMessage.mockResolvedValue(mockGatewayResponse('Olá! Vi que vocês não têm site...'));
@@ -137,6 +138,14 @@ describe('OutreachService', () => {
         where: { id: 'lead-1' },
         data: { status: 'OUTREACH_DRAFTED' },
       });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorType: 'USER',
+          actorId: 'user-1',
+          action: 'outreach.draft_generated',
+          resource: 'OutreachMessage:msg-1',
+        }),
+      );
       expect(result).toEqual({ id: 'msg-1', status: 'DRAFT' });
     });
 

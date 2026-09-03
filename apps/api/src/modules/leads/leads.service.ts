@@ -24,6 +24,19 @@ export interface ListLeadsFilter {
   search?: string;
 }
 
+// Mesmo racional de `PRE_OUTREACH_DRAFTED_STATUSES` em `outreach.service.ts`:
+// só nesses status `score()` (e, por consequência, `enrich()`, que termina
+// chamando `score()`) tem permissão de ESCREVER `Lead.status` — nunca regride
+// um lead que já avançou no pipeline (OUTREACH_DRAFTED em diante, incluindo
+// CONTACTED/REPLIED/CONVERTED/LOST) de volta para QUALIFIED/DISQUALIFIED só
+// porque alguém pediu um re-score/re-enrich. Sem essa guarda, um lead
+// CONVERTED (convertedCustomerId já setado) reescorado voltaria a
+// `status: 'QUALIFIED'`, uma linha inconsistente (convertido, mas "não
+// convertido" pelo status). `score`/`scoreBreakdown`/`suggestedOfferingId`
+// continuam sendo atualizados sempre — são metadados de pontuação, não
+// estado de ciclo de vida, então recalculá-los não tem o mesmo risco.
+const PRE_QUALIFICATION_STATUSES: LeadStatus[] = ['DISCOVERED', 'QUALIFIED', 'DISQUALIFIED'];
+
 // Tipo do enrichment gravado por `enrich()` — mesmo formato usado por
 // `apps/worker/src/lead-scrape-processor.ts` (`type: 'explorium_firmographics'`,
 // `data` = `ExploriumBusinessResult` bruto) para que `getFirmographics` leia
@@ -172,14 +185,16 @@ export class LeadsService {
       firmographics,
     };
     const breakdown = scoreLead(scoreInput, offerings.map(toOfferingIcp));
-    const status: LeadStatus = breakdown.total >= QUALIFICATION_THRESHOLD ? 'QUALIFIED' : 'DISQUALIFIED';
+    const computedStatus: LeadStatus = breakdown.total >= QUALIFICATION_THRESHOLD ? 'QUALIFIED' : 'DISQUALIFIED';
+    // Ver comentário de `PRE_QUALIFICATION_STATUSES` no topo do arquivo.
+    const canUpdateStatus = PRE_QUALIFICATION_STATUSES.includes(lead.status);
 
     const updated = await this.prisma.lead.update({
       where: { id },
       data: {
         score: breakdown.total,
         scoreBreakdown: breakdown as unknown as Prisma.InputJsonValue,
-        status,
+        ...(canUpdateStatus ? { status: computedStatus } : {}),
         suggestedOfferingId: breakdown.matchedOfferingId,
       },
     });
@@ -190,7 +205,7 @@ export class LeadsService {
       organizationId,
       action: 'lead.scored',
       resource: `Lead:${id}`,
-      metadata: { score: breakdown.total, status },
+      metadata: { score: breakdown.total, status: canUpdateStatus ? computedStatus : lead.status },
     });
 
     return updated;

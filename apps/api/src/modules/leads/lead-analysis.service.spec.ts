@@ -16,15 +16,17 @@ function buildDeps() {
   const organizationsService = {
     findById: jest.fn().mockResolvedValue({ id: 'org-1', aiMonthlyBudget: null }),
   };
+  const auditService = { log: jest.fn().mockResolvedValue(undefined) };
 
   const service = new LeadAnalysisService(
     prisma as never,
     gateway,
     budgetService as never,
     organizationsService as never,
+    auditService as never,
   );
 
-  return { service, prisma, gateway, budgetService, organizationsService };
+  return { service, prisma, gateway, budgetService, organizationsService, auditService };
 }
 
 const baseLead = {
@@ -63,7 +65,7 @@ describe('LeadAnalysisService', () => {
     });
 
     it('corta ANTES de chamar a IA quando o orçamento mensal foi atingido, mas persiste um AIRequest BUDGET_EXCEEDED', async () => {
-      const { service, prisma, gateway, budgetService } = buildDeps();
+      const { service, prisma, gateway, budgetService, auditService } = buildDeps();
       prisma.lead.findFirst.mockResolvedValue(baseLead);
       budgetService.isOverBudget.mockResolvedValue(true);
 
@@ -75,10 +77,11 @@ describe('LeadAnalysisService', () => {
         data: expect.objectContaining({ status: 'BUDGET_EXCEEDED', estimatedCost: 0 }),
       });
       expect(prisma.leadEnrichment.create).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalled();
     });
 
-    it('gera a análise, persiste AIRequest SUCCESS e grava LeadEnrichment{type: ai_analysis}, nunca mutando o Lead', async () => {
-      const { service, prisma, gateway, budgetService } = buildDeps();
+    it('gera a análise, persiste AIRequest SUCCESS, grava LeadEnrichment{type: ai_analysis} (nunca mutando o Lead) e audita', async () => {
+      const { service, prisma, gateway, budgetService, auditService } = buildDeps();
       prisma.lead.findFirst.mockResolvedValue(baseLead);
       gateway.sendMessage.mockResolvedValue(
         mockGatewayResponse('Este é um bom lead porque não tem site e tem boa avaliação.'),
@@ -105,11 +108,21 @@ describe('LeadAnalysisService', () => {
         },
       });
       expect(budgetService.recordSpend).toHaveBeenCalledWith('org-1', expect.any(Number));
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorType: 'USER',
+          actorId: 'user-1',
+          organizationId: 'org-1',
+          action: 'lead.analyzed',
+          resource: 'Lead:lead-1',
+          metadata: { leadEnrichmentId: 'enr-1' },
+        }),
+      );
       expect(result).toBe(enrichment);
     });
 
-    it('gateway falha: persiste AIRequest ERROR e propaga o erro, sem gravar LeadEnrichment', async () => {
-      const { service, prisma, gateway } = buildDeps();
+    it('gateway falha: persiste AIRequest ERROR e propaga o erro, sem gravar LeadEnrichment nem auditar', async () => {
+      const { service, prisma, gateway, auditService } = buildDeps();
       prisma.lead.findFirst.mockResolvedValue(baseLead);
       gateway.sendMessage.mockRejectedValue(new Error('gateway indisponível'));
 
@@ -120,6 +133,7 @@ describe('LeadAnalysisService', () => {
       expect(prisma.aIRequest.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ status: 'ERROR', errorMessage: 'gateway indisponível' }),
       });
+      expect(auditService.log).not.toHaveBeenCalled();
     });
   });
 });

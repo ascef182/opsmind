@@ -99,6 +99,7 @@ describe('LeadsService', () => {
       prisma.lead.findFirst.mockResolvedValue({
         id: 'lead-1',
         organizationId: 'org-1',
+        status: 'DISCOVERED',
         website: 'https://acme.com',
         googleCategory: null,
         rating: null,
@@ -132,6 +133,7 @@ describe('LeadsService', () => {
       prisma.lead.findFirst.mockResolvedValue({
         id: 'lead-1',
         organizationId: 'org-1',
+        status: 'DISCOVERED',
         website: null,
         googleCategory: null,
         rating: null,
@@ -161,6 +163,40 @@ describe('LeadsService', () => {
       expect(result.status).toBe('QUALIFIED');
       expect(result.suggestedOfferingId).toBe('off-1');
     });
+
+    it('nunca regride status de um lead que já avançou além da qualificação (ex.: CONVERTED)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'CONVERTED',
+        convertedCustomerId: 'cust-1',
+        website: null, // pontuaria QUALIFIED se status fosse escrito
+        googleCategory: null,
+        rating: null,
+        reviewCount: null,
+        rawContent: null,
+      });
+      prisma.serviceOffering.findMany.mockResolvedValue([]);
+      prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+      prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ id: 'lead-1', ...data }));
+
+      await service.score('org-1', 'lead-1', 'user-1');
+
+      // `status` nunca entra no `data` do update — CONVERTED não está em
+      // PRE_QUALIFICATION_STATUSES, então não é sobrescrito mesmo com um
+      // score que teoricamente qualificaria o lead.
+      expect(prisma.lead.update).toHaveBeenCalledWith({
+        where: { id: 'lead-1' },
+        data: {
+          score: expect.any(Number),
+          scoreBreakdown: expect.any(Object),
+          suggestedOfferingId: null,
+        },
+      });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: { score: expect.any(Number), status: 'CONVERTED' } }),
+      );
+    });
   });
 
   describe('enrich', () => {
@@ -168,6 +204,7 @@ describe('LeadsService', () => {
       const lead = {
         id: 'lead-1',
         organizationId: 'org-1',
+        status: 'DISCOVERED',
         name: 'Padaria Central',
         address: 'Rua X',
         website: null,
@@ -210,6 +247,7 @@ describe('LeadsService', () => {
       prisma.lead.findFirst.mockResolvedValue({
         id: 'lead-1',
         organizationId: 'org-1',
+        status: 'DISCOVERED',
         name: 'Padaria Central',
         address: null,
         website: null,

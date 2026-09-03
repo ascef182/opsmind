@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import type { ScrapeJob, ScrapeJobStatus } from '@opsmind/database';
+import type { ScrapeJob } from '@opsmind/database';
 import { ScrapeJobsService } from './scrape-jobs.service';
 import { CreateScrapeJobDto } from './dto/create-scrape-job.dto';
+import { ListScrapeJobsQueryDto } from './dto/list-scrape-jobs-query.dto';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
@@ -27,9 +28,9 @@ export class ScrapeJobsController {
   @Get()
   list(
     @Param('organizationId') organizationId: string,
-    @Query('status') status?: ScrapeJobStatus,
+    @Query() query: ListScrapeJobsQueryDto,
   ): Promise<ScrapeJob[]> {
-    return this.scrapeJobsService.list(organizationId, { status });
+    return this.scrapeJobsService.list(organizationId, query);
   }
 
   @Get(':scrapeJobId')
