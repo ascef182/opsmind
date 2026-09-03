@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { ScoreLeadTool } from './score-lead.tool';
 
 describe('ScoreLeadTool', () => {
@@ -17,16 +18,13 @@ describe('ScoreLeadTool', () => {
     expect(leadsService.score).toHaveBeenCalledWith('org-1', 'lead-1', 'user-1');
   });
 
-  it('não recusa a chamada para o papel VIEWER (cálculo determinístico, sem gate de role)', async () => {
-    const scoreBreakdown = { total: 40, matchedOfferingId: null, matchedSignals: [] };
-    const leadsService = {
-      score: jest.fn().mockResolvedValue({ id: 'lead-1', score: 40, scoreBreakdown }),
-    };
+  it('recusa recalcular o score quando o papel do usuário que invocou é VIEWER', async () => {
+    const leadsService = { score: jest.fn() };
     const tool = new ScoreLeadTool(leadsService as never);
 
     await expect(
       tool.execute({ leadId: 'lead-1' }, { organizationId: 'org-1', userId: 'user-1', role: 'VIEWER' }),
-    ).resolves.toBe(scoreBreakdown);
-    expect(leadsService.score).toHaveBeenCalledWith('org-1', 'lead-1', 'user-1');
+    ).rejects.toThrow(ForbiddenException);
+    expect(leadsService.score).not.toHaveBeenCalled();
   });
 });
