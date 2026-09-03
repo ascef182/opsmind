@@ -22,6 +22,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AutomationsModule } from './modules/automations/automations.module';
+import { LeadsModule } from './modules/leads/leads.module';
 import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
 import { TenantContextInterceptor } from './shared/interceptors/tenant-context.interceptor';
 
@@ -69,6 +70,7 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     DocumentsModule,
     AiModule,
     AutomationsModule,
+    LeadsModule,
   ],
   controllers: [AppController],
   providers: [
