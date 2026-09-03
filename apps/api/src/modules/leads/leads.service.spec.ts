@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { LeadsService } from './leads.service';
 
 describe('LeadsService', () => {
@@ -58,6 +58,74 @@ describe('LeadsService', () => {
       prisma.lead.findFirst.mockResolvedValue(null);
 
       await expect(service.findByIdOrThrow('org-1', 'missing')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('update', () => {
+    it('rejeita PATCH com status CONVERTED (transição exclusiva de convertToCustomer)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'QUALIFIED',
+        convertedCustomerId: null,
+      });
+
+      await expect(
+        service.update('org-1', 'lead-1', { status: 'CONVERTED' }, 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.lead.update).not.toHaveBeenCalled();
+    });
+
+    it('rejeita PATCH de status em um lead já convertido', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'CONVERTED',
+        convertedCustomerId: 'cust-1',
+      });
+
+      await expect(
+        service.update('org-1', 'lead-1', { status: 'DISCOVERED' }, 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.lead.update).not.toHaveBeenCalled();
+    });
+
+    it('permite uma mudança de status legítima em um lead não convertido (regressão)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'QUALIFIED',
+        convertedCustomerId: null,
+      });
+      const updated = { id: 'lead-1', status: 'LOST' };
+      prisma.lead.update.mockResolvedValue(updated);
+
+      const result = await service.update('org-1', 'lead-1', { status: 'LOST' }, 'user-1');
+
+      expect(prisma.lead.update).toHaveBeenCalledWith({
+        where: { id: 'lead-1' },
+        data: { status: 'LOST' },
+      });
+      expect(result).toBe(updated);
+    });
+
+    it('permite PATCH sem alterar status em um lead já convertido (ex.: corrigir telefone)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'CONVERTED',
+        convertedCustomerId: 'cust-1',
+      });
+      const updated = { id: 'lead-1', phone: '999' };
+      prisma.lead.update.mockResolvedValue(updated);
+
+      const result = await service.update('org-1', 'lead-1', { phone: '999' }, 'user-1');
+
+      expect(prisma.lead.update).toHaveBeenCalledWith({
+        where: { id: 'lead-1' },
+        data: { phone: '999' },
+      });
+      expect(result).toBe(updated);
     });
   });
 

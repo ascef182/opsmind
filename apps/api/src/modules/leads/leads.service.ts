@@ -1,4 +1,10 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Customer, Lead, LeadStatus, Prisma } from '@opsmind/database';
 import {
   QUALIFICATION_THRESHOLD,
@@ -143,7 +149,8 @@ export class LeadsService {
     dto: UpdateLeadDto,
     actorUserId: string,
   ): Promise<Lead> {
-    await this.findByIdOrThrow(organizationId, id);
+    const lead = await this.findByIdOrThrow(organizationId, id);
+    this.assertValidStatusUpdate(lead, dto);
 
     const updated = await this.prisma.lead.update({ where: { id }, data: dto });
 
@@ -157,6 +164,51 @@ export class LeadsService {
     });
 
     return updated;
+  }
+
+  /**
+   * Guarda de transição para `update()` (`PATCH .../leads/:id`, o endpoint
+   * genérico de edição manual — não confundir com `score()`/`enrich()`, que
+   * têm sua própria guarda via `PRE_QUALIFICATION_STATUSES` acima).
+   *
+   * Escopo deliberadamente estreito: fechamos só os dois buracos concretos
+   * encontrados (em vez de modelar o grafo de transição completo dos 9
+   * `LeadStatus`, o que exigiria decidir regra pra cada par status→status
+   * sem um requisito concreto pedindo isso):
+   *   1. `status: 'CONVERTED'` nunca é aceito aqui — essa transição só pode
+   *      acontecer via `convertToCustomer()`, que cria o `Customer` e seta
+   *      `convertedCustomerId` atomicamente com o status. Aceitar aqui
+   *      permitiria `status: 'CONVERTED'` com `convertedCustomerId: null`,
+   *      uma linha que nenhum outro caminho de código pode produzir.
+   *   2. Uma vez `convertedCustomerId` setado (lead já convertido), `status`
+   *      não pode mais mudar por este caminho — nem para `CONVERTED`
+   *      de novo (redundante, já é), nem para qualquer status anterior
+   *      (reverteria uma promoção a cliente já efetivada, sem desfazer o
+   *      `Customer` criado).
+   * Qualquer outra transição (ex.: QUALIFIED → LOST, DISCOVERED → QUALIFIED
+   * manual) continua livre — são transições legítimas de edição manual que
+   * o brief não pediu para restringir.
+   *
+   * 400 (não 409) pelo mesmo motivo de `OutreachService.applyTransition`:
+   * do ponto de vista de quem chamou, isto é "essa transição não é válida
+   * agora", o mesmo sinal que aquele método usa para toda transição de
+   * estado ilegal — não é um conflito de escrita concorrente (esse caso já
+   * tem seu próprio 409, o fast-path/race de `convertToCustomer()`).
+   */
+  private assertValidStatusUpdate(lead: Lead, dto: UpdateLeadDto): void {
+    if (dto.status === undefined) {
+      return;
+    }
+    if (dto.status === 'CONVERTED') {
+      throw new BadRequestException(
+        'Use o endpoint /convert para marcar um lead como convertido',
+      );
+    }
+    if (lead.convertedCustomerId && dto.status !== lead.status) {
+      throw new BadRequestException(
+        'Lead já convertido em cliente — status não pode mais ser alterado por aqui',
+      );
+    }
   }
 
   /**
