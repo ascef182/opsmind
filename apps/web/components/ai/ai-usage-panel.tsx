@@ -1,53 +1,30 @@
 'use client';
 
 import { useState } from 'react';
-import { useAiRequests, useAiUsage, type DailyUsagePoint } from '@/lib/ai/use-ai-chat';
+import { useAiRequests, useAiUsage } from '@/lib/ai/use-ai-chat';
 import { useUpdateAiBudget } from '@/lib/organizations/use-organizations';
 import { ApiError } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, FormError } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, FormError } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { LineChartWithTooltip } from '@/components/ui/chart-card';
 import { BudgetBar } from './budget-bar';
-
-function DailyChart({ series }: { series: DailyUsagePoint[] }) {
-  if (series.length === 0) {
-    return <p className="text-sm text-muted-foreground">Sem uso registrado este mês ainda.</p>;
-  }
-  const max = Math.max(...series.map((p) => p.cost), 0.0001);
-  const barWidth = 24;
-  return (
-    <svg
-      viewBox={`0 0 ${series.length * barWidth} 60`}
-      className="h-16 w-full"
-      preserveAspectRatio="none"
-      role="img"
-      aria-label="Custo diário de IA este mês"
-    >
-      {series.map((point, i) => {
-        const height = (point.cost / max) * 56;
-        return (
-          <rect
-            key={point.date}
-            x={i * barWidth + 4}
-            y={60 - height}
-            width={16}
-            height={Math.max(height, 1)}
-            rx={2}
-            className="fill-accent-500"
-          >
-            <title>{`${point.date}: $${point.cost.toFixed(4)} (${point.requests} requests)`}</title>
-          </rect>
-        );
-      })}
-    </svg>
-  );
-}
 
 function RequestTrace({ organizationId }: { organizationId: string }) {
   const requests = useAiRequests(organizationId);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  if (requests.isLoading) return <p className="text-sm text-muted-foreground">Carregando…</p>;
+  if (requests.isLoading) {
+    return (
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-full" />
+      </div>
+    );
+  }
   if (!requests.data || requests.data.length === 0) {
     return <p className="text-sm text-muted-foreground">Nenhuma conversa com a IA ainda.</p>;
   }
@@ -77,11 +54,15 @@ function RequestTrace({ organizationId }: { organizationId: string }) {
                 <ul className="flex flex-col gap-2">
                   {req.toolCalls.map((call, i) => (
                     <li key={i}>
-                      <p className={call.isError ? 'font-medium text-destructive' : 'font-medium text-foreground/80'}>
+                      <p className="flex items-center gap-2 font-medium text-foreground/80">
                         {call.toolName}
-                        {call.isError && ' (erro)'}
+                        {call.isError && (
+                          <span className="rounded-full bg-negative-500/15 px-2 py-0.5 text-[10px] font-medium text-negative-500">
+                            erro
+                          </span>
+                        )}
                       </p>
-                      <pre className="mt-1 overflow-x-auto rounded bg-ink-800 p-2">
+                      <pre className="mt-1 overflow-x-auto rounded bg-ink-800 p-2 font-mono text-[11px] leading-relaxed text-foreground/70">
                         {JSON.stringify(call.input, null, 2)}
                       </pre>
                     </li>
@@ -115,59 +96,103 @@ export function AiUsagePanel({
     });
   };
 
-  if (usage.isLoading) return <p className="text-muted-foreground">Carregando uso de IA…</p>;
+  if (usage.isLoading) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
   if (!usage.data) return <p className="text-destructive">Não foi possível carregar o uso de IA desta organização.</p>;
 
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <BudgetBar monthSpend={usage.data.monthSpend} monthlyBudget={usage.data.monthlyBudget} />
-        <p className="mt-1 text-xs text-muted-foreground">
-          {usage.data.totalRequests} requests · {usage.data.avgLatencyMs.toFixed(0)}ms médio
-        </p>
-        {canManageBudget && (
-          <form onSubmit={onSubmitBudget} className="mt-3 flex items-center gap-2">
-            <Input
-              type="number"
-              min={0}
-              step="0.01"
-              placeholder="orçamento mensal (vazio = sem limite)"
-              value={budgetInput}
-              onChange={(e) => setBudgetInput(e.target.value)}
-              className="max-w-xs"
-            />
-            <Button type="submit" variant="secondary" isLoading={updateBudget.isPending}>
-              Salvar
-            </Button>
-          </form>
-        )}
-        <FormError message={updateBudget.isError ? (updateBudget.error as ApiError).message : null} />
+        <CardHeader>
+          <CardTitle>Orçamento</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <BudgetBar monthSpend={usage.data.monthSpend} monthlyBudget={usage.data.monthlyBudget} />
+          <p className="mt-1 text-xs text-muted-foreground">
+            {usage.data.totalRequests} requests · {usage.data.avgLatencyMs.toFixed(0)}ms médio
+          </p>
+          {canManageBudget && (
+            <form onSubmit={onSubmitBudget} className="mt-3 flex items-center gap-2">
+              <Input
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder="orçamento mensal (vazio = sem limite)"
+                value={budgetInput}
+                onChange={(e) => setBudgetInput(e.target.value)}
+                className="max-w-xs"
+              />
+              <Button type="submit" variant="secondary" isLoading={updateBudget.isPending}>
+                Salvar
+              </Button>
+            </form>
+          )}
+          <FormError message={updateBudget.isError ? (updateBudget.error as ApiError).message : null} />
+        </CardContent>
       </Card>
 
       <Card>
-        <h2 className="mb-2 font-medium text-foreground">Custo diário este mês</h2>
-        <DailyChart series={usage.data.dailySeries} />
+        <CardHeader>
+          <CardTitle>Custo diário este mês</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {usage.data.dailySeries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Sem uso registrado este mês ainda.</p>
+          ) : (
+            <>
+              <LineChartWithTooltip
+                data={usage.data.dailySeries.map((p) => ({ date: p.date, cost: p.cost }))}
+                dataKey="cost"
+                xKey="date"
+                height={200}
+              />
+              <p className="mt-2 text-xs text-muted-foreground">{usage.data.totalRequests} requests este mês</p>
+            </>
+          )}
+        </CardContent>
       </Card>
 
       {usage.data.byUser.length > 0 && (
         <Card>
-          <h2 className="mb-2 font-medium text-foreground">Por usuário</h2>
-          <ul className="flex flex-col gap-1 text-sm">
-            {usage.data.byUser.map((u) => (
-              <li key={u.userId} className="flex justify-between">
-                <span className="text-foreground/80">{u.name}</span>
-                <span className="text-muted-foreground">
-                  ${u.cost.toFixed(4)} · {u.requests} requests
-                </span>
-              </li>
-            ))}
-          </ul>
+          <CardHeader>
+            <CardTitle>Por usuário</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Usuário</TableHead>
+                  <TableHead>Requests</TableHead>
+                  <TableHead>Custo</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {usage.data.byUser.map((u) => (
+                  <TableRow key={u.userId}>
+                    <TableCell className="text-foreground/80">{u.name}</TableCell>
+                    <TableCell className="text-muted-foreground">{u.requests}</TableCell>
+                    <TableCell className="text-muted-foreground">${u.cost.toFixed(4)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
         </Card>
       )}
 
       <Card>
-        <h2 className="mb-2 font-medium text-foreground">Conversas recentes</h2>
-        <RequestTrace organizationId={organizationId} />
+        <CardHeader>
+          <CardTitle>Conversas recentes</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <RequestTrace organizationId={organizationId} />
+        </CardContent>
       </Card>
     </div>
   );
