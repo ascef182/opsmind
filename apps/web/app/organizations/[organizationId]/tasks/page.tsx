@@ -72,7 +72,7 @@ export default function TasksPage() {
 
       {showCreateForm && (
         <Card>
-          <h2 className="font-medium text-slate-900">Nova tarefa</h2>
+          <h2 className="font-medium text-foreground">Nova tarefa</h2>
           <form onSubmit={onSubmit} className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
             <div className="flex-1">
               <Input placeholder="Título" {...register('title')} />
@@ -96,18 +96,18 @@ export default function TasksPage() {
         </Card>
       )}
 
-      {tasks.isLoading && <p className="text-slate-500">Carregando tarefas…</p>}
-      {tasks.isSuccess && tasks.data.length === 0 && <p className="text-slate-600">Nenhuma tarefa encontrada.</p>}
+      {tasks.isLoading && <p className="text-muted-foreground">Carregando tarefas…</p>}
+      {tasks.isSuccess && tasks.data.length === 0 && <p className="text-muted-foreground">Nenhuma tarefa encontrada.</p>}
 
       <div className="flex flex-col gap-2">
         {tasks.data?.map((task) => (
           <Card key={task.id} className="flex items-center justify-between">
             <div>
-              <p className={task.status === 'DONE' ? 'text-slate-400 line-through' : 'font-medium text-slate-900'}>
+              <p className={task.status === 'DONE' ? 'text-muted-foreground line-through' : 'font-medium text-foreground'}>
                 {task.title}
               </p>
               {task.dueDate && (
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-muted-foreground">
                   vence em {new Date(task.dueDate).toLocaleDateString('pt-BR')}
                 </p>
               )}

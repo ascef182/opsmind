@@ -45,7 +45,7 @@ export default function RegisterPage() {
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
-        <h1 className="text-xl font-semibold text-slate-900">Criar conta no OpsMind</h1>
+        <h1 className="text-xl font-semibold text-foreground">Criar conta no OpsMind</h1>
         <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-4">
           <div>
             <Input placeholder="Seu nome" {...register('name')} />
@@ -64,9 +64,9 @@ export default function RegisterPage() {
             Criar conta
           </Button>
         </form>
-        <p className="mt-4 text-center text-sm text-slate-600">
+        <p className="mt-4 text-center text-sm text-muted-foreground">
           Já tem conta?{' '}
-          <Link href="/login" className="font-medium text-brand-600 hover:underline">
+          <Link href="/login" className="font-medium text-accent-500 hover:underline">
             Entrar
           </Link>
         </p>

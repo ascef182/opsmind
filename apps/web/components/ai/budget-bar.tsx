@@ -14,7 +14,7 @@ const NEAR_LIMIT_RATIO = 0.8;
 export function BudgetBar({ monthSpend, monthlyBudget }: BudgetBarProps) {
   if (monthlyBudget === null) {
     return (
-      <p className="text-xs text-slate-400">
+      <p className="text-xs text-muted-foreground">
         gasto estimado este mês: ${monthSpend.toFixed(4)} (sem orçamento configurado)
       </p>
     );
@@ -23,19 +23,19 @@ export function BudgetBar({ monthSpend, monthlyBudget }: BudgetBarProps) {
   const ratio = monthlyBudget > 0 ? monthSpend / monthlyBudget : 1;
   const exceeded = monthSpend >= monthlyBudget;
   const nearLimit = !exceeded && ratio >= NEAR_LIMIT_RATIO;
-  const barColor = exceeded ? 'bg-red-600' : nearLimit ? 'bg-amber-500' : 'bg-brand-600';
+  const barColor = exceeded ? 'bg-negative-500' : nearLimit ? 'bg-accent-500' : 'bg-positive-500';
   const widthPercent = Math.min(ratio, 1) * 100;
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-slate-500">
+        <span className="text-muted-foreground">
           ${monthSpend.toFixed(2)} de ${monthlyBudget.toFixed(2)} este mês
         </span>
-        {exceeded && <span className="font-medium text-red-700">orçamento atingido — IA pausada</span>}
-        {nearLimit && <span className="font-medium text-amber-700">perto do limite</span>}
+        {exceeded && <span className="font-medium text-negative-500">orçamento atingido — IA pausada</span>}
+        {nearLimit && <span className="font-medium text-accent-500">perto do limite</span>}
       </div>
-      <div className="h-1.5 w-full rounded-full bg-slate-100">
+      <div className="h-1.5 w-full rounded-full bg-ink-800">
         <div className={clsx('h-1.5 rounded-full transition-all', barColor)} style={{ width: `${widthPercent}%` }} />
       </div>
     </div>

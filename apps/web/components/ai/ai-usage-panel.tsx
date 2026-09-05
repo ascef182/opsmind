@@ -11,7 +11,7 @@ import { BudgetBar } from './budget-bar';
 
 function DailyChart({ series }: { series: DailyUsagePoint[] }) {
   if (series.length === 0) {
-    return <p className="text-sm text-slate-400">Sem uso registrado este mês ainda.</p>;
+    return <p className="text-sm text-muted-foreground">Sem uso registrado este mês ainda.</p>;
   }
   const max = Math.max(...series.map((p) => p.cost), 0.0001);
   const barWidth = 24;
@@ -33,7 +33,7 @@ function DailyChart({ series }: { series: DailyUsagePoint[] }) {
             width={16}
             height={Math.max(height, 1)}
             rx={2}
-            className="fill-brand-500"
+            className="fill-accent-500"
           >
             <title>{`${point.date}: $${point.cost.toFixed(4)} (${point.requests} requests)`}</title>
           </rect>
@@ -47,41 +47,41 @@ function RequestTrace({ organizationId }: { organizationId: string }) {
   const requests = useAiRequests(organizationId);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  if (requests.isLoading) return <p className="text-sm text-slate-500">Carregando…</p>;
+  if (requests.isLoading) return <p className="text-sm text-muted-foreground">Carregando…</p>;
   if (!requests.data || requests.data.length === 0) {
-    return <p className="text-sm text-slate-400">Nenhuma conversa com a IA ainda.</p>;
+    return <p className="text-sm text-muted-foreground">Nenhuma conversa com a IA ainda.</p>;
   }
 
   return (
     <div className="flex flex-col gap-1">
       {requests.data.map((req) => (
-        <div key={req.id} className="rounded-md border border-slate-200">
+        <div key={req.id} className="rounded-md border border-border">
           <button
             type="button"
             onClick={() => setExpandedId(expandedId === req.id ? null : req.id)}
             className="flex w-full items-center justify-between px-3 py-2 text-left text-sm"
           >
-            <span className="text-slate-700">
+            <span className="text-foreground/80">
               {new Date(req.createdAt).toLocaleString('pt-BR')} — {req.userName}
             </span>
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-muted-foreground">
               ${req.estimatedCost.toFixed(4)} · {req.latencyMs}ms · {req.toolCalls.length} tool
               {req.toolCalls.length === 1 ? '' : 's'}
             </span>
           </button>
           {expandedId === req.id && (
-            <div className="border-t border-slate-100 px-3 py-2 text-xs text-slate-600">
+            <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
               {req.toolCalls.length === 0 ? (
                 <p>Nenhuma tool chamada — resposta direta.</p>
               ) : (
                 <ul className="flex flex-col gap-2">
                   {req.toolCalls.map((call, i) => (
                     <li key={i}>
-                      <p className={call.isError ? 'font-medium text-red-700' : 'font-medium text-slate-800'}>
+                      <p className={call.isError ? 'font-medium text-destructive' : 'font-medium text-foreground/80'}>
                         {call.toolName}
                         {call.isError && ' (erro)'}
                       </p>
-                      <pre className="mt-1 overflow-x-auto rounded bg-slate-50 p-2">
+                      <pre className="mt-1 overflow-x-auto rounded bg-ink-800 p-2">
                         {JSON.stringify(call.input, null, 2)}
                       </pre>
                     </li>
@@ -115,14 +115,14 @@ export function AiUsagePanel({
     });
   };
 
-  if (usage.isLoading) return <p className="text-slate-500">Carregando uso de IA…</p>;
-  if (!usage.data) return <p className="text-red-700">Não foi possível carregar o uso de IA desta organização.</p>;
+  if (usage.isLoading) return <p className="text-muted-foreground">Carregando uso de IA…</p>;
+  if (!usage.data) return <p className="text-destructive">Não foi possível carregar o uso de IA desta organização.</p>;
 
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <BudgetBar monthSpend={usage.data.monthSpend} monthlyBudget={usage.data.monthlyBudget} />
-        <p className="mt-1 text-xs text-slate-400">
+        <p className="mt-1 text-xs text-muted-foreground">
           {usage.data.totalRequests} requests · {usage.data.avgLatencyMs.toFixed(0)}ms médio
         </p>
         {canManageBudget && (
@@ -145,18 +145,18 @@ export function AiUsagePanel({
       </Card>
 
       <Card>
-        <h2 className="mb-2 font-medium text-slate-900">Custo diário este mês</h2>
+        <h2 className="mb-2 font-medium text-foreground">Custo diário este mês</h2>
         <DailyChart series={usage.data.dailySeries} />
       </Card>
 
       {usage.data.byUser.length > 0 && (
         <Card>
-          <h2 className="mb-2 font-medium text-slate-900">Por usuário</h2>
+          <h2 className="mb-2 font-medium text-foreground">Por usuário</h2>
           <ul className="flex flex-col gap-1 text-sm">
             {usage.data.byUser.map((u) => (
               <li key={u.userId} className="flex justify-between">
-                <span className="text-slate-700">{u.name}</span>
-                <span className="text-slate-400">
+                <span className="text-foreground/80">{u.name}</span>
+                <span className="text-muted-foreground">
                   ${u.cost.toFixed(4)} · {u.requests} requests
                 </span>
               </li>
@@ -166,7 +166,7 @@ export function AiUsagePanel({
       )}
 
       <Card>
-        <h2 className="mb-2 font-medium text-slate-900">Conversas recentes</h2>
+        <h2 className="mb-2 font-medium text-foreground">Conversas recentes</h2>
         <RequestTrace organizationId={organizationId} />
       </Card>
     </div>

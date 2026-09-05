@@ -66,7 +66,7 @@ export default function TeamPage() {
   } = useForm<InviteFormValues>({ resolver: zodResolver(inviteSchema) });
 
   if (loadingCurrentMembership || members.isLoading) {
-    return <p className="text-slate-500">Carregando equipe…</p>;
+    return <p className="text-muted-foreground">Carregando equipe…</p>;
   }
 
   const options = currentMembership ? assignableRoles(currentMembership.role) : [];
@@ -81,7 +81,7 @@ export default function TeamPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Membros</h1>
+        <h1 className="text-lg font-semibold text-foreground">Membros</h1>
         {canManage && (
           <Button variant="secondary" onClick={() => setShowInviteForm((v) => !v)}>
             + Convidar
@@ -91,7 +91,7 @@ export default function TeamPage() {
 
       {showInviteForm && (
         <Card>
-          <h2 className="font-medium text-slate-900">Convidar alguém</h2>
+          <h2 className="font-medium text-foreground">Convidar alguém</h2>
           <form onSubmit={onSubmit} className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
             <div className="flex-1">
               <Input type="email" placeholder="email@empresa.com" {...register('email')} />
@@ -129,11 +129,11 @@ export default function TeamPage() {
           return (
             <Card key={member.id} className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-slate-900">
+                <p className="font-medium text-foreground">
                   {member.user.name}
-                  {isSelf && <span className="ml-2 text-xs text-slate-400">(você)</span>}
+                  {isSelf && <span className="ml-2 text-xs text-muted-foreground">(você)</span>}
                 </p>
-                <p className="text-sm text-slate-500">{member.user.email}</p>
+                <p className="text-sm text-muted-foreground">{member.user.email}</p>
               </div>
               <div className="flex items-center gap-3">
                 {canAct ? (
@@ -156,7 +156,7 @@ export default function TeamPage() {
                 {canAct && (
                   <Button
                     variant="ghost"
-                    className="text-red-600"
+                    className="text-destructive"
                     onClick={() => removeMember.mutate(member.userId)}
                   >
                     Remover
@@ -170,18 +170,18 @@ export default function TeamPage() {
 
       {canManage && (
         <div>
-          <h2 className="mb-2 font-medium text-slate-900">Convites pendentes</h2>
-          {pendingInvitations.isLoading && <p className="text-sm text-slate-500">Carregando…</p>}
+          <h2 className="mb-2 font-medium text-foreground">Convites pendentes</h2>
+          {pendingInvitations.isLoading && <p className="text-sm text-muted-foreground">Carregando…</p>}
           {pendingInvitations.isSuccess && pendingInvitations.data.length === 0 && (
-            <p className="text-sm text-slate-500">Nenhum convite pendente.</p>
+            <p className="text-sm text-muted-foreground">Nenhum convite pendente.</p>
           )}
           <div className="flex flex-col gap-2">
             {pendingInvitations.data?.map((invitation) => (
               <Card key={invitation.id} className="flex items-center justify-between">
-                <p className="text-sm text-slate-700">{invitation.email}</p>
+                <p className="text-sm text-foreground/80">{invitation.email}</p>
                 <div className="flex items-center gap-3">
                   <Badge value={invitation.role} />
-                  <span className="text-xs text-slate-400">
+                  <span className="text-xs text-muted-foreground">
                     expira em {new Date(invitation.expiresAt).toLocaleDateString('pt-BR')}
                   </span>
                 </div>

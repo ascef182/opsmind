@@ -42,9 +42,9 @@ export default function AiChatPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Assistente de IA</h1>
+        <h1 className="text-lg font-semibold text-foreground">Assistente de IA</h1>
         {usage.isSuccess && (
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-muted-foreground">
             gasto estimado este mês: ${usage.data.monthSpend.toFixed(4)}
           </span>
         )}
@@ -53,7 +53,7 @@ export default function AiChatPage() {
       <Card className="flex h-[28rem] flex-col">
         <div className="flex-1 space-y-3 overflow-y-auto">
           {messages.length === 0 && (
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-muted-foreground">
               Pergunte sobre seus clientes e tarefas — ex.: &ldquo;quais clientes estão sem contato há
               14 dias?&rdquo;
             </p>
@@ -63,14 +63,14 @@ export default function AiChatPage() {
               key={i}
               className={
                 message.role === 'user'
-                  ? 'ml-auto max-w-[80%] rounded-lg bg-brand-600 px-3 py-2 text-sm text-white'
-                  : 'mr-auto max-w-[80%] rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-800'
+                  ? 'ml-auto max-w-[80%] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground'
+                  : 'mr-auto max-w-[80%] rounded-lg bg-ink-800 px-3 py-2 text-sm text-foreground'
               }
             >
               {message.text}
             </div>
           ))}
-          {chat.isPending && <p className="text-sm text-slate-400">Pensando…</p>}
+          {chat.isPending && <p className="text-sm text-muted-foreground">Pensando…</p>}
         </div>
 
         <form onSubmit={onSubmit} className="mt-3 flex gap-2">
@@ -78,7 +78,7 @@ export default function AiChatPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Escreva uma mensagem…"
-            className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+            className="flex-1 rounded-md border border-input bg-input/30 px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
           />
           <Button type="submit" isLoading={chat.isPending}>
             Enviar
