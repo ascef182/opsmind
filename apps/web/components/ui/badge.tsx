@@ -33,6 +33,13 @@ const COLORS: Record<string, string> = {
   RUNNING: 'bg-info-500/15 text-info-500',
   COMPLETED: 'bg-positive-500/15 text-positive-500',
   FAILED: 'bg-negative-500/15 text-negative-500',
+
+  // Role (packages/shared-types — ROLE_HIERARCHY), usado na página de Equipe
+  OWNER: 'bg-accent-500/15 text-accent-500',
+  ADMIN: 'bg-info-500/15 text-info-500',
+  MANAGER: 'bg-positive-500/15 text-positive-500',
+  MEMBER: 'bg-ink-800 text-ink-300',
+  VIEWER: 'bg-ink-800 text-ink-300',
 };
 
 export function Badge({ value }: { value: string }) {
