@@ -32,6 +32,9 @@ pnpm-debug.log*
 coverage/
 apps/api/eval-report.json
 
+# artefatos de sessão do MCP do Playwright (screenshots/console/snapshot)
+.playwright-mcp/
+
 # prisma
 packages/database/prisma/dev.db
 
