@@ -86,7 +86,15 @@ export function DonutChart({ data, height = 200, innerRadius = 50, outerRadius =
     <ChartContainer config={config} className="mx-auto aspect-auto" style={{ height }}>
       <PieChart>
         <ChartTooltip content={<ChartTooltipContent hideLabel />} />
-        <Pie data={data} dataKey="value" nameKey="name" innerRadius={innerRadius} outerRadius={outerRadius} strokeWidth={2}>
+        <Pie
+          data={data}
+          dataKey="value"
+          nameKey="name"
+          innerRadius={innerRadius}
+          outerRadius={outerRadius}
+          strokeWidth={2}
+          isAnimationActive={false}
+        >
           {data.map((d, i) => (
             <Cell key={d.name} fill={d.color ?? DONUT_FALLBACK_COLORS[i % DONUT_FALLBACK_COLORS.length]} />
           ))}
@@ -125,7 +133,7 @@ export function BarChartHighlighted({
         <CartesianGrid vertical={false} strokeDasharray="3 3" />
         <XAxis dataKey={nameKey} tickLine={false} axisLine={false} />
         <ChartTooltip content={<ChartTooltipContent />} />
-        <Bar dataKey={dataKey} radius={4}>
+        <Bar dataKey={dataKey} radius={4} isAnimationActive={false}>
           {data.map((entry) => (
             <Cell key={String(entry[nameKey])} fill={entry[nameKey] === highlightValue ? highlightColor : color} />
           ))}
@@ -172,6 +180,7 @@ export function LineChartWithTooltip({
           dataKey={dataKey}
           stroke={color}
           strokeWidth={2}
+          isAnimationActive={false}
           dot={
             highlightLast
               ? (dotProps) =>

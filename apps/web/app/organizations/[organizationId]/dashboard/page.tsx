@@ -9,8 +9,10 @@ import {
   type LeadsByDayPoint,
   type LeadStatus,
 } from '@/lib/dashboard/use-dashboard';
+import { useAiUsage } from '@/lib/ai/use-ai-chat';
 import { Badge } from '@/components/ui/badge';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
+import { BudgetBar } from '@/components/ai/budget-bar';
 import { BarChartHighlighted, DonutChart, LineChartWithTooltip, SparklineChart } from '@/components/ui/chart-card';
 
 // ── Widgets 1/2 (KPIs "Leads sem site" / "Leads encontrados (14 dias)") ────
@@ -105,7 +107,7 @@ function DeltaBadge({ delta, colorCoded = false }: { delta: Delta; colorCoded?: 
       ? 'bg-positive-500/10 text-positive-500'
       : colorCoded && delta.diff < 0
         ? 'bg-negative-500/10 text-negative-500'
-        : 'bg-ink-800 text-ink-300';
+        : 'bg-muted text-muted-foreground';
   return (
     <span className={clsx('inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium', colorClass)}>
       {arrow} {diffLabel}
@@ -128,16 +130,16 @@ function KpiCard({
   colorCodedDelta?: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-ink-700 bg-ink-900 p-4">
-      <p className="text-sm text-ink-500">{label}</p>
+    <div className="rounded-lg border border-border bg-card p-4">
+      <p className="text-sm text-muted-foreground">{label}</p>
       <div className="mt-1 flex items-end justify-between gap-2">
-        <p className="text-3xl font-semibold text-ink-50">{value}</p>
+        <p className="text-3xl font-semibold text-foreground">{value}</p>
         <DeltaBadge delta={delta} colorCoded={colorCodedDelta} />
       </div>
       <div className="mt-3">
         <SparklineChart data={sparklineData} dataKey="value" />
       </div>
-      <p className="mt-1 text-xs text-ink-500">
+      <p className="mt-1 text-xs text-muted-foreground">
         últimos {DELTA_WINDOW_DAYS} dias vs. {DELTA_WINDOW_DAYS} anteriores
       </p>
     </div>
@@ -159,16 +161,16 @@ function recentQualificationTrend(recentLeads: LeadPipelineOverview['recentLeads
 
 function QualificationRateCard({ rate, trend }: { rate: number; trend: number | null }) {
   return (
-    <div className="rounded-lg border border-ink-700 bg-ink-900 p-4">
-      <p className="text-sm text-ink-500">Taxa de qualificação</p>
-      <p className="mt-1 text-3xl font-semibold text-ink-50">{Math.round(rate * 100)}%</p>
+    <div className="rounded-lg border border-border bg-card p-4">
+      <p className="text-sm text-muted-foreground">Taxa de qualificação</p>
+      <p className="mt-1 text-3xl font-semibold text-foreground">{Math.round(rate * 100)}%</p>
       {trend === null ? (
-        <p className="mt-3 text-xs text-ink-500">Leads recentes ainda não pontuados o bastante pra uma tendência.</p>
+        <p className="mt-3 text-xs text-muted-foreground">Leads recentes ainda não pontuados o bastante pra uma tendência.</p>
       ) : (
         <p
           className={clsx(
             'mt-3 text-xs font-medium',
-            trend > 0 ? 'text-positive-500' : trend < 0 ? 'text-negative-500' : 'text-ink-500',
+            trend > 0 ? 'text-positive-500' : trend < 0 ? 'text-negative-500' : 'text-muted-foreground',
           )}
         >
           {trend > 0 ? '▲' : trend < 0 ? '▼' : '→'} {Math.abs(Math.round(trend * 100))}pp vs. geral (últimos leads)
@@ -180,9 +182,36 @@ function QualificationRateCard({ rate, trend }: { rate: number; trend: number | 
 
 function DarkCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-ink-700 bg-ink-900 p-4">
-      <h2 className="mb-3 text-sm font-medium text-ink-50">{title}</h2>
+    <div className="rounded-lg border border-border bg-card p-4">
+      <h2 className="mb-3 text-sm font-medium text-foreground">{title}</h2>
       {children}
+    </div>
+  );
+}
+
+// Widget "Inteligência de IA" — mesma fonte de dados do painel de Uso de IA
+// (`useAiUsage`, apps/web/lib/ai/use-ai-chat.ts → AiUsageService.getSummary()
+// no backend), só um recorte compacto pro dashboard: total de requests, custo
+// estimado do mês e o BudgetBar já usado em `ai/usage`. Não inclui uma métrica
+// de "tool accuracy" — a API não expõe isso hoje e inventar o número aqui
+// seria fabricar dado.
+function AiIntelligenceCard({ organizationId }: { organizationId: string }) {
+  const usage = useAiUsage(organizationId);
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <h2 className="mb-3 text-sm font-medium text-foreground">Inteligência de IA</h2>
+      {usage.isLoading && <p className="text-sm text-muted-foreground">Carregando…</p>}
+      {usage.isError && <p className="text-sm text-negative-500">Não foi possível carregar o uso de IA.</p>}
+      {usage.isSuccess && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-baseline gap-2">
+            <p className="text-3xl font-semibold text-foreground">{usage.data.totalRequests}</p>
+            <p className="text-sm text-muted-foreground">requests este mês</p>
+          </div>
+          <BudgetBar monthSpend={usage.data.monthSpend} monthlyBudget={usage.data.monthlyBudget} />
+        </div>
+      )}
     </div>
   );
 }
@@ -203,7 +232,7 @@ const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
 // feature — não há campo de valor de negócio modelado em `Lead`/`Customer`
 // (schema já decidido, ver docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md);
 // inventar um campo novo fora desse schema estaria fora do escopo desta task.
-function LeadPipelineSection({ data }: { data: LeadPipelineOverview }) {
+function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverview; organizationId: string }) {
   const withoutWebsiteSeries = buildDailySeries(data.leadsByDay, SPARKLINE_DAYS, 'withoutWebsite');
   const totalSeries14d = buildDailySeries(data.leadsByDay, SPARKLINE_DAYS, 'total');
   const totalSeries30d = buildDailySeries(data.leadsByDay, TREND_CHART_DAYS, 'total');
@@ -235,7 +264,7 @@ function LeadPipelineSection({ data }: { data: LeadPipelineOverview }) {
 
   return (
     <section className="flex flex-col gap-6">
-      <h2 className="text-sm font-medium text-ink-300">Pipeline de leads</h2>
+      <h2 className="text-sm font-medium text-muted-foreground">Pipeline de leads</h2>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <KpiCard
@@ -257,19 +286,19 @@ function LeadPipelineSection({ data }: { data: LeadPipelineOverview }) {
       <div className="grid gap-4 md:grid-cols-2">
         <DarkCard title="Leads por status">
           {statusData.length === 0 ? (
-            <p className="text-sm text-ink-500">Nenhum lead ainda.</p>
+            <p className="text-sm text-muted-foreground">Nenhum lead ainda.</p>
           ) : (
             <DonutChart data={statusData} />
           )}
         </DarkCard>
         <DarkCard title="Leads por cidade (top 8)">
           {cityData.length === 0 ? (
-            <p className="text-sm text-ink-500">Nenhum dado por cidade ainda.</p>
+            <p className="text-sm text-muted-foreground">Nenhum dado por cidade ainda.</p>
           ) : (
             <>
               <BarChartHighlighted data={cityData} dataKey="count" nameKey="label" highlightValue={topWithoutWebsiteCity?.label} />
               {topWithoutWebsiteCity && (
-                <p className="mt-2 text-xs text-ink-500">
+                <p className="mt-2 text-xs text-muted-foreground">
                   Em destaque: <span className="text-accent-400">{topWithoutWebsiteCity.label}</span> — cidade com mais leads sem
                   site ({topWithoutWebsiteCity.withoutWebsite}).
                 </p>
@@ -283,23 +312,23 @@ function LeadPipelineSection({ data }: { data: LeadPipelineOverview }) {
         <LineChartWithTooltip data={lineData} dataKey="value" xKey="date" highlightLast />
       </DarkCard>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <DarkCard title="Leads recentes">
           {data.recentLeads.length === 0 ? (
-            <p className="text-sm text-ink-500">Nenhum lead descoberto ainda.</p>
+            <p className="text-sm text-muted-foreground">Nenhum lead descoberto ainda.</p>
           ) : (
             <ul className="flex flex-col gap-3">
               {data.recentLeads.map((lead) => (
-                <li key={lead.id} className="flex flex-col gap-2 rounded-md border border-ink-700 bg-ink-950 px-3 py-2">
+                <li key={lead.id} className="flex flex-col gap-2 rounded-md border border-border bg-background px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-ink-50">{lead.name}</span>
+                    <span className="truncate text-sm font-medium text-foreground">{lead.name}</span>
                     <Badge value={lead.status} />
                   </div>
-                  <span className="text-xs text-ink-500">{[lead.city, lead.state].filter(Boolean).join('/') || '—'}</span>
+                  <span className="text-xs text-muted-foreground">{[lead.city, lead.state].filter(Boolean).join('/') || '—'}</span>
                   {lead.scoreBreakdown ? (
                     <LeadScoreBar breakdown={lead.scoreBreakdown} />
                   ) : (
-                    <span className="text-xs text-ink-500">não pontuado</span>
+                    <span className="text-xs text-muted-foreground">não pontuado</span>
                   )}
                 </li>
               ))}
@@ -309,19 +338,19 @@ function LeadPipelineSection({ data }: { data: LeadPipelineOverview }) {
 
         <DarkCard title="Atividade de scrape jobs">
           {data.recentScrapeJobs.length === 0 ? (
-            <p className="text-sm text-ink-500">Nenhuma busca disparada ainda.</p>
+            <p className="text-sm text-muted-foreground">Nenhuma busca disparada ainda.</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {data.recentScrapeJobs.map((job) => (
                 <li
                   key={job.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-ink-700 bg-ink-950 px-3 py-2 text-sm"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
                 >
                   <div className="flex flex-col">
-                    <span className="text-ink-50">
+                    <span className="text-foreground">
                       {job.businessType} em {job.city}/{job.state}
                     </span>
-                    <span className="text-xs text-ink-500">
+                    <span className="text-xs text-muted-foreground">
                       {job.leadsFound} lead{job.leadsFound === 1 ? '' : 's'} encontrado{job.leadsFound === 1 ? '' : 's'} ·{' '}
                       {new Date(job.createdAt).toLocaleString('pt-BR')}
                     </span>
@@ -332,21 +361,19 @@ function LeadPipelineSection({ data }: { data: LeadPipelineOverview }) {
             </ul>
           )}
         </DarkCard>
+
+        <AiIntelligenceCard organizationId={organizationId} />
       </div>
     </section>
   );
 }
 
-// Equivalente dark de `StatCard`/`Card` (components/ui/card.tsx, claro,
-// `bg-white`) — a lógica/valores exibidos são EXATAMENTE os mesmos de antes
-// desta task, só a paleta de cor muda (ver comentário na seção "Clientes e
-// tarefas" abaixo, no corpo da página).
 function StatCardDark({ label, value, hint }: { label: string; value: number; hint?: string }) {
   return (
-    <div className="rounded-lg border border-ink-700 bg-ink-900 p-4">
-      <p className="text-sm text-ink-500">{label}</p>
-      <p className="mt-1 text-3xl font-semibold text-ink-50">{value}</p>
-      {hint && <p className="mt-1 text-xs text-ink-500">{hint}</p>}
+    <div className="rounded-lg border border-border bg-card p-4">
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <p className="mt-1 text-3xl font-semibold text-foreground">{value}</p>
+      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -357,37 +384,22 @@ export default function OrganizationDashboardPage() {
   const leadPipeline = useLeadPipelineOverview(organizationId);
 
   return (
-    // `dark` escopado aqui (não em layout.tsx) — mesmo padrão de
-    // app/organizations/[organizationId]/leads/page.tsx: `-mx-4 -my-10`
-    // cancela o padding do `<main>` do layout pro fundo escuro preencher até
-    // a borda do container.
-    <div className="dark -mx-4 -my-10 min-h-screen bg-ink-950 px-4 py-10 text-ink-50">
-      <div className="flex flex-col gap-8">
-        <div>
-          <h1 className="text-lg font-semibold text-ink-50">Dashboard</h1>
-          <p className="text-sm text-ink-500">Pipeline de leads e visão geral de clientes/tarefas.</p>
-        </div>
+    <div className="flex flex-col gap-8">
+      <div>
+        <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
+        <p className="text-sm text-muted-foreground">Pipeline de leads e visão geral de clientes/tarefas.</p>
+      </div>
 
-        {leadPipeline.isLoading && <p className="text-ink-500">Carregando pipeline de leads…</p>}
+        {leadPipeline.isLoading && <p className="text-muted-foreground">Carregando pipeline de leads…</p>}
         {leadPipeline.isError && (
           <p className="text-negative-500">Não foi possível carregar o pipeline de leads desta organização.</p>
         )}
-        {leadPipeline.isSuccess && <LeadPipelineSection data={leadPipeline.data} />}
+        {leadPipeline.isSuccess && <LeadPipelineSection data={leadPipeline.data} organizationId={organizationId} />}
 
-        {/*
-          Seção original de Clientes/Tarefas (dashboard pré-Task 9) —
-          preservada com a MESMA lógica/dados (nenhum campo, filtro ou
-          cálculo mudou); só a paleta visual foi adaptada de clara
-          (`Card`/`bg-white`, componentes/ui/card.tsx) pra escura
-          (`bg-ink-900`/`border-ink-700`), pra não destoar dentro do
-          container `bg-ink-950` desta página — um card branco sólido
-          embutido no meio do hero escuro ficava visualmente quebrado.
-          Decisão documentada no relatório da Task 9.
-        */}
-        <section className="flex flex-col gap-6 border-t border-ink-800 pt-8">
-          <h2 className="text-sm font-medium text-ink-300">Clientes e tarefas</h2>
+        <section className="flex flex-col gap-6 border-t border-border pt-8">
+          <h2 className="text-sm font-medium text-muted-foreground">Clientes e tarefas</h2>
 
-          {dashboard.isLoading && <p className="text-ink-500">Carregando dashboard…</p>}
+          {dashboard.isLoading && <p className="text-muted-foreground">Carregando dashboard…</p>}
           {dashboard.isError && (
             <p className="text-negative-500">Não foi possível carregar o dashboard desta organização.</p>
           )}
@@ -407,13 +419,13 @@ export default function OrganizationDashboardPage() {
 
               <DarkCard title="Atividade recente">
                 {dashboard.data.recentActivity.length === 0 ? (
-                  <p className="text-sm text-ink-500">Nenhuma atividade registrada ainda.</p>
+                  <p className="text-sm text-muted-foreground">Nenhuma atividade registrada ainda.</p>
                 ) : (
                   <ul className="flex flex-col gap-2">
                     {dashboard.data.recentActivity.map((activity) => (
                       <li key={activity.id} className="flex justify-between text-sm">
-                        <span className="text-ink-300">{activity.type}</span>
-                        <span className="text-ink-500">{new Date(activity.createdAt).toLocaleString('pt-BR')}</span>
+                        <span className="text-foreground/80">{activity.type}</span>
+                        <span className="text-muted-foreground">{new Date(activity.createdAt).toLocaleString('pt-BR')}</span>
                       </li>
                     ))}
                   </ul>
@@ -421,8 +433,7 @@ export default function OrganizationDashboardPage() {
               </DarkCard>
             </>
           )}
-        </section>
-      </div>
+      </section>
     </div>
   );
 }
