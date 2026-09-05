@@ -3,14 +3,16 @@
 import { useParams } from 'next/navigation';
 import { useRequireAuth } from '@/lib/auth/use-require-auth';
 import { useOrganization } from '@/lib/organizations/use-organizations';
-import { AppHeader } from '@/components/app-header';
-import { AppNav } from '@/components/app-nav';
+import { AppSidebar } from '@/components/app-sidebar';
+import { AppTopbar } from '@/components/app-topbar';
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 
 /**
- * Layout compartilhado por dashboard/customers/tasks/ai — centraliza a
- * proteção de rota (useRequireAuth) e o cabeçalho/nav em vez de repetir nas
- * 4 páginas. `/organizations` (a lista/criação, um nível acima) não usa este
- * layout — ainda não há uma organização "atual" pra mostrar no header/nav.
+ * Layout compartilhado por dashboard/leads/outreach/customers/tasks/ai/team —
+ * centraliza a proteção de rota (useRequireAuth) e o shell (sidebar + topbar)
+ * em vez de repetir em cada página. `/organizations` (a lista/criação, um
+ * nível acima) não usa este layout — ainda não há uma organização "atual"
+ * pra mostrar na sidebar.
  */
 export default function OrganizationLayout({ children }: { children: React.ReactNode }) {
   const { checked } = useRequireAuth();
@@ -22,10 +24,12 @@ export default function OrganizationLayout({ children }: { children: React.React
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <AppHeader title={organization.data?.name ?? '…'} />
-      <AppNav organizationId={organizationId} />
-      <main className="mx-auto max-w-5xl px-4 py-10">{children}</main>
-    </div>
+    <SidebarProvider style={{ '--sidebar-width': '15rem' } as React.CSSProperties}>
+      <AppSidebar organizationId={organizationId} />
+      <SidebarInset>
+        <AppTopbar organizationId={organizationId} organization={organization.data} />
+        <main className="flex-1 p-6">{children}</main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
