@@ -152,6 +152,10 @@ model Organization {
   // Teto de gasto mensal com scraping (Apify/Explorium/Camoufox) — mesmo
   // espírito de aiMonthlyBudget, mas orçamento separado: os dois consomem
   // orçamentos de fornecedores distintos e não devem competir pelo mesmo teto.
+  // Null = sem limite, pipeline nunca corta (apps/worker/src/budget.ts:39).
+  // IMPORTANTE: qualquer organização com scans automáticos ativos (Tasks 7/13)
+  // DEVE ter este campo configurado — sem limite = risco de overspend
+  // incontrolável em scraping automático de alto volume.
   scrapingMonthlyBudget Decimal? @map("scraping_monthly_budget") @db.Decimal(10, 2)
 
   createdAt DateTime @default(now()) @map("created_at")

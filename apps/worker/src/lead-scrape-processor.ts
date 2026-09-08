@@ -25,9 +25,11 @@ export interface LeadScrapeGateways {
  * corte de orçamento (nunca para faturamento real; não é o custo exato
  * cobrado por cada provedor, é uma ordem de grandeza documentada aqui pra
  * ser fácil de corrigir depois com números reais):
- *   - Apify: ~US$0,01/resultado — o actor `compass/google-maps-extractor` é
- *     cobrado por "compute unit" da plataforma Apify, não por resultado
- *     individual; este valor é um proxy conservador.
+ *   - Apify (plano Free): US$0,004/lead — scrape base ($0.004) + place details
+ *     ($0.002/lead). CRÍTICO: Os add-ons de enrichment da Apify (company
+ *     contacts, social profiles, emails) custam ~US$0,10/lead (25x mais) e
+ *     NUNCA devem ser usados pelo pipeline automático — causariam esgotamento
+ *     de orçamento incontrolável. Only use base scrape + place details.
  *   - Explorium: ~US$0,05/resultado — API B2B de firmografia, tipicamente
  *     mais cara que scraping simples (é dado enriquecido, não só raspagem).
  *     Usado tanto para a busca quanto (embutido no mesmo número) para a
@@ -38,7 +40,7 @@ export interface LeadScrapeGateways {
  *   - MANUAL: 0 — nunca gera custo (nem chega a rodar, ver registry abaixo).
  */
 const SCRAPING_COST_PER_LEAD_USD: Record<ScrapeSourceType, number> = {
-  APIFY_GOOGLE_MAPS: 0.01,
+  APIFY_GOOGLE_MAPS: 0.004,
   EXPLORIUM_BUSINESS_SEARCH: 0.05,
   CAMOFOX_GOOGLE_SEARCH: 0.001,
   CAMOFOX_REDDIT_SEARCH: 0.001,
