@@ -29,7 +29,7 @@ export interface LeadScrapeGateways {
  *     ($0.002/lead). CRÍTICO: Os add-ons de enrichment da Apify (company
  *     contacts, social profiles, emails) custam ~US$0,10/lead (25x mais) e
  *     NUNCA devem ser usados pelo pipeline automático — causariam esgotamento
- *     de orçamento incontrolável. Only use base scrape + place details.
+ *     de orçamento incontrolável. Use apenas scrape base + place details.
  *   - Explorium: ~US$0,05/resultado — API B2B de firmografia, tipicamente
  *     mais cara que scraping simples (é dado enriquecido, não só raspagem).
  *     Usado tanto para a busca quanto (embutido no mesmo número) para a
