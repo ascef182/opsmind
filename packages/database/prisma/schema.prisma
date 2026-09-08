@@ -126,6 +126,7 @@ enum OutreachChannel {
   WHATSAPP
   LINKEDIN_DM
   REDDIT_DM
+  INSTAGRAM_DM
   OTHER
 }
 
@@ -135,6 +136,13 @@ enum OutreachStatus {
   REJECTED
   SENT
   REPLIED
+}
+
+enum MarketOpportunityStatus {
+  NEW
+  REVIEWING
+  PURSUING
+  DISMISSED
 }
 
 // ── Core tenancy ─────────────────────────────────────────────────────────
@@ -157,27 +165,34 @@ model Organization {
   // DEVE ter este campo configurado — sem limite = risco de gasto descontrolado
   // em scraping automático de alto volume.
   scrapingMonthlyBudget Decimal? @map("scraping_monthly_budget") @db.Decimal(10, 2)
+  // Texto livre curto descrevendo tom/estilo de outreach, usado como guia
+  // few-shot no prompt de `generate_outreach_message` (Task 10) — sem isso, o
+  // prompt usa a orientação de tom padrão já escrita em OUTREACH_SYSTEM_PROMPT.
+  outreachVoiceGuide    String?  @map("outreach_voice_guide") @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships      Membership[]
-  invitations      Invitation[]
-  auditLogs        AuditLog[]
-  customers        Customer[]
-  tasks            Task[]
-  activityLogs     ActivityLog[]
-  notifications    Notification[]
-  aiRequests       AIRequest[]
-  automations      Automation[]
-  automationRuns   AutomationRun[]
-  documents        Document[]
-  documentChunks   DocumentChunk[]
-  serviceOfferings ServiceOffering[]
-  scrapeJobs       ScrapeJob[]
-  leads            Lead[]
-  leadEnrichments  LeadEnrichment[]
-  outreachMessages OutreachMessage[]
+  memberships         Membership[]
+  invitations         Invitation[]
+  auditLogs           AuditLog[]
+  customers           Customer[]
+  tasks               Task[]
+  activityLogs        ActivityLog[]
+  notifications       Notification[]
+  aiRequests          AIRequest[]
+  automations         Automation[]
+  automationRuns      AutomationRun[]
+  documents           Document[]
+  documentChunks      DocumentChunk[]
+  serviceOfferings    ServiceOffering[]
+  scrapeJobs          ScrapeJob[]
+  leads               Lead[]
+  leadEnrichments     LeadEnrichment[]
+  outreachMessages    OutreachMessage[]
+  prospectingTargets  ProspectingTarget[]
+  redditWatchTopics   RedditWatchTopic[]
+  marketOpportunities MarketOpportunity[]
 
   @@map("organizations")
 }
@@ -434,7 +449,11 @@ model Notification {
 model AIRequest {
   id             String          @id @default(uuid())
   organizationId String          @map("organization_id")
-  userId         String          @map("user_id")
+  // Nullable (era obrigatório): scans automáticos de prospecção (Task 10)
+  // geram AIRequest sem um humano por trás do pedido — actorType/actorId
+  // carregam quem/o-que disparou, replicando o padrão já usado em
+  // AuditLog/Task/Lead, em vez de forçar um userId artificial.
+  userId         String?         @map("user_id")
   // Agrupa múltiplas mensagens da mesma conversa — nulo no MVP (cada chat()
   // é uma troca isolada); passa a ser preenchido quando a UI de chat
   // (apps/web) mantiver uma sessão entre mensagens.
@@ -449,10 +468,12 @@ model AIRequest {
   estimatedCost  Decimal         @default(0) @map("estimated_cost") @db.Decimal(10, 4)
   status         AIRequestStatus
   errorMessage   String?         @map("error_message")
+  actorType      AuditActorType  @default(USER) @map("actor_type")
+  actorId        String?         @map("actor_id")
   createdAt      DateTime        @default(now()) @map("created_at")
 
   organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
   toolCalls    AIRequestToolCall[]
 
   @@index([organizationId, createdAt])
@@ -625,9 +646,10 @@ model ServiceOffering {
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
-  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  suggestedForLeads Lead[]            @relation("SuggestedOffering")
-  outreachMessages  OutreachMessage[]
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  suggestedForLeads   Lead[]              @relation("SuggestedOffering")
+  outreachMessages    OutreachMessage[]
+  marketOpportunities MarketOpportunity[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -687,6 +709,18 @@ model Lead {
   scoreBreakdown      Json?            @map("score_breakdown")
   suggestedOfferingId String?          @map("suggested_offering_id")
   convertedCustomerId String?          @map("converted_customer_id")
+  // Número confirmado como WhatsApp — nem sempre igual a `phone`. Promovido a
+  // coluna própria (não fica só dentro de `socialLinks`) porque é o canal de
+  // maior prioridade no outreach (Task 10/11) e precisa ser filtrável direto
+  // (`hasContactMethod`, Task 4), sem parsear JSON.
+  whatsapp            String?          @map("whatsapp")
+  // Nome do dono/responsável, quando identificável — opcional, sem tensão
+  // com a flexibilidade de `socialLinks`.
+  contactName         String?          @map("contact_name")
+  // Perfis sociais descobertos por enrichment (ex.: Instagram/LinkedIn) —
+  // continua flexível (JSON livre) porque a forma varia por fonte, "o que for
+  // encontrado" — não uma lista fixa de colunas por rede.
+  socialLinks         Json?            @map("social_links")
   actorType           AuditActorType   @map("actor_type")
   actorId             String?          @map("actor_id")
   discoveredAt        DateTime         @default(now()) @map("discovered_at")
@@ -757,4 +791,74 @@ model OutreachMessage {
   @@index([organizationId, status])
   @@index([leadId])
   @@map("outreach_messages")
+}
+
+// Alvo de prospecção recorrente (Task 6/7/8): em vez de o usuário disparar um
+// ScrapeJob manualmente toda vez, cadastra "cidade/estado/tipo de negócio" uma
+// vez e o worker re-executa a busca periodicamente (respeitando cooldownDays,
+// pra não reprocessar a mesma área toda hora).
+model ProspectingTarget {
+  id                 String           @id @default(uuid())
+  organizationId     String           @map("organization_id")
+  city               String
+  state              String
+  businessType       String           @map("business_type")
+  sourceType         ScrapeSourceType @default(APIFY_GOOGLE_MAPS) @map("source_type")
+  onlyWithoutWebsite Boolean          @default(true) @map("only_without_website")
+  limit              Int              @default(50)
+  isActive           Boolean          @default(true) @map("is_active")
+  cooldownDays       Int              @default(7) @map("cooldown_days")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, city, state, businessType, sourceType])
+  @@index([organizationId, isActive])
+  @@map("prospecting_targets")
+}
+
+// Termo/subreddit monitorado (Task 12/13/14) — a partir daqui o worker busca
+// menções recorrentes de um problema e agrupa em MarketOpportunity.
+model RedditWatchTopic {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  query          String
+  subreddit      String?
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, isActive])
+  @@map("reddit_watch_topics")
+}
+
+// Cluster de menções recorrentes de um mesmo problema, descoberto a partir de
+// RedditWatchTopic — um sinal de demanda de mercado ainda não atendida.
+model MarketOpportunity {
+  id                  String                  @id @default(uuid())
+  organizationId      String                  @map("organization_id")
+  title               String
+  // Chave de dedup estável (ex.: slug do label do cluster) — `title` sozinho
+  // não serve pra dedup porque é texto gerado por IA e varia a cada execução,
+  // mesmo quando o cluster de menções é essencialmente o mesmo problema.
+  topicKey            String                  @map("topic_key")
+  problemDescription  String                  @map("problem_description") @db.Text
+  mentionCount        Int                     @default(0) @map("mention_count")
+  sourceUrls          String[]                @default([]) @map("source_urls")
+  sampleQuotes        Json                    @map("sample_quotes")
+  status              MarketOpportunityStatus @default(NEW)
+  suggestedOfferingId String?                 @map("suggested_offering_id")
+  discoveredAt        DateTime                @default(now()) @map("discovered_at")
+  createdAt           DateTime                @default(now()) @map("created_at")
+  updatedAt           DateTime                @updatedAt @map("updated_at")
+
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  suggestedOffering ServiceOffering? @relation(fields: [suggestedOfferingId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, topicKey])
+  @@index([organizationId, status])
+  @@map("market_opportunities")
 }

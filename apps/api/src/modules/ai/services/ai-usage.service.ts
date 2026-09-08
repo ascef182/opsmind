@@ -12,7 +12,9 @@ export interface DailyUsagePoint {
 }
 
 export interface UserUsageBreakdown {
-  userId: string;
+  // Nullable desde a Task 2 (schema): AIRequest gerado por scan automático
+  // (sem humano) não tem userId — agrupado à parte, não descartado.
+  userId: string | null;
   name: string;
   cost: number;
   requests: number;
@@ -40,7 +42,9 @@ export interface RecentAiRequestToolCall {
 
 export interface RecentAiRequest {
   id: string;
-  userId: string;
+  // Nullable desde a Task 2 (schema): AIRequest gerado por scan automático
+  // (sem humano) não tem userId.
+  userId: string | null;
   userName: string;
   model: string;
   status: AIRequestStatus;
@@ -103,7 +107,7 @@ export class AiUsageService {
     return requests.map((r) => ({
       id: r.id,
       userId: r.userId,
-      userName: r.user.name,
+      userName: r.user?.name ?? 'Sistema/Automação',
       model: r.model,
       status: r.status,
       inputTokens: r.inputTokens,
@@ -169,15 +173,18 @@ export class AiUsageService {
       return [];
     }
 
+    // userId nulo (scan automático, Task 2) não é um id de User pesquisável —
+    // filtrado antes do lookup, tratado à parte no map abaixo.
+    const userIds = grouped.map((g) => g.userId).filter((id): id is string => id !== null);
     const users = await this.prisma.user.findMany({
-      where: { id: { in: grouped.map((g) => g.userId) } },
+      where: { id: { in: userIds } },
       select: { id: true, name: true },
     });
     const nameById = new Map(users.map((u) => [u.id, u.name]));
 
     return grouped.map((g) => ({
       userId: g.userId,
-      name: nameById.get(g.userId) ?? 'Usuário removido',
+      name: g.userId === null ? 'Sistema/Automação' : (nameById.get(g.userId) ?? 'Usuário removido'),
       cost: Number(g._sum.estimatedCost ?? 0),
       requests: g._count._all,
       inputTokens: g._sum.inputTokens ?? 0,
