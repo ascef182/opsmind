@@ -43,7 +43,12 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <h1 className="text-xl font-semibold text-foreground">Entrar no OpsMind</h1>
-        <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-4">
+        {/* method="post" é defesa em profundidade: o React sempre intercepta via
+            onSubmit, mas SEM isso um fallback nativo (ex.: extensão de senha que
+            chama form.submit() direto, o que NÃO dispara o evento 'submit' do
+            React) envia GET pra URL atual — senha em texto puro na querystring,
+            no histórico do navegador e em log de acesso. */}
+        <form onSubmit={onSubmit} method="post" className="mt-6 flex flex-col gap-4">
           <div>
             <Input type="email" placeholder="voce@empresa.com" {...register('email')} />
             <FormError message={errors.email?.message} />

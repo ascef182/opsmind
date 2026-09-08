@@ -46,7 +46,8 @@ export default function RegisterPage() {
     <main className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <h1 className="text-xl font-semibold text-foreground">Criar conta no OpsMind</h1>
-        <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-4">
+        {/* method="post": ver comentário equivalente em app/login/page.tsx. */}
+        <form onSubmit={onSubmit} method="post" className="mt-6 flex flex-col gap-4">
           <div>
             <Input placeholder="Seu nome" {...register('name')} />
             <FormError message={errors.name?.message} />
