@@ -98,6 +98,13 @@ export const envSchema = z.object({
   // schema não expressa "obrigatório junto" facilmente — o gateway
   // (packages/integrations) que checa a combinação no primeiro uso real.
   CAMOFOX_ACCESS_KEY: z.string().optional(),
+  // Intervalo (ms) do scan automático de `ProspectingTarget`s ativos
+  // (apps/worker/src/prospecting-scan.ts + main.ts) — mesmo padrão de
+  // "scan periódico via setInterval" de `scanCustomerInactiveAutomations`,
+  // mas configurável por ambiente (default 1 dia) porque cada `ScrapeJob`
+  // automático tem custo real de orçamento de scraping, ao contrário do
+  // scan de automations.
+  PROSPECTING_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
 
   // Observabilidade (Fase 6 — PRD §15: "Sentry + logging estruturado").
   // SENTRY_DSN opcional pelo mesmo motivo de ANTHROPIC_API_KEY: observabilidade

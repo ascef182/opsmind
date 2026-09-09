@@ -21,7 +21,8 @@
     "APIFY_GOOGLE_MAPS_ACTOR_ID",
     "EXPLORIUM_API_KEY",
     "CAMOFOX_API_URL",
-    "CAMOFOX_ACCESS_KEY"
+    "CAMOFOX_ACCESS_KEY",
+    "PROSPECTING_SCAN_INTERVAL_MS"
   ],
   "tasks": {
     "build": {

@@ -15,6 +15,7 @@ import { createPrismaClient } from './tenant-context';
 import { createAutomationQueue, createAutomationWorker, createRedisConnection } from './queue';
 import { createLeadScrapeQueue, createLeadScrapeWorker } from './lead-scrape-queue';
 import { scanCustomerInactiveAutomations } from './automation-scan';
+import { scanProspectingTargets } from './prospecting-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
 
@@ -84,6 +85,12 @@ async function main(): Promise<void> {
   // em vez de falhar de forma confusa no primeiro job.
   const env = validateEnv(process.env);
   const logger = createLogger(env);
+  // Diferente de SCAN_INTERVAL_MS (fixo, ver comentário no topo do arquivo):
+  // este intervalo é configurável por ambiente desde já (ver
+  // packages/config/env/schema.ts) — um `ScrapeJob` automático tem custo
+  // real (orçamento de scraping), então cada ambiente pode querer um ritmo
+  // diferente sem precisar de rebuild.
+  const PROSPECTING_SCAN_INTERVAL_MS = env.PROSPECTING_SCAN_INTERVAL_MS;
 
   const prisma = createPrismaClient(env);
   // Uma única conexão Redis reaproveitada por ambos os pares fila/worker
@@ -138,9 +145,30 @@ async function main(): Promise<void> {
   await runScan();
   setInterval(runScan, SCAN_INTERVAL_MS);
 
+  // Scan de prospecção autônoma (Task 7) — mesmo formato de `runScan`
+  // acima, rodando contra a mesma fila `leadScrapeQueue`/`connection` já
+  // instanciadas nesta função (nenhuma fila/conexão nova).
+  async function runProspectingScan(): Promise<void> {
+    try {
+      const created = await scanProspectingTargets(prisma, connection, (job, data) =>
+        leadScrapeQueue.add('scrape', data),
+      );
+      if (created > 0) {
+        logger.info({ created }, 'scan de prospecção enfileirou jobs de scraping');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'scan de prospecção de alvos falhou');
+      Sentry.captureException(error);
+    }
+  }
+
+  await runProspectingScan();
+  setInterval(runProspectingScan, PROSPECTING_SCAN_INTERVAL_MS);
+
   logger.info(
     `OpsMind worker rodando — filas "${queue.name}" (scan a cada ${SCAN_INTERVAL_MS}ms) e "${leadScrapeQueue.name}"`,
   );
+  logger.info(`Scan de prospecção autônoma a cada ${PROSPECTING_SCAN_INTERVAL_MS}ms`);
 }
 
 main().catch((error) => {
