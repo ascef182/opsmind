@@ -6,6 +6,8 @@ import { ServiceOfferingsService } from './service-offerings.service';
 import { ServiceOfferingsController } from './service-offerings.controller';
 import { ScrapeJobsService } from './scrape-jobs.service';
 import { ScrapeJobsController } from './scrape-jobs.controller';
+import { ProspectingTargetsService } from './prospecting-targets.service';
+import { ProspectingTargetsController } from './prospecting-targets.controller';
 import { LeadsService } from './leads.service';
 import { LeadsController } from './leads.controller';
 import { OutreachService } from './outreach.service';
@@ -39,12 +41,14 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
   controllers: [
     ServiceOfferingsController,
     ScrapeJobsController,
+    ProspectingTargetsController,
     LeadsController,
     OutreachMessagesController,
   ],
   providers: [
     ServiceOfferingsService,
     ScrapeJobsService,
+    ProspectingTargetsService,
     LeadsService,
     OutreachService,
     LeadAnalysisService,
@@ -53,6 +57,13 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     TenantGuard,
     RolesGuard,
   ],
-  exports: [LeadsService, ServiceOfferingsService, ScrapeJobsService, OutreachService, LeadAnalysisService],
+  exports: [
+    LeadsService,
+    ServiceOfferingsService,
+    ScrapeJobsService,
+    ProspectingTargetsService,
+    OutreachService,
+    LeadAnalysisService,
+  ],
 })
 export class LeadsModule {}

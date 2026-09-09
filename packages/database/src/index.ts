@@ -28,6 +28,7 @@ export type {
   DocumentStatus,
   ServiceOffering,
   ScrapeJob,
+  ProspectingTarget,
   Lead,
   LeadEnrichment,
   OutreachMessage,

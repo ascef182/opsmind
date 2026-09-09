@@ -16,7 +16,9 @@ import type { ScrapeSourceType } from '@opsmind/database';
 // `POST .../leads` (ver `LeadsService.create`). Só as 4 fontes automatizáveis
 // (que o registry de `apps/worker/src/lead-scrape-processor.ts` sabe
 // processar) podem ser disparadas por este endpoint.
-const AUTOMATABLE_SOURCE_TYPES: ScrapeSourceType[] = [
+// Exportado para `CreateProspectingTargetDto` reusar a mesma lista em vez de
+// duplicá-la — um `ProspectingTarget` também nunca deve apontar pra `MANUAL`.
+export const AUTOMATABLE_SOURCE_TYPES: ScrapeSourceType[] = [
   'APIFY_GOOGLE_MAPS',
   'EXPLORIUM_BUSINESS_SEARCH',
   'CAMOFOX_GOOGLE_SEARCH',
