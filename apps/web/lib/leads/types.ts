@@ -138,6 +138,45 @@ export interface ListScrapeJobsFilter {
   status?: ScrapeJobStatus;
 }
 
+// Espelha `ProspectingTarget` (packages/database/prisma/schema.prisma) — a
+// config recorrente que o worker (Task 7) varre pra disparar um ScrapeJob
+// por alvo respeitando `cooldownDays`. CRUD puro (Task 6, já mergeada), sem
+// campos derivados/estado de execução no model.
+export interface ProspectingTarget {
+  id: string;
+  organizationId: string;
+  city: string;
+  state: string;
+  businessType: string;
+  sourceType: ScrapeSourceType;
+  onlyWithoutWebsite: boolean;
+  limit: number;
+  isActive: boolean;
+  cooldownDays: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Espelha CreateProspectingTargetDto — `sourceType` exclui MANUAL pelo mesmo
+// motivo de CreateScrapeJobInput.
+export interface CreateProspectingTargetInput {
+  city: string;
+  state: string;
+  businessType: string;
+  sourceType?: Exclude<ScrapeSourceType, 'MANUAL'>;
+  onlyWithoutWebsite?: boolean;
+  limit?: number;
+  isActive?: boolean;
+  cooldownDays?: number;
+}
+
+// Espelha UpdateProspectingTargetDto.
+export type UpdateProspectingTargetInput = Partial<CreateProspectingTargetInput>;
+
+export interface ListProspectingTargetsFilter {
+  isActive?: boolean;
+}
+
 export interface LeadEnrichment {
   id: string;
   organizationId: string;
