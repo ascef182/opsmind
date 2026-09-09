@@ -65,6 +65,17 @@ export const OUTREACH_CHANNELS: OutreachChannel[] = [
 
 export type OutreachStatus = 'DRAFT' | 'APPROVED' | 'REJECTED' | 'SENT' | 'REPLIED';
 
+// Espelha `SOCIAL_PLATFORMS`/`SocialLink` de
+// packages/shared-types/src/social-link.types.ts — duplicado localmente
+// (mesma convenção do topo deste arquivo) em vez de importado, apesar de já
+// existir em @opsmind/shared-types.
+export type SocialPlatform = 'INSTAGRAM' | 'FACEBOOK' | 'LINKEDIN' | 'WHATSAPP' | 'TIKTOK' | 'TWITTER' | 'YOUTUBE' | 'OTHER';
+
+export interface SocialLink {
+  platform: SocialPlatform;
+  url: string;
+}
+
 export interface ServiceOffering {
   id: string;
   organizationId: string;
@@ -187,6 +198,9 @@ export interface Lead {
   email: string | null;
   website: string | null;
   googleCategory: string | null;
+  whatsapp: string | null;
+  contactName: string | null;
+  socialLinks: SocialLink[] | null;
   // `Decimal` do Prisma serializa como STRING no JSON de resposta (decimal.js
   // define `toJSON = toString`) — nunca `number` direto, mesmo a API interna
   // usando `Number(lead.rating)` antes de repassar pro scoring. Ver
@@ -243,6 +257,9 @@ export interface ListLeadsFilter {
   city?: string;
   state?: string;
   hasWebsite?: boolean;
+  // Espelha `hasContactMethod` de list-leads-query.dto.ts — pelo menos um
+  // canal de contato utilizável (phone/email/whatsapp/socialLinks).
+  hasContactMethod?: boolean;
   search?: string;
 }
 

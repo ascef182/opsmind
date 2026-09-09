@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { MessageCircle } from 'lucide-react';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useLeads } from '@/lib/leads/use-leads';
 import { useCreateScrapeJob, useScrapeJobs } from '@/lib/leads/use-scrape-jobs';
@@ -17,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormError } from '@/components/ui/card';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
+import { SocialBadges } from '@/components/leads/social-badges';
 import {
   Dialog,
   DialogContent,
@@ -139,6 +141,7 @@ export default function LeadsPage() {
   const [sourceType, setSourceType] = useState<ScrapeSourceType | ''>('');
   const [status, setStatus] = useState<LeadStatus | ''>('');
   const [hasWebsite, setHasWebsite] = useState<'' | 'true' | 'false'>('');
+  const [hasContactMethod, setHasContactMethod] = useState<'' | 'true' | 'false'>('');
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const leads = useLeads(organizationId, {
@@ -147,6 +150,7 @@ export default function LeadsPage() {
     sourceType: sourceType || undefined,
     status: status || undefined,
     hasWebsite: hasWebsite === '' ? undefined : hasWebsite === 'true',
+    hasContactMethod: hasContactMethod === '' ? undefined : hasContactMethod === 'true',
   });
   const createScrapeJob = useCreateScrapeJob(organizationId);
 
@@ -262,6 +266,15 @@ export default function LeadsPage() {
           <option value="false">Sem site</option>
           <option value="true">Com site</option>
         </Select>
+        <Select
+          value={hasContactMethod}
+          onChange={(e) => setHasContactMethod(e.target.value as '' | 'true' | 'false')}
+          className="max-w-[200px]"
+        >
+          <option value="">Com ou sem contato</option>
+          <option value="true">Com contato</option>
+          <option value="false">Sem contato</option>
+        </Select>
       </div>
 
       {leads.isLoading && <p className="text-muted-foreground">Carregando leads…</p>}
@@ -276,6 +289,10 @@ export default function LeadsPage() {
                 <TableHead>Cidade/Estado</TableHead>
                 <TableHead>Categoria</TableHead>
                 <TableHead>Site</TableHead>
+                <TableHead>Telefone</TableHead>
+                <TableHead>WhatsApp</TableHead>
+                <TableHead>E-mail</TableHead>
+                <TableHead>Redes</TableHead>
                 <TableHead>Score</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
@@ -292,6 +309,25 @@ export default function LeadsPage() {
                   <TableCell className="text-foreground/80">{lead.googleCategory ?? '—'}</TableCell>
                   <TableCell>
                     <WebsiteBadge website={lead.website} />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-foreground/80" title={lead.phone ?? undefined}>
+                    {lead.phone ?? '—'}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-foreground/80" title={lead.whatsapp ?? undefined}>
+                    {lead.whatsapp ? (
+                      <span className="inline-flex items-center gap-1">
+                        <MessageCircle className="h-3.5 w-3.5 text-positive-500" />
+                        {lead.whatsapp}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-foreground/80" title={lead.email ?? undefined}>
+                    {lead.email ?? '—'}
+                  </TableCell>
+                  <TableCell>
+                    <SocialBadges links={lead.socialLinks} />
                   </TableCell>
                   <TableCell className="min-w-[160px]">
                     {lead.scoreBreakdown ? <LeadScoreBar breakdown={lead.scoreBreakdown} /> : <span className="text-xs text-muted-foreground">não pontuado</span>}

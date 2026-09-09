@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormError } from '@/components/ui/card';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
+import { SocialBadges } from '@/components/leads/social-badges';
 import {
   Dialog,
   DialogContent,
@@ -193,8 +194,9 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 // Painel "Lead Intelligence": fatos do negócio + score + oferta sugerida +
 // as ações de enriquecimento, num só lugar lateral em vez de espalhados
 // pelo topo da página. Mostra só dados que realmente existem no modelo —
-// nada de sinais de WhatsApp/Instagram/maturidade digital que a inspiração
-// visual sugeria mas que não têm fonte de dado real aqui (ver LeadScoreBar
+// WhatsApp/nome de contato/redes sociais (Task 4/5) entraram no modelo e
+// aparecem aqui junto de telefone/e-mail; o que continua de fora é qualquer
+// "maturidade digital" inferida sem fonte de dado real (ver LeadScoreBar
 // para o único "score" de fato calculado).
 function LeadIntelligencePanel({
   data,
@@ -243,7 +245,10 @@ function LeadIntelligencePanel({
             }
           />
           <Field label="Telefone" value={data.phone} />
+          <Field label="WhatsApp" value={data.whatsapp} />
           <Field label="E-mail" value={data.email} />
+          <Field label="Nome de contato" value={data.contactName} />
+          <Field label="Redes" value={<SocialBadges links={data.socialLinks} />} />
           <Field label="Avaliação" value={data.rating ? `${Number(data.rating)} (${data.reviewCount ?? 0} avaliações)` : null} />
           <Field label="Endereço" value={data.address} />
           <Field label="Fonte" value={data.sourceType} />

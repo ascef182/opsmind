@@ -12,6 +12,7 @@ function queryString(filter: ListLeadsFilter): string {
   if (filter.city) params.set('city', filter.city);
   if (filter.state) params.set('state', filter.state);
   if (filter.hasWebsite !== undefined) params.set('hasWebsite', String(filter.hasWebsite));
+  if (filter.hasContactMethod !== undefined) params.set('hasContactMethod', String(filter.hasContactMethod));
   if (filter.search) params.set('search', filter.search);
   const query = params.toString();
   return query ? `?${query}` : '';
