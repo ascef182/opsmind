@@ -98,6 +98,15 @@ export const envSchema = z.object({
   // schema não expressa "obrigatório junto" facilmente — o gateway
   // (packages/integrations) que checa a combinação no primeiro uso real.
   CAMOFOX_ACCESS_KEY: z.string().optional(),
+  // Descoberta de contato/redes (Task 9) — dois Actors da Apify (caminho
+  // primário; ver `ContactEnrichmentGateway`, packages/integrations), com
+  // fallback pro Camoufox já configurado acima quando indisponível/sem
+  // resultado. Reaproveitam `APIFY_API_TOKEN` (mesma conta/token do actor de
+  // Google Maps) — só os IDs dos actors são novos. Ambos têm default (não
+  // são segredo, só apontam pro actor público) pelo mesmo motivo de
+  // `APIFY_GOOGLE_MAPS_ACTOR_ID`.
+  APIFY_CONTACT_ENRICHMENT_ACTOR_ID: z.string().default('vdrmota/contact-info-scraper'),
+  APIFY_INSTAGRAM_PROFILE_ACTOR_ID: z.string().default('apify/instagram-profile-scraper'),
   // Intervalo (ms) do scan automático de `ProspectingTarget`s ativos
   // (apps/worker/src/prospecting-scan.ts + main.ts) — mesmo padrão de
   // "scan periódico via setInterval" de `scanCustomerInactiveAutomations`,

@@ -6,9 +6,11 @@ import {
   ApifyGatewayService,
   ExploriumGatewayService,
   CamofoxGatewayService,
+  ContactEnrichmentGatewayService,
   type ApifyGateway,
   type ExploriumGateway,
   type CamofoxGateway,
+  type ContactEnrichmentGateway,
 } from '@opsmind/integrations';
 import { createLogger } from './logger';
 import { createPrismaClient } from './tenant-context';
@@ -79,6 +81,31 @@ function createCamofoxGateway(env: Env): CamofoxGateway {
   return new CamofoxGatewayService(env.CAMOFOX_API_URL, env.CAMOFOX_ACCESS_KEY);
 }
 
+// Reaproveita `APIFY_API_TOKEN` (mesma conta/token do actor de Google Maps,
+// ver `createApifyGateway` acima) — só os IDs dos dois actors (Task 9) são
+// configuração nova.
+function createContactEnrichmentGateway(env: Env): ContactEnrichmentGateway {
+  if (!env.APIFY_API_TOKEN) {
+    return {
+      scrapeContactInfo: async () => {
+        throw new Error(
+          'APIFY_API_TOKEN não configurado — descoberta de contato/redes via Apify Actors indisponível nesta instância do worker (o passo cai para o fallback via Camoufox).',
+        );
+      },
+      lookupInstagramProfile: async () => {
+        throw new Error(
+          'APIFY_API_TOKEN não configurado — lookup de perfil do Instagram via Apify indisponível nesta instância do worker.',
+        );
+      },
+    };
+  }
+  return new ContactEnrichmentGatewayService(
+    env.APIFY_API_TOKEN,
+    env.APIFY_CONTACT_ENRICHMENT_ACTOR_ID,
+    env.APIFY_INSTAGRAM_PROFILE_ACTOR_ID,
+  );
+}
+
 async function main(): Promise<void> {
   // Mesmo fail-fast do apps/api — se DATABASE_URL_APP/REDIS_URL estiverem
   // faltando ou mal formados, o worker recusa subir com uma mensagem clara,
@@ -116,6 +143,7 @@ async function main(): Promise<void> {
     apify: createApifyGateway(env),
     explorium: createExploriumGateway(env),
     camofox: createCamofoxGateway(env),
+    contactEnrichment: createContactEnrichmentGateway(env),
   };
   const leadScrapeQueue = createLeadScrapeQueue(connection);
   const leadScrapeWorker = createLeadScrapeWorker(connection, (job) =>

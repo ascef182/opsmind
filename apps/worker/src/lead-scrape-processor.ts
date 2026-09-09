@@ -1,6 +1,13 @@
 import type { PrismaClient, Prisma, ScrapeJob, ScrapeSourceType, Lead, LeadStatus } from '@opsmind/database';
 import type { LeadScrapeJobData } from '@opsmind/shared-types';
-import { scoreLead, QUALIFICATION_THRESHOLD, type LeadScoringInput, type ServiceOfferingIcp } from '@opsmind/shared-types';
+import {
+  scoreLead,
+  QUALIFICATION_THRESHOLD,
+  type LeadScoringInput,
+  type ServiceOfferingIcp,
+  type SocialLink,
+  type SocialPlatform,
+} from '@opsmind/shared-types';
 import type {
   ApifyGateway,
   ApifyBusinessResult,
@@ -8,6 +15,8 @@ import type {
   ExploriumBusinessResult,
   CamofoxGateway,
   CamofoxSearchResult,
+  ContactEnrichmentGateway,
+  InstagramProfileResult,
 } from '@opsmind/integrations';
 import type Redis from 'ioredis';
 import * as Sentry from '@sentry/node';
@@ -18,6 +27,7 @@ export interface LeadScrapeGateways {
   apify: ApifyGateway;
   explorium: ExploriumGateway;
   camofox: CamofoxGateway;
+  contactEnrichment: ContactEnrichmentGateway;
 }
 
 /**
@@ -46,6 +56,31 @@ const SCRAPING_COST_PER_LEAD_USD: Record<ScrapeSourceType, number> = {
   CAMOFOX_REDDIT_SEARCH: 0.001,
   MANUAL: 0,
 };
+
+/**
+ * Custo estimado POR CHAMADA (não por lead, ao contrário de
+ * `SCRAPING_COST_PER_LEAD_USD` acima) do passo de descoberta de contato/
+ * redes (Task 9, ver `discoverContactAndSocials`) — um lead pode gerar 0, 1
+ * ou 2 chamadas de actor dependendo de quantos passos do caminho primário
+ * rodam de fato (`scrapeContactInfo` sempre; `lookupInstagramProfile` só
+ * quando um handle de Instagram é encontrado). Vive numa constante separada
+ * de `SCRAPING_COST_PER_LEAD_USD` porque aquela é indexada por
+ * `ScrapeSourceType` (a fonte do `ScrapeJob` inteiro) — estes dois IDs de
+ * actor não são fontes de `ScrapeJob`, são um passo de enrichment por lead
+ * dentro de qualquer fonte estruturada.
+ *
+ * VALORES CONSERVADORES E NÃO CONFIRMADOS — mesma disciplina de honestidade
+ * do comentário de `SCRAPING_COST_PER_LEAD_USD`: mesma ordem de grandeza da
+ * Explorium, nunca tratados como grátis só porque a Apify já está
+ * configurada pro Google Maps. Corrigir aqui assim que houver números reais.
+ * O custo do caminho de fallback (Camoufox) reaproveita
+ * `SCRAPING_COST_PER_LEAD_USD.CAMOFOX_GOOGLE_SEARCH` — é literalmente a
+ * mesma chamada (`camofox.search` com `macro: '@google_search'`).
+ */
+const CONTACT_ENRICHMENT_COST_PER_CALL_USD = {
+  APIFY_CONTACT_ENRICHMENT: 0.05,
+  APIFY_INSTAGRAM_PROFILE: 0.05,
+} as const;
 
 const STRUCTURED_WEBSITE_SOURCES: ReadonlySet<ScrapeSourceType> = new Set([
   'APIFY_GOOGLE_MAPS',
@@ -100,6 +135,18 @@ interface RawCandidate {
   rawSnapshot: Record<string, unknown>;
   firmographics: LeadScoringInput['firmographics'];
   enrichmentSource: ExploriumBusinessResult | null;
+  /**
+   * Campos de contato/redes (Task 9) — SEMPRE `null` na mapeação inicial do
+   * resultado bruto do gateway de busca (nenhuma das três fontes de busca
+   * devolve isto na própria busca); só passam a ter valor quando
+   * `discoverContactAndSocials` os encontra e MUTA o candidato diretamente
+   * (ver essa função, mais abaixo). A condição "sem whatsapp/socialLinks
+   * ainda preenchidos" do passo do worker é checada contra estes mesmos
+   * campos.
+   */
+  whatsapp: string | null;
+  email: string | null;
+  socialLinks: SocialLink[] | null;
 }
 
 function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
@@ -121,6 +168,9 @@ function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
     // no passo de enrichment (ver `NEEDS_MATCH_ENRICHMENT`).
     firmographics: null,
     enrichmentSource: null,
+    whatsapp: null,
+    email: null,
+    socialLinks: null,
   };
 }
 
@@ -147,6 +197,9 @@ function mapExploriumResult(r: ExploriumBusinessResult): RawCandidate {
     // re-encontrar o negócio e apagar um dado que a busca já tinha).
     firmographics: { industry: r.industry, employeeCount: r.employeeCount, revenueUsd: r.revenueUsd },
     enrichmentSource: r,
+    whatsapp: null,
+    email: null,
+    socialLinks: null,
   };
 }
 
@@ -167,6 +220,9 @@ function mapCamofoxResult(r: CamofoxSearchResult): RawCandidate {
     rawSnapshot: r.raw,
     firmographics: null,
     enrichmentSource: null,
+    whatsapp: null,
+    email: null,
+    socialLinks: null,
   };
 }
 
@@ -220,10 +276,234 @@ const SOURCE_REGISTRY: Record<ScrapeSourceType, SourceHandler> = {
   },
 };
 
+/** Registro pronto pra virar `LeadEnrichment{type:'contact_enrichment'}` — ver `discoverContactAndSocials`. */
+interface ContactEnrichmentResult {
+  source: 'apify_actor' | 'camoufox_fallback';
+  data: Record<string, unknown>;
+}
+
 interface EnrichedCandidate {
   candidate: RawCandidate;
   firmographics: LeadScoringInput['firmographics'];
   enrichmentRaw: ExploriumBusinessResult | null;
+  contactEnrichment: ContactEnrichmentResult | null;
+}
+
+/**
+ * Domínios conhecidos → `SocialPlatform`, usados pelo caminho de fallback
+ * Camoufox (`runCamofoxFallback`) pra classificar cada URL de resultado de
+ * busca — mesma lista de domínios do brief da Task 9. `wa.me`/
+ * `api.whatsapp.com` mapeiam pra `WHATSAPP` (não é bem uma "rede social",
+ * mas é o mesmo mecanismo de classificação por domínio, e o valor
+ * encontrado aqui é o que popula `Lead.whatsapp` diretamente).
+ */
+const KNOWN_SOCIAL_DOMAINS: ReadonlyArray<{ pattern: RegExp; platform: SocialPlatform }> = [
+  { pattern: /instagram\.com/i, platform: 'INSTAGRAM' },
+  { pattern: /facebook\.com/i, platform: 'FACEBOOK' },
+  { pattern: /linkedin\.com/i, platform: 'LINKEDIN' },
+  { pattern: /(?:wa\.me|api\.whatsapp\.com)/i, platform: 'WHATSAPP' },
+  { pattern: /tiktok\.com/i, platform: 'TIKTOK' },
+  { pattern: /(?:twitter\.com|x\.com)/i, platform: 'TWITTER' },
+  { pattern: /youtube\.com/i, platform: 'YOUTUBE' },
+];
+
+function classifySocialUrl(url: string): SocialPlatform | null {
+  for (const { pattern, platform } of KNOWN_SOCIAL_DOMAINS) {
+    if (pattern.test(url)) {
+      return platform;
+    }
+  }
+  return null;
+}
+
+// "dedup por platform, cap em 6 entradas" — brief da Task 9.
+const CONTACT_FALLBACK_MAX_SOCIAL_LINKS = 6;
+
+/** Extrai o handle cru de uma URL de perfil do Instagram (`.../fulano` → `fulano`), ou `null` se não reconhecível. */
+function extractInstagramHandle(url: string): string | null {
+  const match = url.match(/instagram\.com\/([^/?#]+)/i);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Caminho PRIMÁRIO da descoberta de contato/redes (Task 9) — só roda quando
+ * `candidate.website` existe (não faz sentido raspar "contato" de uma
+ * página que não existe). Chama `scrapeContactInfo` contra o site; se um dos
+ * `socials` devolvidos for um link `WHATSAPP` (telefone reconhecível como
+ * WhatsApp Business, ver aviso em `ContactEnrichmentGateway`), populariza
+ * `whatsapp`; o primeiro e-mail devolvido populariza `email`. Se algum
+ * social for `INSTAGRAM`, chama `lookupInstagramProfile` — se ele devolver
+ * `whatsappLink`, esse valor tem PRIORIDADE sobre o telefone (link explícito
+ * de clique-para-conversar no próprio perfil é mais confiável que um número
+ * encontrado em texto de página).
+ *
+ * MUTA `candidate` diretamente (whatsapp/email/socialLinks) quando encontra
+ * algo. Devolve `null` (nunca lança) quando não há website, quando nada de
+ * novo foi encontrado, ou quando a chamada em si falha — nesses casos o
+ * chamador (`discoverContactAndSocials`) cai pro fallback Camoufox.
+ */
+async function runPrimaryContactDiscovery(
+  candidate: RawCandidate,
+  gateway: ContactEnrichmentGateway,
+): Promise<{ costUsd: number; data: Record<string, unknown> } | null> {
+  if (!candidate.website) {
+    return null;
+  }
+
+  const scraped = await gateway.scrapeContactInfo(candidate.website);
+  let costUsd: number = CONTACT_ENRICHMENT_COST_PER_CALL_USD.APIFY_CONTACT_ENRICHMENT;
+
+  let whatsapp = scraped.socials.find((s) => s.platform === 'WHATSAPP')?.url ?? null;
+  const email = scraped.emails[0] ?? null;
+  const instagramUrl = scraped.socials.find((s) => s.platform === 'INSTAGRAM')?.url ?? null;
+  const instagramHandle = instagramUrl ? extractInstagramHandle(instagramUrl) : null;
+
+  let instagramProfile: InstagramProfileResult | null = null;
+  if (instagramHandle) {
+    try {
+      instagramProfile = await gateway.lookupInstagramProfile(instagramHandle);
+      costUsd += CONTACT_ENRICHMENT_COST_PER_CALL_USD.APIFY_INSTAGRAM_PROFILE;
+    } catch {
+      // Lookup de Instagram é best-effort DENTRO do próprio caminho
+      // primário — uma falha aqui não derruba o resto do que já foi achado
+      // via `scrapeContactInfo` (telefone/e-mail/socials continuam válidos).
+      instagramProfile = null;
+    }
+  }
+  if (instagramProfile?.whatsappLink) {
+    whatsapp = instagramProfile.whatsappLink;
+  }
+  const resolvedEmail = email ?? instagramProfile?.email ?? null;
+
+  if (!whatsapp && !resolvedEmail && scraped.socials.length === 0) {
+    return null; // nada de novo — cai pro fallback
+  }
+
+  if (whatsapp) {
+    candidate.whatsapp = whatsapp;
+  }
+  if (resolvedEmail) {
+    candidate.email = resolvedEmail;
+  }
+  if (scraped.socials.length > 0) {
+    candidate.socialLinks = scraped.socials;
+  }
+
+  return {
+    costUsd,
+    data: { emails: scraped.emails, phones: scraped.phones, socials: scraped.socials, instagramProfile },
+  };
+}
+
+/**
+ * Caminho de FALLBACK da descoberta de contato/redes (Task 9) — roda quando
+ * não há `candidate.website`, ou quando o caminho primário está
+ * indisponível/sem resultado/lançou erro (ver `discoverContactAndSocials`).
+ * Mesma lógica já desenhada no brief: busca
+ * `"{name}" {city} instagram OR facebook OR linkedin OR tiktok` via
+ * `camofox.search`, classifica cada URL por domínio conhecido
+ * (`classifySocialUrl`), dedup por platform, cap em
+ * `CONTACT_FALLBACK_MAX_SOCIAL_LINKS`. Um link `wa.me`/`api.whatsapp.com`
+ * encontrado aqui populariza `whatsapp` DIRETAMENTE (não só `socialLinks`).
+ *
+ * MUTA `candidate` diretamente quando encontra algo. Devolve `null` (nunca
+ * lança pro chamador tratar — mas também não precisa, o chamador já embrulha
+ * isto num try/catch) quando nada foi encontrado.
+ */
+async function runCamofoxFallback(
+  candidate: RawCandidate,
+  camofox: CamofoxGateway,
+): Promise<Record<string, unknown> | null> {
+  const query = `"${candidate.name}" ${candidate.city ?? ''} instagram OR facebook OR linkedin OR tiktok`.trim();
+  const results = await camofox.search({ macro: '@google_search', query, limit: 5 });
+
+  const socialLinks: SocialLink[] = [];
+  const seenPlatforms = new Set<SocialPlatform>();
+  let whatsapp: string | null = null;
+
+  for (const result of results) {
+    const platform = classifySocialUrl(result.url);
+    if (!platform || seenPlatforms.has(platform)) {
+      continue;
+    }
+    seenPlatforms.add(platform);
+    socialLinks.push({ platform, url: result.url });
+    if (platform === 'WHATSAPP') {
+      whatsapp = result.url;
+    }
+    if (socialLinks.length >= CONTACT_FALLBACK_MAX_SOCIAL_LINKS) {
+      break;
+    }
+  }
+
+  if (!whatsapp && socialLinks.length === 0) {
+    return null;
+  }
+
+  if (whatsapp) {
+    candidate.whatsapp = whatsapp;
+  }
+  if (socialLinks.length > 0) {
+    candidate.socialLinks = socialLinks;
+  }
+
+  return { query, socialLinks, whatsapp };
+}
+
+/**
+ * Passo de descoberta de contato/redes (Task 9) — orquestra os dois
+ * caminhos acima. Chamada uma vez por candidato elegível (fonte estruturada,
+ * ainda sem `whatsapp`/`socialLinks`) dentro do próprio try/catch por lead
+ * do chamador (mesma disciplina do enrichment de firmografia, ver loop
+ * principal) — mas TAMBÉM nunca lança por si só, todo caminho aqui dentro já
+ * tem seu próprio try/catch, exatamente pra permitir a transição
+ * primário→fallback em vez de abortar no primeiro erro.
+ *
+ * Orçamento (`isOverBudget`) é checado ANTES de qualquer chamada que gaste —
+ * regra dura da Task 9 — e de novo aqui (além do corte de orçamento a nível
+ * de job, já feito antes do job sequer começar a rodar) porque um job pode
+ * processar dezenas/centenas de leads em sequência: o orçamento pode virar
+ * "estourado" NO MEIO do job, por causa do próprio gasto acumulado desta
+ * mesma etapa nos leads anteriores (`recordSpend` abaixo). Estourado, pula
+ * silenciosamente — nice-to-have, não o propósito principal do job.
+ */
+async function discoverContactAndSocials(
+  candidate: RawCandidate,
+  contactEnrichment: ContactEnrichmentGateway,
+  camofox: CamofoxGateway,
+  redis: Redis,
+  organizationId: string,
+  monthlyBudget: number | null,
+): Promise<ContactEnrichmentResult | null> {
+  if (await isOverBudget(redis, organizationId, monthlyBudget)) {
+    return null;
+  }
+
+  let primaryResult: { costUsd: number; data: Record<string, unknown> } | null = null;
+  try {
+    primaryResult = await runPrimaryContactDiscovery(candidate, contactEnrichment);
+  } catch {
+    primaryResult = null; // erro no caminho primário — cai pro fallback abaixo
+  }
+
+  if (primaryResult) {
+    await recordSpend(redis, organizationId, primaryResult.costUsd);
+    return { source: 'apify_actor', data: primaryResult.data };
+  }
+
+  // Fallback: sem website, OU caminho primário indisponível/sem resultado/erro.
+  try {
+    const fallbackData = await runCamofoxFallback(candidate, camofox);
+    if (fallbackData) {
+      await recordSpend(redis, organizationId, SCRAPING_COST_PER_LEAD_USD.CAMOFOX_GOOGLE_SEARCH);
+      return { source: 'camoufox_fallback', data: fallbackData };
+    }
+  } catch {
+    // Fallback também é best-effort — se falhar, o lead segue sem contato
+    // novo (ver brief: "os dois falham/vazios → lead segue sem contato
+    // novo, job principal não falha").
+  }
+  return null;
 }
 
 /**
@@ -339,6 +619,18 @@ async function upsertLead(
     suggestedOfferingId: breakdown.matchedOfferingId,
     actorType: data.actorType,
     actorId: data.actorId ?? null,
+    // Contato/redes (Task 9): `undefined` (não `null`) quando o candidato
+    // não trouxe nada de novo NESTA passada — Prisma ignora chaves
+    // `undefined` tanto em `create` quanto em `update`, então isto nunca
+    // apaga um valor já salvo de uma execução anterior (ex.: um rescan que
+    // não re-descobre o WhatsApp não deve zerar o que já tinha sido
+    // encontrado antes). Só sobrescreve quando `discoverContactAndSocials`
+    // de fato encontrou algo nesta execução.
+    email: candidate.email ?? undefined,
+    whatsapp: candidate.whatsapp ?? undefined,
+    socialLinks: candidate.socialLinks
+      ? (candidate.socialLinks as unknown as Prisma.InputJsonValue)
+      : undefined,
   };
 
   if (candidate.placeId) {
@@ -571,7 +863,35 @@ export async function processLeadScrapeJob(
           // derruba o job inteiro; só este lead fica sem firmographics.
         }
       }
-      enriched.push({ candidate, firmographics, enrichmentRaw });
+      // Descoberta de contato/redes (Task 9) — só fontes estruturadas, e só
+      // quando o candidato ainda não tem `whatsapp`/`socialLinks` (nenhuma
+      // das três fontes de busca preenche isso na própria busca — ver
+      // `RawCandidate` — então esta condição é sempre verdadeira hoje, mas
+      // protege contra reprocessar a mesma descoberta duas vezes caso um
+      // gateway futuro passe a trazer isso já na busca). Mesmo padrão de
+      // resiliência do bloco de firmografia acima: try/catch por lead,
+      // nunca derruba o job inteiro.
+      let contactEnrichment: ContactEnrichmentResult | null = null;
+      if (STRUCTURED_WEBSITE_SOURCES.has(scrapeJob.sourceType) && !candidate.whatsapp && !candidate.socialLinks) {
+        try {
+          contactEnrichment = await discoverContactAndSocials(
+            candidate,
+            gateways.contactEnrichment,
+            gateways.camofox,
+            redis,
+            data.organizationId,
+            monthlyBudget,
+          );
+        } catch {
+          // Rede de segurança extra — `discoverContactAndSocials` já nunca
+          // lança por si só (todo caminho interno tem seu próprio
+          // try/catch), mas mantém a mesma disciplina defensiva do resto
+          // deste loop.
+          contactEnrichment = null;
+        }
+      }
+
+      enriched.push({ candidate, firmographics, enrichmentRaw, contactEnrichment });
     }
 
     // Passo 3 — tx curta: persiste os leads (upsert + score + enrichment).
@@ -582,7 +902,7 @@ export async function processLeadScrapeJob(
       const offeringsIcp = offerings.map(toOfferingIcp);
 
       let count = 0;
-      for (const { candidate, firmographics, enrichmentRaw } of enriched) {
+      for (const { candidate, firmographics, enrichmentRaw, contactEnrichment } of enriched) {
         const lead = await upsertLead(tx, data, scrapeJob.sourceType, candidate, firmographics, offeringsIcp);
         if (enrichmentRaw) {
           await tx.leadEnrichment.create({
@@ -591,6 +911,21 @@ export async function processLeadScrapeJob(
               leadId: lead.id,
               type: 'explorium_firmographics',
               data: enrichmentRaw as unknown as Prisma.InputJsonValue,
+              actorType: data.actorType,
+              actorId: data.actorId ?? null,
+            },
+          });
+        }
+        if (contactEnrichment) {
+          await tx.leadEnrichment.create({
+            data: {
+              organizationId: data.organizationId,
+              leadId: lead.id,
+              type: 'contact_enrichment',
+              data: {
+                source: contactEnrichment.source,
+                ...contactEnrichment.data,
+              } as unknown as Prisma.InputJsonValue,
               actorType: data.actorType,
               actorId: data.actorId ?? null,
             },

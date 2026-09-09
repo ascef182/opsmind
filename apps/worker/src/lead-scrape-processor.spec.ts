@@ -88,7 +88,16 @@ describe('processLeadScrapeJob', () => {
     return {
       apify: { searchBusinesses: jest.fn() },
       explorium: { searchBusinesses: jest.fn(), matchBusiness: jest.fn() },
-      camofox: { search: jest.fn() },
+      // Defaults "não achou nada de novo" — mesmo espírito dos outros
+      // gateways acima: testes que não são sobre contato/redes não
+      // precisam se preocupar em mockar isto, e o passo de descoberta cai
+      // silenciosamente pro fallback (sem `whatsapp`/`socialLinks`) sem
+      // afetar nenhuma asserção pré-existente.
+      camofox: { search: jest.fn().mockResolvedValue([]) },
+      contactEnrichment: {
+        scrapeContactInfo: jest.fn().mockResolvedValue({ emails: [], phones: [], socials: [] }),
+        lookupInstagramProfile: jest.fn().mockResolvedValue(null),
+      },
     };
   }
 
@@ -96,6 +105,14 @@ describe('processLeadScrapeJob', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // `clearAllMocks()` só limpa histórico de chamadas — NÃO desfaz um
+    // `mockRejectedValue`/`mockResolvedValue` já configurado em um teste
+    // anterior (isso é `resetAllMocks()`, que não usamos aqui porque
+    // quebraria o default de `withTenantContext` configurado via
+    // `setupTx()` dentro de cada teste). Sem este reset explícito, o
+    // `recordSpend.mockRejectedValue(...)` do teste de bookkeeping (mais
+    // abaixo) vazaria pros testes seguintes que também chamam `recordSpend`.
+    (recordSpend as jest.Mock).mockResolvedValue(undefined);
   });
 
   it('sucesso (Apify): filtra onlyWithoutWebsite, faz score/upsert, e registra COMPLETED + gasto', async () => {
@@ -382,5 +399,244 @@ describe('processLeadScrapeJob', () => {
     // AuditLog nunca chega a ser escrito neste cenário (recordSpend, que
     // vem antes dele em finalizeJob, já lançou) — mas isso não derruba o job.
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  describe('descoberta de contato/redes (Task 9)', () => {
+    // `onlyWithoutWebsite: false` — diferente de `baseScrapeJob`, precisamos
+    // que um candidato COM `website` sobreviva ao filtro pra exercitar o
+    // caminho primário (que só roda quando `candidate.website` existe).
+    const contactJob = { ...baseScrapeJob, onlyWithoutWebsite: false };
+
+    function apifyCandidateWithWebsite(overrides: Record<string, unknown> = {}) {
+      return {
+        name: 'Padaria Contato',
+        address: 'Rua X',
+        city: 'Campinas',
+        state: 'SP',
+        phone: null,
+        website: 'https://padariacontato.com.br',
+        googleCategory: 'Padaria',
+        rating: 4.5,
+        reviewCount: 10,
+        placeId: 'place-contato',
+        raw: {},
+        ...overrides,
+      };
+    }
+
+    it('(a) caminho primário: ContactEnrichmentGateway acha dados → whatsapp/email/socialLinks populados + LeadEnrichment{source:"apify_actor"}', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-contato', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateWithWebsite()]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      gateways.contactEnrichment.scrapeContactInfo.mockResolvedValue({
+        emails: ['contato@padariacontato.com.br'],
+        phones: [],
+        socials: [
+          { platform: 'WHATSAPP', url: 'https://wa.me/5519912345678' },
+          { platform: 'INSTAGRAM', url: 'https://instagram.com/padariacontato' },
+        ],
+      });
+      gateways.contactEnrichment.lookupInstagramProfile.mockResolvedValue({
+        bio: 'Padaria artesanal',
+        whatsappLink: null,
+        email: null,
+      });
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.contactEnrichment.scrapeContactInfo).toHaveBeenCalledWith('https://padariacontato.com.br');
+      // Achou um social INSTAGRAM entre os `socials` devolvidos → chama o lookup de perfil.
+      expect(gateways.contactEnrichment.lookupInstagramProfile).toHaveBeenCalledWith('padariacontato');
+      expect(gateways.camofox.search).not.toHaveBeenCalled();
+      expect(tx.lead.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            whatsapp: 'https://wa.me/5519912345678',
+            email: 'contato@padariacontato.com.br',
+            socialLinks: expect.arrayContaining([
+              { platform: 'WHATSAPP', url: 'https://wa.me/5519912345678' },
+              { platform: 'INSTAGRAM', url: 'https://instagram.com/padariacontato' },
+            ]),
+          }),
+        }),
+      );
+      expect(tx.leadEnrichment.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            leadId: 'lead-contato',
+            type: 'contact_enrichment',
+            data: expect.objectContaining({ source: 'apify_actor' }),
+          }),
+        }),
+      );
+      // Duas chamadas de actor nesta passada (scrapeContactInfo +
+      // lookupInstagramProfile) — custo somado (0,05 + 0,05).
+      expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', 0.1);
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('(b) caminho primário falha → cai no fallback Camoufox, LeadEnrichment{source:"camoufox_fallback"} e wa.me popula whatsapp direto', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-fallback', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateWithWebsite({ placeId: 'place-fallback' })]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      gateways.contactEnrichment.scrapeContactInfo.mockRejectedValue(new Error('actor indisponível'));
+      gateways.camofox.search.mockResolvedValue([
+        { title: 'Perfil Instagram', url: 'https://instagram.com/padariacontato', textContent: null, raw: {} },
+        { title: 'Fale no WhatsApp', url: 'https://wa.me/5519912345678', textContent: null, raw: {} },
+        { title: 'Página irrelevante', url: 'https://exemplo.com', textContent: null, raw: {} },
+      ]);
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.contactEnrichment.scrapeContactInfo).toHaveBeenCalled();
+      // Lookup de Instagram nunca roda no fallback (só existe no caminho primário).
+      expect(gateways.contactEnrichment.lookupInstagramProfile).not.toHaveBeenCalled();
+      expect(gateways.camofox.search).toHaveBeenCalledWith(
+        expect.objectContaining({ macro: '@google_search', limit: 5 }),
+      );
+      expect(tx.lead.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            whatsapp: 'https://wa.me/5519912345678',
+            socialLinks: expect.arrayContaining([
+              { platform: 'INSTAGRAM', url: 'https://instagram.com/padariacontato' },
+              { platform: 'WHATSAPP', url: 'https://wa.me/5519912345678' },
+            ]),
+          }),
+        }),
+      );
+      expect(tx.leadEnrichment.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: 'contact_enrichment',
+            data: expect.objectContaining({ source: 'camoufox_fallback' }),
+          }),
+        }),
+      );
+      // Custo do fallback = mesma taxa de CAMOFOX_GOOGLE_SEARCH (é literalmente a mesma chamada).
+      expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', 0.001);
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('(c) caminho primário e fallback ambos sem resultado → lead segue sem contato novo, job principal não falha', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-vazio', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateWithWebsite({ placeId: 'place-vazio' })]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      gateways.contactEnrichment.scrapeContactInfo.mockRejectedValue(new Error('actor indisponível'));
+      gateways.camofox.search.mockResolvedValue([]); // fallback também não acha nada
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      const createArg = tx.lead.upsert.mock.calls[0][0].create as Record<string, unknown>;
+      expect(createArg.whatsapp).toBeUndefined();
+      expect(createArg.email).toBeUndefined();
+      expect(createArg.socialLinks).toBeUndefined();
+      // Nenhum LeadEnrichment de contato é criado quando nada foi encontrado.
+      expect(tx.leadEnrichment.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ type: 'contact_enrichment' }) }),
+      );
+      expect(result.status).toBe('COMPLETED');
+      expect(tx.scrapeJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED', leadsFound: 1 }) }),
+      );
+    });
+
+    it('(d) orçamento de scraping estourado no meio do job → descoberta de contato pula silenciosamente (mas o resto do job continua)', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock)
+        .mockResolvedValueOnce(false) // checagem a nível de job (passo 2)
+        .mockResolvedValueOnce(true); // checagem por lead, dentro de discoverContactAndSocials
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: 10 });
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-budget', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateWithWebsite({ placeId: 'place-budget' })]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.contactEnrichment.scrapeContactInfo).not.toHaveBeenCalled();
+      expect(gateways.camofox.search).not.toHaveBeenCalled();
+      expect(tx.lead.upsert).toHaveBeenCalledTimes(1);
+      expect(tx.leadEnrichment.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ type: 'contact_enrichment' }) }),
+      );
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('fallback Camoufox: dedup por platform e cap em 6 socialLinks', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-cap', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        apifyCandidateWithWebsite({ website: null, placeId: 'place-cap' }),
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      gateways.camofox.search.mockResolvedValue([
+        { title: 'Instagram 1', url: 'https://instagram.com/a', textContent: null, raw: {} },
+        { title: 'Instagram 2 (duplicado)', url: 'https://instagram.com/b', textContent: null, raw: {} },
+        { title: 'Facebook', url: 'https://facebook.com/a', textContent: null, raw: {} },
+        { title: 'LinkedIn', url: 'https://linkedin.com/company/a', textContent: null, raw: {} },
+        { title: 'TikTok', url: 'https://tiktok.com/@a', textContent: null, raw: {} },
+        { title: 'Twitter', url: 'https://twitter.com/a', textContent: null, raw: {} },
+        { title: 'YouTube', url: 'https://youtube.com/a', textContent: null, raw: {} },
+        { title: 'Sem plataforma reconhecível', url: 'https://exemplo.com', textContent: null, raw: {} },
+      ]);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      const createArg = tx.lead.upsert.mock.calls[0][0].create as { socialLinks: Array<{ platform: string; url: string }> };
+      // 7 plataformas reconhecíveis no total (instagram aparece 2x — dedup mantém só a 1ª) — cap em 6.
+      expect(createArg.socialLinks).toHaveLength(6);
+      expect(createArg.socialLinks).toEqual(
+        expect.arrayContaining([{ platform: 'INSTAGRAM', url: 'https://instagram.com/a' }]),
+      );
+      expect(createArg.socialLinks).not.toEqual(
+        expect.arrayContaining([{ platform: 'INSTAGRAM', url: 'https://instagram.com/b' }]),
+      );
+    });
   });
 });

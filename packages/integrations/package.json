@@ -18,7 +18,8 @@
     "testEnvironment": "node"
   },
   "dependencies": {
-    "apify-client": "^2.25.0"
+    "apify-client": "^2.25.0",
+    "@opsmind/shared-types": "workspace:*"
   },
   "devDependencies": {
     "@opsmind/config": "workspace:*",
