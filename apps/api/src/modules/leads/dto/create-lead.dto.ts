@@ -1,4 +1,18 @@
-import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+import { SocialLinkDto } from './social-link.dto';
 
 // Entrada manual de um lead (sourceType MANUAL, fixado pelo service — não é
 // campo do DTO). As demais origens (APIFY_GOOGLE_MAPS etc.) só chegam via
@@ -67,4 +81,26 @@ export class CreateLeadDto {
   @IsString()
   @MaxLength(10_000)
   rawContent?: string;
+
+  // Número confirmado como WhatsApp — mesmo padrão simples de `phone`, sem
+  // transformação (ver comentário em `schema.prisma` sobre por que é coluna
+  // própria em vez de só mais um item de `socialLinks`).
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  whatsapp?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  contactName?: string;
+
+  // Perfis sociais descobertos (Instagram/LinkedIn/etc.) — até 10 entradas,
+  // cada uma validada por `SocialLinkDto`.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => SocialLinkDto)
+  socialLinks?: SocialLinkDto[];
 }

@@ -1,5 +1,7 @@
-import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
 import type { LeadStatus } from '@opsmind/database';
+import { SocialLinkDto } from './social-link.dto';
 
 const LEAD_STATUSES: LeadStatus[] = [
   'DISCOVERED',
@@ -37,4 +39,21 @@ export class UpdateLeadDto {
   @IsString()
   @MaxLength(300)
   website?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  whatsapp?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  contactName?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => SocialLinkDto)
+  socialLinks?: SocialLinkDto[];
 }

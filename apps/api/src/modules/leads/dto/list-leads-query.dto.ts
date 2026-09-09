@@ -56,6 +56,15 @@ export class ListLeadsQueryDto {
   @IsBoolean()
   hasWebsite?: boolean;
 
+  // Torna visível/filtrável o problema real que motiva a Task 9: hoje é
+  // possível ter dezenas de leads QUALIFIED sem nenhum jeito de contatá-los.
+  // Ver `LeadsService.list()` pra construção exata da cláusula (`phone`/
+  // `email`/`whatsapp`/`socialLinks`).
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean()
+  hasContactMethod?: boolean;
+
   @IsOptional()
   @IsString()
   search?: string;

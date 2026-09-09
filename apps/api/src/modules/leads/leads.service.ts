@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Customer, Lead, LeadStatus, Prisma } from '@opsmind/database';
+import { Prisma, type Customer, type Lead, type LeadStatus } from '@opsmind/database';
 import {
   QUALIFICATION_THRESHOLD,
   scoreLead,
@@ -27,6 +27,7 @@ export interface ListLeadsFilter {
   city?: string;
   state?: string;
   hasWebsite?: boolean;
+  hasContactMethod?: boolean;
   search?: string;
 }
 
@@ -94,6 +95,14 @@ export class LeadsService {
         actorType: 'USER',
         actorId: actorUserId,
         ...dto,
+        // `socialLinks` chega tipado como `SocialLinkDto[]` (DTO) — precisa do
+        // mesmo cast pra `Prisma.InputJsonValue` que `scoreBreakdown` usa em
+        // `score()` abaixo antes de virar JSON no Prisma. `undefined` quando
+        // ausente é tratado pelo Prisma como "campo não informado", igual aos
+        // demais campos opcionais espalhados por `...dto` acima.
+        socialLinks: dto.socialLinks
+          ? (dto.socialLinks as unknown as Prisma.InputJsonValue)
+          : undefined,
       },
     });
 
@@ -120,6 +129,39 @@ export class LeadsService {
   }
 
   list(organizationId: string, filter: ListLeadsFilter): Promise<Lead[]> {
+    const searchOr = filter.search
+      ? [
+          { name: { contains: filter.search, mode: 'insensitive' as const } },
+          { rawContent: { contains: filter.search, mode: 'insensitive' as const } },
+        ]
+      : null;
+    // `hasContactMethod: true` — pelo menos um canal de contato utilizável.
+    // Nota: `socialLinks: []` (array vazio, mas explicitamente não-nulo)
+    // passa neste filtro mesmo sem contato real — edge case aceito e
+    // documentado (não vale a complexidade de uma query SQL crua só pra
+    // cobrir isso, ver Task 4 do plano).
+    const contactOr = filter.hasContactMethod
+      ? [
+          { phone: { not: null } },
+          { email: { not: null } },
+          { whatsapp: { not: null } },
+          { socialLinks: { not: Prisma.DbNull } },
+        ]
+      : null;
+    // `searchOr`/`contactOr` são dois grupos `OR` independentes — combinados
+    // num `AND` só quando ambos presentes, pra não colidir a mesma chave
+    // `OR` do objeto `where` (a segunda sobrescreveria silenciosamente a
+    // primeira). Quando só um dos dois está presente, mantém a forma
+    // original (chave `OR` de topo), sem introduzir `AND` à toa.
+    const orCombination =
+      searchOr && contactOr
+        ? { AND: [{ OR: searchOr }, { OR: contactOr }] }
+        : searchOr
+          ? { OR: searchOr }
+          : contactOr
+            ? { OR: contactOr }
+            : {};
+
     return this.prisma.lead.findMany({
       where: {
         organizationId,
@@ -130,14 +172,7 @@ export class LeadsService {
         ...(filter.state ? { state: { equals: filter.state, mode: 'insensitive' as const } } : {}),
         ...(filter.hasWebsite === true ? { website: { not: null } } : {}),
         ...(filter.hasWebsite === false ? { website: null } : {}),
-        ...(filter.search
-          ? {
-              OR: [
-                { name: { contains: filter.search, mode: 'insensitive' as const } },
-                { rawContent: { contains: filter.search, mode: 'insensitive' as const } },
-              ],
-            }
-          : {}),
+        ...orCombination,
       },
       orderBy: { discoveredAt: 'desc' },
     });
@@ -152,7 +187,16 @@ export class LeadsService {
     const lead = await this.findByIdOrThrow(organizationId, id);
     this.assertValidStatusUpdate(lead, dto);
 
-    const updated = await this.prisma.lead.update({ where: { id }, data: dto });
+    const updated = await this.prisma.lead.update({
+      where: { id },
+      data: {
+        ...dto,
+        // Mesmo racional do cast em `create()` acima.
+        socialLinks: dto.socialLinks
+          ? (dto.socialLinks as unknown as Prisma.InputJsonValue)
+          : undefined,
+      },
+    });
 
     await this.auditService.log({
       actorType: 'USER',
@@ -160,7 +204,11 @@ export class LeadsService {
       organizationId,
       action: 'lead.updated',
       resource: `Lead:${id}`,
-      metadata: { ...dto },
+      // `socialLinks?: SocialLinkDto[]` deixou de ser estruturalmente
+      // assinalável a `Prisma.InputJsonValue` (mesmo motivo do cast em
+      // `create()`/`update()` acima) — cast explícito, igual ao resto do
+      // arquivo.
+      metadata: { ...dto } as unknown as Prisma.InputJsonValue,
     });
 
     return updated;

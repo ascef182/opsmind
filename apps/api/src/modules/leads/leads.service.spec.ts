@@ -1,5 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@opsmind/database';
 import { LeadsService } from './leads.service';
+import type { SocialLinkDto } from './dto/social-link.dto';
 
 describe('LeadsService', () => {
   let service: LeadsService;
@@ -50,6 +52,33 @@ describe('LeadsService', () => {
         expect.objectContaining({ action: 'lead.created', resource: 'Lead:lead-1' }),
       );
       expect(result).toBe(created);
+    });
+
+    it('repassa socialLinks/whatsapp/contactName pro Prisma quando presentes no DTO', async () => {
+      const created = { id: 'lead-1', organizationId: 'org-1', name: 'Padaria Central' };
+      prisma.lead.create.mockResolvedValue(created);
+      const socialLinks: SocialLinkDto[] = [
+        { platform: 'INSTAGRAM', url: 'https://instagram.com/padaria' },
+      ];
+
+      await service.create(
+        'org-1',
+        { name: 'Padaria Central', whatsapp: '+5511900000000', contactName: 'Maria Silva', socialLinks },
+        'user-1',
+      );
+
+      expect(prisma.lead.create).toHaveBeenCalledWith({
+        data: {
+          organizationId: 'org-1',
+          sourceType: 'MANUAL',
+          actorType: 'USER',
+          actorId: 'user-1',
+          name: 'Padaria Central',
+          whatsapp: '+5511900000000',
+          contactName: 'Maria Silva',
+          socialLinks,
+        },
+      });
     });
   });
 
@@ -127,6 +156,32 @@ describe('LeadsService', () => {
       });
       expect(result).toBe(updated);
     });
+
+    it('repassa socialLinks/whatsapp/contactName pro Prisma quando presentes no DTO', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'QUALIFIED',
+        convertedCustomerId: null,
+      });
+      const updated = { id: 'lead-1' };
+      prisma.lead.update.mockResolvedValue(updated);
+      const socialLinks: SocialLinkDto[] = [
+        { platform: 'LINKEDIN', url: 'https://linkedin.com/company/padaria' },
+      ];
+
+      await service.update(
+        'org-1',
+        'lead-1',
+        { whatsapp: '+5511900000000', contactName: 'Maria Silva', socialLinks },
+        'user-1',
+      );
+
+      expect(prisma.lead.update).toHaveBeenCalledWith({
+        where: { id: 'lead-1' },
+        data: { whatsapp: '+5511900000000', contactName: 'Maria Silva', socialLinks },
+      });
+    });
   });
 
   describe('list', () => {
@@ -157,6 +212,65 @@ describe('LeadsService', () => {
             { rawContent: { contains: 'padaria', mode: 'insensitive' } },
           ],
         },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
+    it('hasContactMethod: true gera OR de phone/email/whatsapp/socialLinks quando sozinho', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { hasContactMethod: true });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          OR: [
+            { phone: { not: null } },
+            { email: { not: null } },
+            { whatsapp: { not: null } },
+            { socialLinks: { not: Prisma.DbNull } },
+          ],
+        },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
+    it('combina hasContactMethod com search via AND, sem colisão de chave OR', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { hasContactMethod: true, search: 'padaria' });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          AND: [
+            {
+              OR: [
+                { name: { contains: 'padaria', mode: 'insensitive' } },
+                { rawContent: { contains: 'padaria', mode: 'insensitive' } },
+              ],
+            },
+            {
+              OR: [
+                { phone: { not: null } },
+                { email: { not: null } },
+                { whatsapp: { not: null } },
+                { socialLinks: { not: Prisma.DbNull } },
+              ],
+            },
+          ],
+        },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
+    it('hasContactMethod ausente/false não adiciona cláusula de contato', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { hasContactMethod: false });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1' },
         orderBy: { discoveredAt: 'desc' },
       });
     });
