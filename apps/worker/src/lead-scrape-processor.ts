@@ -894,16 +894,20 @@ const AUTODRAFT_MAX_PER_ORG_PER_JOB = 10;
 
 /**
  * Resolve o canal de outreach do gatilho automático (B4/Task 11) por
- * prioridade fixa — WHATSAPP > INSTAGRAM_DM > LINKEDIN_DM > EMAIL, primeiro
- * campo preenchido — a partir do `Lead` já persistido (pós-`upsertLead`).
- * `null` quando nenhum dos quatro campos está preenchido (ex.: o lead só tem
- * `phone`, que sozinho não é um canal suportado por `OutreachService`) — o
- * chamador trata `null` como "sem canal elegível", nunca força um canal
- * fora desta lista.
+ * prioridade fixa — WHATSAPP > INSTAGRAM_DM > LINKEDIN_DM > EMAIL > PHONE,
+ * primeiro campo preenchido — a partir do `Lead` já persistido (pós-
+ * `upsertLead`). `PHONE` é a prioridade mais baixa (ruling pós-review,
+ * substitui a decisão original desta função): dado real de seed mostra
+ * bastante negócio só-com-telefone, que sem este tier nunca ganharia
+ * rascunho automático nenhum — `OutreachChannel` já suporta `PHONE`, então
+ * não há razão pra deixar esses leads de fora. `null` só quando NENHUM dos
+ * cinco campos está preenchido — o chamador trata `null` como "sem canal
+ * elegível", nunca força um canal fora desta lista.
  */
 function resolveAutodraftChannel(lead: {
   whatsapp: string | null;
   email: string | null;
+  phone: string | null;
   socialLinks: Prisma.JsonValue;
 }): OutreachChannel | null {
   if (lead.whatsapp) {
@@ -918,6 +922,9 @@ function resolveAutodraftChannel(lead: {
   }
   if (lead.email) {
     return 'EMAIL';
+  }
+  if (lead.phone) {
+    return 'PHONE';
   }
   return null;
 }

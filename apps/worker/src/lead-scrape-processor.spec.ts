@@ -888,6 +888,34 @@ describe('processLeadScrapeJob', () => {
       );
     });
 
+    it('lead qualifica só com phone (sem whatsapp/instagram/linkedin/email) → enfileira no canal PHONE (ruling pós-review)', async () => {
+      const tx = setupTx();
+      const prisma = buildPrisma();
+      setupQualifyingRun(tx, prisma);
+      tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        apifyCandidateNoWebsite({ phone: '+5519999999999' }),
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResult);
+      // Sem website (caminho primário não roda) e sem nada reconhecível no
+      // fallback Camoufox — nenhum whatsapp/socialLinks/email é descoberto,
+      // só `phone` (já trazido pela própria busca do Apify) sobra como canal.
+      gateways.camofox.search.mockResolvedValue([]);
+
+      const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData, enqueueAutodraft);
+
+      expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
+      expect(enqueueAutodraft).toHaveBeenCalledWith({
+        organizationId: 'org-1',
+        leadId: 'lead-place-autodraft',
+        channel: 'PHONE',
+        serviceOfferingId: 'offering-1',
+      });
+    });
+
     it('lead já tem OutreachMessage → nunca enfileira de novo', async () => {
       const tx = setupTx();
       const prisma = buildPrisma();
