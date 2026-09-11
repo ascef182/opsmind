@@ -74,6 +74,11 @@ describe('processLeadScrapeJob', () => {
       },
       organization: { findUniqueOrThrow: jest.fn() },
       auditLog: { create: jest.fn() },
+      // Usado pelo pré-fetch batched de `whatsapp`/`socialLinks` já
+      // existentes (Task 9, ver `prefetchExistingContactState`) — default
+      // "nenhum lead existente encontrado", testes que não são sobre esse
+      // pré-fetch não precisam mockar isto.
+      lead: { findMany: jest.fn().mockResolvedValue([]) },
     };
   }
 
@@ -593,6 +598,106 @@ describe('processLeadScrapeJob', () => {
       expect(gateways.contactEnrichment.scrapeContactInfo).not.toHaveBeenCalled();
       expect(gateways.camofox.search).not.toHaveBeenCalled();
       expect(tx.lead.upsert).toHaveBeenCalledTimes(1);
+      expect(tx.leadEnrichment.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ type: 'contact_enrichment' }) }),
+      );
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('(e) Lead já existente (mesmo placeId) já tem whatsapp/socialLinks → pré-fetch batched pula a descoberta, nenhuma chamada paga nova', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      prisma.lead.findMany.mockResolvedValue([
+        {
+          placeId: 'place-existente',
+          rawSnapshot: null,
+          name: 'Padaria Contato',
+          city: 'Campinas',
+          state: 'SP',
+          whatsapp: 'https://wa.me/5519900000000',
+          socialLinks: [{ platform: 'INSTAGRAM', url: 'https://instagram.com/padariacontato' }],
+        },
+      ]);
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-existente', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateWithWebsite({ placeId: 'place-existente' })]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      // Uma única query batched (nunca N) — filtra por organizationId e usa
+      // placeId como uma das estratégias de match do OR.
+      expect(prisma.lead.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.lead.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: 'org-1',
+            OR: expect.arrayContaining([{ placeId: { in: ['place-existente'] } }]),
+          }),
+        }),
+      );
+      expect(gateways.contactEnrichment.scrapeContactInfo).not.toHaveBeenCalled();
+      expect(gateways.contactEnrichment.lookupInstagramProfile).not.toHaveBeenCalled();
+      expect(gateways.camofox.search).not.toHaveBeenCalled();
+      // Só o `recordSpend` de custo do job (Apify base) — nenhum extra pela
+      // descoberta de contato, que nem chegou a rodar.
+      expect(recordSpend).toHaveBeenCalledTimes(1);
+      expect(tx.leadEnrichment.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ type: 'contact_enrichment' }) }),
+      );
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('(f) Lead já existente sem placeId (fonte Explorium) — casado pela mesma URL normalizada (_dedupUrl) — também pula a descoberta', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      const exploriumJob = { ...contactJob, sourceType: 'EXPLORIUM_BUSINESS_SEARCH' as const };
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(exploriumJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      prisma.lead.findMany.mockResolvedValue([
+        {
+          placeId: null,
+          rawSnapshot: { _dedupUrl: 'padariaexplorium.com.br' },
+          name: 'Padaria Explorium 2',
+          city: null,
+          state: null,
+          whatsapp: 'https://wa.me/5519900000001',
+          socialLinks: [{ platform: 'FACEBOOK', url: 'https://facebook.com/padariaexplorium2' }],
+        },
+      ]);
+      tx.scrapeJob.update.mockResolvedValue({ ...exploriumJob, status: 'COMPLETED' });
+      // Lead da Explorium não tem placeId — passa pelo caminho de dedup via
+      // findFirst (mock devolve null aqui, "não existe ainda" NA TX de
+      // persistência — o que importa pro pré-fetch é o findMany acima) + create.
+      tx.lead.create.mockImplementation((args: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-explorium-2', ...args.data }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.explorium.searchBusinesses.mockResolvedValue([
+        {
+          name: 'Padaria Explorium 2',
+          website: 'https://padariaexplorium.com.br',
+          industry: 'Alimentação',
+          employeeCount: 5,
+          revenueUsd: 100_000,
+          matchConfidence: 0.9,
+          raw: {},
+        },
+      ]);
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.contactEnrichment.scrapeContactInfo).not.toHaveBeenCalled();
+      expect(gateways.camofox.search).not.toHaveBeenCalled();
       expect(tx.leadEnrichment.create).not.toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ type: 'contact_enrichment' }) }),
       );

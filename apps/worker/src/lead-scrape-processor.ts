@@ -353,6 +353,12 @@ async function runPrimaryContactDiscovery(
   const scraped = await gateway.scrapeContactInfo(candidate.website);
   let costUsd: number = CONTACT_ENRICHMENT_COST_PER_CALL_USD.APIFY_CONTACT_ENRICHMENT;
 
+  // `scraped.phones` (números encontrados na página que NÃO foram
+  // reconhecidos como link de WhatsApp — só os que viram um `SocialLink`
+  // WHATSAPP em `scraped.socials`, checado logo abaixo, contam pra
+  // `whatsapp`) é descartado aqui de propósito: `Lead` não tem um campo
+  // "telefone achado via enrichment" distinto do `phone` já capturado no
+  // momento da busca (`RawCandidate.phone`) — não fabricamos um novo.
   let whatsapp = scraped.socials.find((s) => s.platform === 'WHATSAPP')?.url ?? null;
   const email = scraped.emails[0] ?? null;
   const instagramUrl = scraped.socials.find((s) => s.platform === 'INSTAGRAM')?.url ?? null;
@@ -557,6 +563,132 @@ export function normalizeUrlForDedup(rawUrl: string | null): string | null {
       .replace(/[?#].*$/, '')
       .replace(/\/$/, '');
   }
+}
+
+/**
+ * Chave de dedup de um candidato — MESMA prioridade de `upsertLead` abaixo
+ * (placeId → URL normalizada → nome+cidade+estado), usada tanto pra indexar
+ * o resultado do pré-fetch (`prefetchExistingContactState`) quanto pra
+ * consultar esse índice por candidato. Extraída aqui em vez de duplicada
+ * pra garantir que as duas pontas SEMPRE concordem sobre qual `Lead`
+ * existente corresponde a qual candidato — uma key computada com lógica
+ * divergente faria o pré-fetch nunca bater com nada (silenciosamente
+ * reintroduzindo o mesmo problema de custo que ele existe pra evitar).
+ */
+function candidateDedupKey(candidate: {
+  placeId: string | null;
+  url: string | null;
+  website: string | null;
+  name: string;
+  city: string | null;
+  state: string | null;
+}): string {
+  if (candidate.placeId) {
+    return `placeId:${candidate.placeId}`;
+  }
+  const dedupUrl = normalizeUrlForDedup(candidate.url ?? candidate.website ?? null);
+  if (dedupUrl) {
+    return `url:${dedupUrl}`;
+  }
+  return `name:${candidate.name.toLowerCase()}|${candidate.city ?? ''}|${candidate.state ?? ''}`;
+}
+
+function hasPopulatedSocialLinks(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+/** Estado de contato/redes de um `Lead` JÁ EXISTENTE (achado por `prefetchExistingContactState`). */
+interface ExistingContactState {
+  whatsapp: string | null;
+  socialLinks: unknown;
+}
+
+/**
+ * Pré-fetch BATCHED (uma única query, nunca N consultas dentro do loop da
+ * Fase 2) do estado de `whatsapp`/`socialLinks` de qualquer `Lead` JÁ
+ * EXISTENTE que corresponda a algum dos `candidates` desta passada —
+ * corrige um vazamento de orçamento real: sem isto, `discoverContactAndSocials`
+ * (ver mais abaixo) só teria como checar campos do `RawCandidate` recém-
+ * mapeado, que NUNCA vêm preenchidos por nenhuma das 3 fontes de busca — ou
+ * seja, a descoberta de contato re-rodaria (e re-gastaria orçamento) em TODO
+ * re-scan do mesmo negócio, mesmo quando o `Lead` já tem `whatsapp`/
+ * `socialLinks` de uma execução anterior. Isso é agravado pelo re-scan
+ * automático por cooldown da Task 7 (`ProspectingTarget`), que garante que
+ * exatamente esse cenário acontece de verdade em produção, não só em teoria.
+ *
+ * Lido via `prisma` direto (sem tx), mesmo padrão já usado no resto da Fase
+ * 2 (`scrapeJob.findFirstOrThrow`, `organization.findUniqueOrThrow`) — RLS
+ * permite (fallback "sem contexto = allow") e o filtro explícito de
+ * `organizationId` abaixo garante o isolamento de qualquer forma.
+ *
+ * Índice devolvido: `Map<candidateDedupKey, ExistingContactState>` — uma
+ * única query com `OR` de todas as três estratégias de match possíveis
+ * (placeId / URL normalizada via `_dedupUrl` / nome+cidade+estado), MESMA
+ * prioridade usada por `candidateDedupKey`/`upsertLead`.
+ */
+async function prefetchExistingContactState(
+  prisma: PrismaClient,
+  organizationId: string,
+  sourceType: ScrapeSourceType,
+  candidates: RawCandidate[],
+): Promise<Map<string, ExistingContactState>> {
+  const placeIds: string[] = [];
+  const dedupUrls = new Set<string>();
+  const nameCityStateCandidates: RawCandidate[] = [];
+
+  for (const candidate of candidates) {
+    if (candidate.placeId) {
+      placeIds.push(candidate.placeId);
+      continue;
+    }
+    const dedupUrl = normalizeUrlForDedup(candidate.url ?? candidate.website ?? null);
+    if (dedupUrl) {
+      dedupUrls.add(dedupUrl);
+    } else {
+      nameCityStateCandidates.push(candidate);
+    }
+  }
+
+  const orConditions: Prisma.LeadWhereInput[] = [];
+  if (placeIds.length > 0) {
+    orConditions.push({ placeId: { in: placeIds } });
+  }
+  for (const dedupUrl of dedupUrls) {
+    orConditions.push({ sourceType, rawSnapshot: { path: ['_dedupUrl'], equals: dedupUrl } });
+  }
+  for (const candidate of nameCityStateCandidates) {
+    orConditions.push({
+      sourceType,
+      name: { equals: candidate.name, mode: 'insensitive' },
+      city: candidate.city,
+      state: candidate.state,
+    });
+  }
+
+  if (orConditions.length === 0) {
+    return new Map();
+  }
+
+  const rows = await prisma.lead.findMany({
+    where: { organizationId, OR: orConditions },
+    select: { placeId: true, rawSnapshot: true, name: true, city: true, state: true, whatsapp: true, socialLinks: true },
+  });
+
+  const index = new Map<string, ExistingContactState>();
+  for (const row of rows) {
+    const state: ExistingContactState = { whatsapp: row.whatsapp, socialLinks: row.socialLinks };
+    if (row.placeId) {
+      index.set(`placeId:${row.placeId}`, state);
+      continue;
+    }
+    const dedupUrl = (row.rawSnapshot as Record<string, unknown> | null)?.['_dedupUrl'];
+    if (typeof dedupUrl === 'string') {
+      index.set(`url:${dedupUrl}`, state);
+      continue;
+    }
+    index.set(`name:${row.name.toLowerCase()}|${row.city ?? ''}|${row.state ?? ''}`, state);
+  }
+  return index;
 }
 
 function toOfferingIcp(o: {
@@ -829,6 +961,17 @@ export async function processLeadScrapeJob(
         ? rawCandidates.filter((c) => !c.website)
         : rawCandidates;
 
+    // Pré-fetch BATCHED (uma query só, nunca N) do estado de contato/redes
+    // de `Lead`s JÁ EXISTENTES — evita re-gastar orçamento em
+    // `discoverContactAndSocials` (mais abaixo) pra negócios que um re-scan
+    // anterior (ex.: cooldown da Task 7) já enriqueceu. Ver comentário de
+    // `prefetchExistingContactState` pro racional completo. Só faz sentido
+    // pra fontes estruturadas — Camoufox nunca passa por
+    // `discoverContactAndSocials` de qualquer forma (ver mais abaixo).
+    const existingContactState = isStructuredWebsiteSource
+      ? await prefetchExistingContactState(prisma, data.organizationId, scrapeJob.sourceType, candidates)
+      : new Map<string, ExistingContactState>();
+
     const enriched: EnrichedCandidate[] = [];
     for (const candidate of candidates) {
       // Ponto de partida: firmografia que a própria busca do gateway já
@@ -863,16 +1006,33 @@ export async function processLeadScrapeJob(
           // derruba o job inteiro; só este lead fica sem firmographics.
         }
       }
-      // Descoberta de contato/redes (Task 9) — só fontes estruturadas, e só
-      // quando o candidato ainda não tem `whatsapp`/`socialLinks` (nenhuma
-      // das três fontes de busca preenche isso na própria busca — ver
-      // `RawCandidate` — então esta condição é sempre verdadeira hoje, mas
-      // protege contra reprocessar a mesma descoberta duas vezes caso um
-      // gateway futuro passe a trazer isso já na busca). Mesmo padrão de
-      // resiliência do bloco de firmografia acima: try/catch por lead,
-      // nunca derruba o job inteiro.
+      // Descoberta de contato/redes (Task 9) — só fontes estruturadas.
+      // Camoufox NUNCA passa por aqui: não é uma "fonte estruturada" (não
+      // tem `website`/`placeId` confiáveis o bastante pra raspar contato
+      // contra), exatamente como o resto do enrichment de firmografia acima
+      // já trata — intencional, não uma lacuna.
+      //
+      // `!candidate.whatsapp && !candidate.socialLinks` sozinho NUNCA seria
+      // suficiente pra evitar re-gastar orçamento num re-scan: nenhuma das
+      // três fontes de busca preenche esses campos no `RawCandidate` recém-
+      // mapeado (são sempre `null` aqui, mesmo pra um negócio já enriquecido
+      // antes) — por isso o `!existingContactState.get(...)` abaixo, que
+      // consulta o `Lead` JÁ EXISTENTE (pré-fetch batched logo acima do
+      // loop) é a checagem que de fato importa pra custo; a checagem do
+      // candidato continua como proteção adicional caso um gateway futuro
+      // passe a trazer isso já na busca.
       let contactEnrichment: ContactEnrichmentResult | null = null;
-      if (STRUCTURED_WEBSITE_SOURCES.has(scrapeJob.sourceType) && !candidate.whatsapp && !candidate.socialLinks) {
+      const existingForCandidate = existingContactState.get(candidateDedupKey(candidate));
+      const alreadyHasContactData =
+        !!existingForCandidate &&
+        !!existingForCandidate.whatsapp &&
+        hasPopulatedSocialLinks(existingForCandidate.socialLinks);
+      if (
+        STRUCTURED_WEBSITE_SOURCES.has(scrapeJob.sourceType) &&
+        !candidate.whatsapp &&
+        !candidate.socialLinks &&
+        !alreadyHasContactData
+      ) {
         try {
           contactEnrichment = await discoverContactAndSocials(
             candidate,
