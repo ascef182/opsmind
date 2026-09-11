@@ -21,6 +21,9 @@ function buildPrisma() {
       create: jest.fn(),
       update: jest.fn(),
     },
+    aIRequest: {
+      create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }),
+    },
   };
 }
 
@@ -146,6 +149,21 @@ describe('RedditClusteringConsumer', () => {
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({ actorType: 'AI', action: 'market_opportunity.clustering_run' }),
     );
+    expect(prisma.aIRequest.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org-1',
+        userId: null,
+        actorType: 'AI',
+        actorId: null,
+        model: 'claude-opus-5',
+        inputTokens: 100,
+        outputTokens: 50,
+        latencyMs: expect.any(Number),
+        estimatedCost: expect.any(Number),
+        status: 'SUCCESS',
+        errorMessage: undefined,
+      },
+    });
   });
 
   it('cluster com distinctAuthorCount < 10 (mesmo com mentionCount alto, um autor só) não cria nada', async () => {
@@ -176,6 +194,11 @@ describe('RedditClusteringConsumer', () => {
     expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
     // Gasto real com a IA ainda é registrado — a chamada aconteceu.
     expect(budgetService.recordSpend).toHaveBeenCalledWith('org-1', expect.any(Number));
+    // A chamada à IA teve sucesso (só o parse do JSON falhou depois) — o
+    // AIRequest gravado reflete isso: SUCCESS, não ERROR.
+    expect(prisma.aIRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'SUCCESS' }) }),
+    );
   });
 
   it('registro PURSUING existente não é sobrescrito por um novo resultado do mesmo topicKey', async () => {
@@ -251,7 +274,7 @@ describe('RedditClusteringConsumer', () => {
     expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
   });
 
-  it('orçamento estourado pula sem chamar a IA', async () => {
+  it('orçamento estourado pula sem chamar a IA, mas persiste um AIRequest BUDGET_EXCEEDED', async () => {
     const { gateway, prisma, auditService } = buildConsumer({
       organizationsService: buildOrganizationsService(10),
       budgetService: buildBudgetService(true),
@@ -263,6 +286,47 @@ describe('RedditClusteringConsumer', () => {
     expect(gateway.sendMessage).not.toHaveBeenCalled();
     expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
     expect(auditService.log).not.toHaveBeenCalled();
+    expect(prisma.aIRequest.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org-1',
+        userId: null,
+        actorType: 'AI',
+        actorId: null,
+        model: 'claude-opus-5',
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs: 0,
+        estimatedCost: 0,
+        status: 'BUDGET_EXCEEDED',
+        errorMessage: undefined,
+      },
+    });
+  });
+
+  it('erro na chamada à IA persiste um AIRequest ERROR e relança (deixa o BullMQ retentar)', async () => {
+    const gatewayError = new Error('Falha de rede ao chamar o gateway de IA');
+    const gateway = { sendMessage: jest.fn().mockRejectedValue(gatewayError) };
+    const { prisma } = buildConsumer({ gateway });
+
+    const processor = getRegisteredProcessor();
+
+    await expect(processor({ data: jobData })).rejects.toThrow('Falha de rede ao chamar o gateway de IA');
+    expect(prisma.aIRequest.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org-1',
+        userId: null,
+        actorType: 'AI',
+        actorId: null,
+        model: 'claude-opus-5',
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs: expect.any(Number),
+        estimatedCost: 0,
+        status: 'ERROR',
+        errorMessage: 'Falha de rede ao chamar o gateway de IA',
+      },
+    });
+    expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
   });
 
   it('onModuleDestroy fecha o Worker e desconecta o Redis', async () => {
