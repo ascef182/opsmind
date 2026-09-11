@@ -6,8 +6,32 @@ jest.mock('./budget', () => ({
   recordSpend: jest.fn(),
 }));
 
-import { processLeadScrapeJob, normalizeUrlForDedup } from './lead-scrape-processor';
+import {
+  processLeadScrapeJob,
+  normalizeUrlForDedup,
+  extractWhatsappPhone,
+} from './lead-scrape-processor';
 import { isOverBudget, recordSpend } from './budget';
+
+describe('extractWhatsappPhone', () => {
+  it('extrai os dígitos de um link wa.me', () => {
+    expect(extractWhatsappPhone('https://wa.me/5519912345678')).toBe('5519912345678');
+    expect(extractWhatsappPhone('https://wa.me/+55 19 91234-5678')).toBe('5519912345678');
+  });
+
+  it('extrai o parâmetro `phone` de um link api.whatsapp.com/send', () => {
+    expect(
+      extractWhatsappPhone('https://api.whatsapp.com/send?phone=5519912345678&text=Ol%C3%A1'),
+    ).toBe('5519912345678');
+  });
+
+  it('devolve null para link sem telefone reconhecível, domínio de outra rede, lixo ou null', () => {
+    expect(extractWhatsappPhone('https://wa.me/message/ABCDEF')).toBeNull();
+    expect(extractWhatsappPhone('https://instagram.com/fulano')).toBeNull();
+    expect(extractWhatsappPhone('não é uma url')).toBeNull();
+    expect(extractWhatsappPhone(null)).toBeNull();
+  });
+});
 
 describe('normalizeUrlForDedup', () => {
   it('normaliza protocolo, "www.", querystring/fragment e barra final como equivalentes', () => {
@@ -191,7 +215,10 @@ describe('processLeadScrapeJob', () => {
         data: expect.objectContaining({ status: 'COMPLETED', leadsFound: 1 }),
       }),
     );
-    expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', expect.any(Number));
+    // 1 lead × SCRAPING_COST_PER_LEAD_USD.APIFY_GOOGLE_MAPS — a constante
+    // soma scrape base (0,004) + place details (0,002), as duas parcelas que
+    // o pipeline usa por lead (valor casado com o comentário da constante).
+    expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', 0.006);
     expect(result.status).toBe('COMPLETED');
   });
 
@@ -472,7 +499,9 @@ describe('processLeadScrapeJob', () => {
       expect(tx.lead.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           create: expect.objectContaining({
-            whatsapp: 'https://wa.me/5519912345678',
+            // `whatsapp` guarda SÓ o número (ver `extractWhatsappPhone`); o
+            // link completo continua em `socialLinks`.
+            whatsapp: '5519912345678',
             email: 'contato@padariacontato.com.br',
             socialLinks: expect.arrayContaining([
               { platform: 'WHATSAPP', url: 'https://wa.me/5519912345678' },
@@ -496,7 +525,7 @@ describe('processLeadScrapeJob', () => {
       expect(result.status).toBe('COMPLETED');
     });
 
-    it('(b) caminho primário falha → cai no fallback Camoufox, LeadEnrichment{source:"camoufox_fallback"} e wa.me popula whatsapp direto', async () => {
+    it('(b) caminho primário falha → cai no fallback Camoufox, LeadEnrichment{source:"camoufox_fallback"} e o wa.me vira número em whatsapp + link em socialLinks', async () => {
       const tx = setupTx();
       (isOverBudget as jest.Mock).mockResolvedValue(false);
       const prisma = buildPrisma();
@@ -528,7 +557,7 @@ describe('processLeadScrapeJob', () => {
       expect(tx.lead.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           create: expect.objectContaining({
-            whatsapp: 'https://wa.me/5519912345678',
+            whatsapp: '5519912345678',
             socialLinks: expect.arrayContaining([
               { platform: 'INSTAGRAM', url: 'https://instagram.com/padariacontato' },
               { platform: 'WHATSAPP', url: 'https://wa.me/5519912345678' },
@@ -708,6 +737,140 @@ describe('processLeadScrapeJob', () => {
         expect.objectContaining({ data: expect.objectContaining({ type: 'contact_enrichment' }) }),
       );
       expect(result.status).toBe('COMPLETED');
+    });
+
+    it('(g) Lead já existente com socialLinks mas SEM whatsapp → também pula (semântica OU, não E): nenhum gasto novo', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      // Caso dominante do fallback Camoufox: acha perfis sociais mas nenhum
+      // link wa.me, então `whatsapp` fica null. Com a condição antiga (`&&`)
+      // este lead seria re-enriquecido — e re-cobrado — em TODO re-scan por
+      // cooldown do `ProspectingTarget`.
+      prisma.lead.findMany.mockResolvedValue([
+        {
+          placeId: 'place-so-socials',
+          rawSnapshot: null,
+          name: 'Padaria Contato',
+          city: 'Campinas',
+          state: 'SP',
+          whatsapp: null,
+          socialLinks: [{ platform: 'INSTAGRAM', url: 'https://instagram.com/padariacontato' }],
+        },
+      ]);
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-so-socials', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        apifyCandidateWithWebsite({ placeId: 'place-so-socials' }),
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.contactEnrichment.scrapeContactInfo).not.toHaveBeenCalled();
+      expect(gateways.contactEnrichment.lookupInstagramProfile).not.toHaveBeenCalled();
+      expect(gateways.camofox.search).not.toHaveBeenCalled();
+      // Só o `recordSpend` do custo do job em si — nada da descoberta de contato.
+      expect(recordSpend).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('(h) Lead já existente só com whatsapp (socialLinks vazio) → também pula, pelo mesmo OU', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      prisma.lead.findMany.mockResolvedValue([
+        {
+          placeId: 'place-so-whats',
+          rawSnapshot: null,
+          name: 'Padaria Contato',
+          city: 'Campinas',
+          state: 'SP',
+          whatsapp: '5519900000000',
+          socialLinks: [],
+        },
+      ]);
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-so-whats', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        apifyCandidateWithWebsite({ placeId: 'place-so-whats' }),
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.contactEnrichment.scrapeContactInfo).not.toHaveBeenCalled();
+      expect(gateways.camofox.search).not.toHaveBeenCalled();
+      expect(recordSpend).toHaveBeenCalledTimes(1);
+    });
+
+    it('(i) URL de esquema inseguro vinda do actor NUNCA é gravada em socialLinks (XSS armazenado)', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-xss', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateWithWebsite({ placeId: 'place-xss' })]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      gateways.contactEnrichment.scrapeContactInfo.mockResolvedValue({
+        emails: [],
+        phones: [],
+        socials: [
+          { platform: 'INSTAGRAM', url: 'javascript:alert(1)//instagram.com' },
+          { platform: 'FACEBOOK', url: 'https://facebook.com/legitima' },
+        ],
+      });
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      const createArg = tx.lead.upsert.mock.calls[0][0].create as Record<string, unknown>;
+      expect(createArg.socialLinks).toEqual([{ platform: 'FACEBOOK', url: 'https://facebook.com/legitima' }]);
+    });
+
+    it('(j) fallback Camoufox: URL com esquema inseguro que casa por substring não vira socialLink', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-xss-fallback', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        apifyCandidateWithWebsite({ website: null, placeId: 'place-xss-fb' }),
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      gateways.camofox.search.mockResolvedValue([
+        // Casaria com /instagram\\.com/i (match por substring, não ancorado).
+        { title: 'Falso Instagram', url: 'javascript:alert(1)//instagram.com', textContent: null, raw: {} },
+        { title: 'Facebook', url: 'https://facebook.com/legitima', textContent: null, raw: {} },
+      ]);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      const createArg = tx.lead.upsert.mock.calls[0][0].create as Record<string, unknown>;
+      expect(createArg.socialLinks).toEqual([{ platform: 'FACEBOOK', url: 'https://facebook.com/legitima' }]);
     });
 
     it('fallback Camoufox: dedup por platform e cap em 6 socialLinks', async () => {

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
+import { isSafeHttpUrl } from '@opsmind/shared-types';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useMarketOpportunities, useUpdateMarketOpportunityStatus } from '@/lib/market-opportunities/use-market-opportunities';
 import {
@@ -50,6 +51,14 @@ function OpportunityCard({
   // MarketOpportunitiesService) — a UI é quem modela o fluxo natural:
   // NEW é o único estado que oferece "Iniciar revisão"; NEW e REVIEWING
   // oferecem "Perseguir"/"Descartar"; PURSUING/DISMISSED são terminais aqui.
+  // SEGURANÇA: `sourceUrls` é a IA ecoando URLs de posts raspados do Reddit —
+  // conteúdo de terceiro, gravado pelo consumer de clustering. A ingestão já
+  // descarta o que não for http/https, mas a checagem é repetida aqui, no
+  // render, como defesa em profundidade (linhas gravadas antes desta correção
+  // continuam no banco, e um `href="javascript:..."` é XSS armazenado). URL
+  // insegura simplesmente não vira link.
+  const safeSourceUrls = opportunity.sourceUrls.filter(isSafeHttpUrl);
+
   const showStartReview = opportunity.status === 'NEW';
   const showPursueOrDismiss = opportunity.status === 'NEW' || opportunity.status === 'REVIEWING';
 
@@ -92,11 +101,13 @@ function OpportunityCard({
         </div>
       )}
 
-      {opportunity.sourceUrls.length > 0 && (
+      {safeSourceUrls.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
-          {opportunity.sourceUrls.map((url) => (
+          {safeSourceUrls.map((url, index) => (
+            // `key` inclui o índice: `sourceUrls` vem da IA e pode repetir a
+            // mesma URL no mesmo cluster — a URL sozinha não é chave única.
             <a
-              key={url}
+              key={`${url}-${index}`}
               href={url}
               target="_blank"
               rel="noopener noreferrer"

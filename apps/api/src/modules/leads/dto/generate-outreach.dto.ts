@@ -7,6 +7,7 @@ const OUTREACH_CHANNELS: OutreachChannel[] = [
   'WHATSAPP',
   'LINKEDIN_DM',
   'REDDIT_DM',
+  'INSTAGRAM_DM',
   'OTHER',
 ];
 

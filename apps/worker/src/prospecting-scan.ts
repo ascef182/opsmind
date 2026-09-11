@@ -55,23 +55,29 @@ export async function scanProspectingTargets(
     try {
       const alreadyCreatedForOrg = createdThisTickByOrg.get(target.organizationId) ?? 0;
 
-      // Cooldown: pula se já existe um ScrapeJob COMPLETED equivalente
-      // (mesma organização/cidade/estado/tipo de negócio/fonte) criado
-      // dentro da janela de `cooldownDays` DESTE target (não uma constante
-      // global — cada target define seu próprio ritmo de re-scan).
+      // Cooldown: pula se já existe um ScrapeJob equivalente (mesma
+      // organização/cidade/estado/tipo de negócio/fonte) criado dentro da
+      // janela de `cooldownDays` DESTE target (não uma constante global —
+      // cada target define seu próprio ritmo de re-scan).
+      //
+      // Status que suprimem: COMPLETED (já coberto) + QUEUED/RUNNING (job
+      // equivalente ainda em voo — criar outro duplicaria o trabalho e o
+      // gasto a cada tick até o primeiro terminar). FAILED deliberadamente
+      // NÃO suprime: um job que falhou não cobriu nada, então o próximo tick
+      // deve poder tentar de novo.
       const cooldownCutoff = new Date(Date.now() - target.cooldownDays * 86_400_000);
-      const recentCompletedJob = await prisma.scrapeJob.findFirst({
+      const recentJob = await prisma.scrapeJob.findFirst({
         where: {
           organizationId: target.organizationId,
           city: target.city,
           state: target.state,
           businessType: target.businessType,
           sourceType: target.sourceType,
-          status: 'COMPLETED',
+          status: { in: ['COMPLETED', 'QUEUED', 'RUNNING'] },
           createdAt: { gt: cooldownCutoff },
         },
       });
-      if (recentCompletedJob) {
+      if (recentJob) {
         continue;
       }
 

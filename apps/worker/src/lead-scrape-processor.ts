@@ -2,6 +2,7 @@ import type { PrismaClient, Prisma, ScrapeJob, ScrapeSourceType, Lead, LeadStatu
 import type { LeadScrapeJobData, OutreachAutodraftJobData, OutreachChannel } from '@opsmind/shared-types';
 import {
   scoreLead,
+  isSafeHttpUrl,
   QUALIFICATION_THRESHOLD,
   type LeadScoringInput,
   type ServiceOfferingIcp,
@@ -35,11 +36,15 @@ export interface LeadScrapeGateways {
  * corte de orçamento (nunca para faturamento real; não é o custo exato
  * cobrado por cada provedor, é uma ordem de grandeza documentada aqui pra
  * ser fácil de corrigir depois com números reais):
- *   - Apify (plano Free): US$0,004/lead — scrape base ($0.004) + place details
- *     ($0.002/lead). CRÍTICO: Os add-ons de enrichment da Apify (company
- *     contacts, social profiles, emails) custam ~US$0,10/lead (25x mais) e
- *     NUNCA devem ser usados pelo pipeline automático — causariam esgotamento
- *     de orçamento incontrolável. Use apenas scrape base + place details.
+ *   - Apify (plano Free): US$0,006/lead — scrape base (US$0,004/lead) + place
+ *     details (US$0,002/lead), os DOIS passos que o pipeline automático usa
+ *     por lead, então a constante soma os dois (a Task 1 enumerou as duas
+ *     parcelas mas gravou só a primeira — corrigido aqui; subestimar custo
+ *     faz a organização gastar acima do teto que configurou).
+ *     CRÍTICO: Os add-ons de enrichment da Apify (company contacts, social
+ *     profiles, emails) custam ~US$0,10/lead (17x mais) e NUNCA devem ser
+ *     usados pelo pipeline automático — causariam esgotamento de orçamento
+ *     incontrolável. Use apenas scrape base + place details.
  *   - Explorium: ~US$0,05/resultado — API B2B de firmografia, tipicamente
  *     mais cara que scraping simples (é dado enriquecido, não só raspagem).
  *     Usado tanto para a busca quanto (embutido no mesmo número) para a
@@ -50,7 +55,7 @@ export interface LeadScrapeGateways {
  *   - MANUAL: 0 — nunca gera custo (nem chega a rodar, ver registry abaixo).
  */
 const SCRAPING_COST_PER_LEAD_USD: Record<ScrapeSourceType, number> = {
-  APIFY_GOOGLE_MAPS: 0.004,
+  APIFY_GOOGLE_MAPS: 0.006,
   EXPLORIUM_BUSINESS_SEARCH: 0.05,
   CAMOFOX_GOOGLE_SEARCH: 0.001,
   CAMOFOX_REDDIT_SEARCH: 0.001,
@@ -294,8 +299,8 @@ interface EnrichedCandidate {
  * Camoufox (`runCamofoxFallback`) pra classificar cada URL de resultado de
  * busca — mesma lista de domínios do brief da Task 9. `wa.me`/
  * `api.whatsapp.com` mapeiam pra `WHATSAPP` (não é bem uma "rede social",
- * mas é o mesmo mecanismo de classificação por domínio, e o valor
- * encontrado aqui é o que popula `Lead.whatsapp` diretamente).
+ * mas é o mesmo mecanismo de classificação por domínio, e é desse link que
+ * sai o número que popula `Lead.whatsapp` — ver `extractWhatsappPhone`).
  */
 const KNOWN_SOCIAL_DOMAINS: ReadonlyArray<{ pattern: RegExp; platform: SocialPlatform }> = [
   { pattern: /instagram\.com/i, platform: 'INSTAGRAM' },
@@ -307,13 +312,71 @@ const KNOWN_SOCIAL_DOMAINS: ReadonlyArray<{ pattern: RegExp; platform: SocialPla
   { pattern: /youtube\.com/i, platform: 'YOUTUBE' },
 ];
 
+/**
+ * `null` para qualquer URL que não seja http/https — o `isSafeHttpUrl` aqui
+ * NÃO é redundante com o `KNOWN_SOCIAL_DOMAINS` abaixo: os padrões são
+ * substring não-ancorada, então `javascript:alert(1)//instagram.com` casaria
+ * como INSTAGRAM e a URL seria persistida em `Lead.socialLinks`, virando
+ * `href` no frontend (XSS armazenado). O corte de esquema vem primeiro,
+ * sempre.
+ */
 function classifySocialUrl(url: string): SocialPlatform | null {
+  if (!isSafeHttpUrl(url)) {
+    return null;
+  }
   for (const { pattern, platform } of KNOWN_SOCIAL_DOMAINS) {
     if (pattern.test(url)) {
       return platform;
     }
   }
   return null;
+}
+
+/** Mínimo de dígitos pra um valor extraído ser aceito como telefone (evita gravar `wa.me/message/AB12` como "12"). */
+const MIN_WHATSAPP_PHONE_DIGITS = 8;
+
+/**
+ * Extrai SÓ os dígitos do telefone de um link de WhatsApp (`wa.me/<digits>`
+ * ou `api.whatsapp.com/send?phone=<digits>&text=...`), ou `null` quando o
+ * link não é reconhecível como um desses formatos.
+ *
+ * Existe porque `Lead.whatsapp` é documentado (schema.prisma) e consumido
+ * (`OutreachService`, que injeta "Contato WhatsApp: <valor>" no prompt; a
+ * coluna "WhatsApp" da tabela de leads; `@MaxLength(40)` do
+ * `CreateLeadDto`) como NÚMERO, não como URL — o link completo continua
+ * sendo guardado, mas em `socialLinks` como entrada de plataforma WHATSAPP.
+ * Função pura e exportada só para ser testável direto.
+ */
+export function extractWhatsappPhone(rawUrl: string | null): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+
+  let candidate: string | null = null;
+  if (host === 'wa.me') {
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const lastSegment = segments[segments.length - 1] ?? null;
+    // `pathname` vem percent-encoded (`+55 19...` → `+55%2019...`) — sem
+    // decodificar, o "20" do `%20` entraria no número. `searchParams.get`
+    // (ramo abaixo) já decodifica sozinho.
+    try {
+      candidate = lastSegment !== null ? decodeURIComponent(lastSegment) : null;
+    } catch {
+      candidate = lastSegment;
+    }
+  } else if (host === 'api.whatsapp.com' || host === 'web.whatsapp.com') {
+    candidate = parsed.searchParams.get('phone');
+  }
+
+  const digits = (candidate ?? '').replace(/\D/g, '');
+  return digits.length >= MIN_WHATSAPP_PHONE_DIGITS ? digits : null;
 }
 
 // "dedup por platform, cap em 6 entradas" — brief da Task 9.
@@ -359,9 +422,16 @@ async function runPrimaryContactDiscovery(
   // `whatsapp`) é descartado aqui de propósito: `Lead` não tem um campo
   // "telefone achado via enrichment" distinto do `phone` já capturado no
   // momento da busca (`RawCandidate.phone`) — não fabricamos um novo.
-  let whatsapp = scraped.socials.find((s) => s.platform === 'WHATSAPP')?.url ?? null;
+  // Filtro de esquema ANTES de qualquer uso: `scraped.socials` vem de um
+  // actor raspando o site do próprio negócio — conteúdo 100% controlado por
+  // quem publica aquela página — e essas URLs acabam num `href` do frontend.
+  // Qualquer coisa que não seja http/https (javascript:, data:, ...) é
+  // descartada aqui, na ingestão, e não só no render.
+  const safeSocials = scraped.socials.filter((s) => isSafeHttpUrl(s.url));
+
+  let whatsappLink = safeSocials.find((s) => s.platform === 'WHATSAPP')?.url ?? null;
   const email = scraped.emails[0] ?? null;
-  const instagramUrl = scraped.socials.find((s) => s.platform === 'INSTAGRAM')?.url ?? null;
+  const instagramUrl = safeSocials.find((s) => s.platform === 'INSTAGRAM')?.url ?? null;
   const instagramHandle = instagramUrl ? extractInstagramHandle(instagramUrl) : null;
 
   let instagramProfile: InstagramProfileResult | null = null;
@@ -376,28 +446,38 @@ async function runPrimaryContactDiscovery(
       instagramProfile = null;
     }
   }
-  if (instagramProfile?.whatsappLink) {
-    whatsapp = instagramProfile.whatsappLink;
+  if (instagramProfile?.whatsappLink && isSafeHttpUrl(instagramProfile.whatsappLink)) {
+    whatsappLink = instagramProfile.whatsappLink;
   }
   const resolvedEmail = email ?? instagramProfile?.email ?? null;
 
-  if (!whatsapp && !resolvedEmail && scraped.socials.length === 0) {
+  // `Lead.whatsapp` é um NÚMERO (ver `extractWhatsappPhone`); o link completo
+  // continua preservado, mas em `socialLinks` como entrada WHATSAPP — os dois
+  // sempre, nunca um ou outro. O link achado no perfil do Instagram
+  // (`whatsappLink`) pode não estar em `scraped.socials`, daí o push abaixo.
+  const whatsappPhone = extractWhatsappPhone(whatsappLink);
+  const socialLinks: SocialLink[] = [...safeSocials];
+  if (whatsappLink && !socialLinks.some((s) => s.url === whatsappLink)) {
+    socialLinks.push({ platform: 'WHATSAPP', url: whatsappLink });
+  }
+
+  if (!whatsappPhone && !resolvedEmail && socialLinks.length === 0) {
     return null; // nada de novo — cai pro fallback
   }
 
-  if (whatsapp) {
-    candidate.whatsapp = whatsapp;
+  if (whatsappPhone) {
+    candidate.whatsapp = whatsappPhone;
   }
   if (resolvedEmail) {
     candidate.email = resolvedEmail;
   }
-  if (scraped.socials.length > 0) {
-    candidate.socialLinks = scraped.socials;
+  if (socialLinks.length > 0) {
+    candidate.socialLinks = socialLinks;
   }
 
   return {
     costUsd,
-    data: { emails: scraped.emails, phones: scraped.phones, socials: scraped.socials, instagramProfile },
+    data: { emails: scraped.emails, phones: scraped.phones, socials: socialLinks, instagramProfile },
   };
 }
 
@@ -408,9 +488,11 @@ async function runPrimaryContactDiscovery(
  * Mesma lógica já desenhada no brief: busca
  * `"{name}" {city} instagram OR facebook OR linkedin OR tiktok` via
  * `camofox.search`, classifica cada URL por domínio conhecido
- * (`classifySocialUrl`), dedup por platform, cap em
- * `CONTACT_FALLBACK_MAX_SOCIAL_LINKS`. Um link `wa.me`/`api.whatsapp.com`
- * encontrado aqui populariza `whatsapp` DIRETAMENTE (não só `socialLinks`).
+ * (`classifySocialUrl`, que já descarta o que não for http/https), dedup por
+ * platform, cap em `CONTACT_FALLBACK_MAX_SOCIAL_LINKS`. Um link `wa.me`/
+ * `api.whatsapp.com` encontrado aqui popula as DUAS pontas: o link completo
+ * em `socialLinks` e só os dígitos do telefone em `whatsapp`
+ * (`extractWhatsappPhone`).
  *
  * MUTA `candidate` diretamente quando encontra algo. Devolve `null` (nunca
  * lança pro chamador tratar — mas também não precisa, o chamador já embrulha
@@ -435,7 +517,9 @@ async function runCamofoxFallback(
     seenPlatforms.add(platform);
     socialLinks.push({ platform, url: result.url });
     if (platform === 'WHATSAPP') {
-      whatsapp = result.url;
+      // Só o número em `whatsapp` (ver `extractWhatsappPhone`); o link
+      // completo já foi guardado em `socialLinks` na linha acima.
+      whatsapp = extractWhatsappPhone(result.url);
     }
     if (socialLinks.length >= CONTACT_FALLBACK_MAX_SOCIAL_LINKS) {
       break;
@@ -1086,10 +1170,17 @@ export async function processLeadScrapeJob(
       // passe a trazer isso já na busca.
       let contactEnrichment: ContactEnrichmentResult | null = null;
       const existingForCandidate = existingContactState.get(candidateDedupKey(candidate));
+      // Semântica OU, nunca E: QUALQUER dado de contato já descoberto
+      // significa "já tentamos enriquecer este negócio, não gaste de novo".
+      // Exigir os DOIS campos vazava orçamento de verdade — o caminho de
+      // fallback (Camoufox), que é o dominante hoje (`onlyWithoutWebsite`
+      // default `true`), tipicamente preenche `socialLinks` SEM achar nenhum
+      // link `wa.me`, deixando `whatsapp` null; com `&&` esses leads eram
+      // re-enriquecidos (e re-cobrados) a cada re-scan por cooldown do
+      // `ProspectingTarget` (Task 7), para sempre.
       const alreadyHasContactData =
         !!existingForCandidate &&
-        !!existingForCandidate.whatsapp &&
-        hasPopulatedSocialLinks(existingForCandidate.socialLinks);
+        (!!existingForCandidate.whatsapp || hasPopulatedSocialLinks(existingForCandidate.socialLinks));
       if (
         STRUCTURED_WEBSITE_SOURCES.has(scrapeJob.sourceType) &&
         !candidate.whatsapp &&

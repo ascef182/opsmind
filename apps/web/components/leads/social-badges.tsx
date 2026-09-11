@@ -1,4 +1,5 @@
 import { AtSign, Briefcase, Camera, Link2, MessageCircle, Music2, Share2, Video } from 'lucide-react';
+import { isSafeHttpUrl } from '@opsmind/shared-types';
 import type { SocialLink, SocialPlatform } from '@/lib/leads/types';
 
 // A versão de `lucide-react` instalada neste repo (^1.40.0) não tem mais os
@@ -35,6 +36,14 @@ const MAX_VISIBLE = 3;
 // de um link que abre em nova aba. Sem crash e com fallback discreto quando
 // `links` é null/vazio — mesmo padrão de `Field`'s `value ?? '—'` em
 // [leadId]/page.tsx.
+//
+// SEGURANÇA: `Lead.socialLinks` é escrito direto no Prisma pelo `apps/worker`
+// a partir de raspagem de sites de terceiros — não passa por nenhum DTO da
+// API. A ingestão já descarta o que não for http/https
+// (`lead-scrape-processor.ts`), mas a checagem é repetida aqui, no render,
+// como defesa em profundidade: qualquer linha gravada ANTES desta correção
+// ainda pode ter um `javascript:`/`data:` no banco, e um `href` desses é XSS
+// armazenado no clique. Link inseguro vira ícone NÃO clicável, nunca `<a>`.
 export function SocialBadges({ links }: { links: SocialLink[] | null }) {
   if (!links || links.length === 0) {
     return <span className="text-muted-foreground">—</span>;
@@ -48,6 +57,18 @@ export function SocialBadges({ links }: { links: SocialLink[] | null }) {
       {visible.map((link, index) => {
         const Icon = PLATFORM_ICONS[link.platform] ?? Link2;
         const label = PLATFORM_LABELS[link.platform] ?? link.platform;
+        if (!isSafeHttpUrl(link.url)) {
+          return (
+            <span
+              key={`${link.platform}-${index}`}
+              title={`${label} — link inseguro, não clicável`}
+              aria-label={`${label} — link inseguro, não clicável`}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-ink-800 text-muted-foreground/50"
+            >
+              <Icon className="h-3.5 w-3.5" />
+            </span>
+          );
+        }
         return (
           <a
             key={`${link.platform}-${index}`}

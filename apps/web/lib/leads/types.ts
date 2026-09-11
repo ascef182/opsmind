@@ -52,7 +52,14 @@ export type LeadStatus =
   | 'CONVERTED'
   | 'LOST';
 
-export type OutreachChannel = 'EMAIL' | 'PHONE' | 'WHATSAPP' | 'LINKEDIN_DM' | 'REDDIT_DM' | 'OTHER';
+export type OutreachChannel =
+  | 'EMAIL'
+  | 'PHONE'
+  | 'WHATSAPP'
+  | 'LINKEDIN_DM'
+  | 'REDDIT_DM'
+  | 'INSTAGRAM_DM'
+  | 'OTHER';
 
 export const OUTREACH_CHANNELS: OutreachChannel[] = [
   'EMAIL',
@@ -60,6 +67,7 @@ export const OUTREACH_CHANNELS: OutreachChannel[] = [
   'WHATSAPP',
   'LINKEDIN_DM',
   'REDDIT_DM',
+  'INSTAGRAM_DM',
   'OTHER',
 ];
 

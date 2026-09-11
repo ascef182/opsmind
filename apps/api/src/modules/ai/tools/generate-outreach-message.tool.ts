@@ -42,7 +42,7 @@ export class GenerateOutreachMessageTool implements AiTool<GenerateOutreachMessa
       leadId: { type: 'string' },
       channel: {
         type: 'string',
-        enum: ['EMAIL', 'PHONE', 'WHATSAPP', 'LINKEDIN_DM', 'REDDIT_DM', 'OTHER'],
+        enum: ['EMAIL', 'PHONE', 'WHATSAPP', 'LINKEDIN_DM', 'REDDIT_DM', 'INSTAGRAM_DM', 'OTHER'],
       },
       serviceOfferingId: { type: 'string' },
     },

@@ -34,6 +34,7 @@ const CHANNEL_LABELS: Record<OutreachMessage['channel'], string> = {
   WHATSAPP: 'WhatsApp',
   LINKEDIN_DM: 'LinkedIn (DM)',
   REDDIT_DM: 'Reddit (DM)',
+  INSTAGRAM_DM: 'Instagram (DM)',
   OTHER: 'Outro',
 };
 

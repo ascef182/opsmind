@@ -77,7 +77,7 @@ describe('scanProspectingTargets', () => {
     expect(count).toBe(1);
   });
 
-  it('(b) pula target com ScrapeJob COMPLETED equivalente dentro do cooldown', async () => {
+  it('(b) pula target com ScrapeJob equivalente dentro do cooldown — COMPLETED, QUEUED ou RUNNING', async () => {
     const prisma = buildPrisma();
     const redis = buildRedis();
     prisma.prospectingTarget.findMany.mockResolvedValue([buildTarget({ cooldownDays: 7 })]);
@@ -93,13 +93,34 @@ describe('scanProspectingTargets', () => {
         state: 'SP',
         businessType: 'restaurante',
         sourceType: 'APIFY_GOOGLE_MAPS',
-        status: 'COMPLETED',
+        // QUEUED/RUNNING entram junto de COMPLETED: um job equivalente ainda
+        // em voo também suprime a criação de um novo (senão cada tick criaria
+        // — e pagaria por — um job duplicado até o primeiro terminar).
+        status: { in: ['COMPLETED', 'QUEUED', 'RUNNING'] },
         createdAt: { gt: expect.any(Date) },
       },
     });
     expect(prisma.scrapeJob.create).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
     expect(count).toBe(0);
+  });
+
+  it('(b2) FAILED nunca suprime: não está entre os status do cooldown, então o próximo tick pode retentar', async () => {
+    const prisma = buildPrisma();
+    const redis = buildRedis();
+    prisma.prospectingTarget.findMany.mockResolvedValue([buildTarget()]);
+    // A query real filtra por status — um job FAILED recente simplesmente não
+    // é retornado por ela, então o scan segue e cria um job novo.
+    prisma.scrapeJob.findFirst.mockResolvedValue(null);
+    prisma.scrapeJob.create.mockResolvedValue({ id: 'job-retry' });
+    const enqueue = jest.fn();
+
+    const count = await scanProspectingTargets(prisma as never, redis as never, enqueue);
+
+    const statusFilter = prisma.scrapeJob.findFirst.mock.calls[0][0].where.status;
+    expect(statusFilter.in).not.toContain('FAILED');
+    expect(prisma.scrapeJob.create).toHaveBeenCalledTimes(1);
+    expect(count).toBe(1);
   });
 
   it('(c) cria de novo quando não há ScrapeJob COMPLETED dentro da janela de cooldown do target', async () => {

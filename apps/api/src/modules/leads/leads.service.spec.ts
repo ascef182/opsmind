@@ -264,13 +264,51 @@ describe('LeadsService', () => {
       });
     });
 
-    it('hasContactMethod ausente/false não adiciona cláusula de contato', async () => {
+    it('hasContactMethod ausente não adiciona cláusula de contato nenhuma', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', {});
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1' },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
+    it('hasContactMethod: false filtra leads SEM nenhum contato (AND de nulos), nunca devolve todos', async () => {
       prisma.lead.findMany.mockResolvedValue([]);
 
       await service.list('org-1', { hasContactMethod: false });
 
       expect(prisma.lead.findMany).toHaveBeenCalledWith({
-        where: { organizationId: 'org-1' },
+        where: {
+          organizationId: 'org-1',
+          phone: null,
+          email: null,
+          whatsapp: null,
+          socialLinks: { equals: Prisma.DbNull },
+        },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
+    it('hasContactMethod: false combina com search sem colidir com o OR de busca', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { hasContactMethod: false, search: 'padaria' });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          phone: null,
+          email: null,
+          whatsapp: null,
+          socialLinks: { equals: Prisma.DbNull },
+          OR: [
+            { name: { contains: 'padaria', mode: 'insensitive' } },
+            { rawContent: { contains: 'padaria', mode: 'insensitive' } },
+          ],
+        },
         orderBy: { discoveredAt: 'desc' },
       });
     });

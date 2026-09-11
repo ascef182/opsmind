@@ -21,10 +21,15 @@
 // (`apps/api/src/modules/leads/outreach.service.ts`), nunca a partir daqui.
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'node:crypto';
 import { Worker, type Job } from 'bullmq';
 import IORedis from 'ioredis';
 import type Anthropic from '@anthropic-ai/sdk';
-import { REDDIT_CLUSTERING_QUEUE, type RedditClusteringJobData } from '@opsmind/shared-types';
+import {
+  REDDIT_CLUSTERING_QUEUE,
+  isSafeHttpUrl,
+  type RedditClusteringJobData,
+} from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
 import type { AIRequest, AIRequestStatus, MarketOpportunity } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
@@ -234,25 +239,31 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
   ): Promise<MarketOpportunity> {
     const topicKey = this.slugify(cluster.label);
     const sampleQuotes = this.extractSampleQuotes(cluster.matchedPostIndexes, candidatePosts);
+    const freshData = {
+      mentionCount: cluster.mentionCount,
+      sourceUrls: cluster.sourceUrls,
+      sampleQuotes,
+    };
 
-    const existing = await this.prisma.marketOpportunity.findUnique({
+    // `upsert` de verdade (nunca `findUnique` + `create`): dois jobs
+    // concorrentes do MESMO `(organizationId, topicKey)` — possível porque
+    // `reddit-mining-scan` enfileira por tópico e a fila tem retry — veriam
+    // ambos "não existe" e o segundo falharia com P2002 na unique composta.
+    // `update: {}` aqui é um no-op DELIBERADO: esta chamada só resolve a
+    // criação atômica; a atualização dos dados frescos vem logo abaixo,
+    // condicionada ao status.
+    const existing = await this.prisma.marketOpportunity.upsert({
       where: { organizationId_topicKey: { organizationId, topicKey } },
+      create: {
+        organizationId,
+        title: cluster.label,
+        topicKey,
+        problemDescription: cluster.summary,
+        ...freshData,
+        status: 'NEW',
+      },
+      update: {},
     });
-
-    if (!existing) {
-      return this.prisma.marketOpportunity.create({
-        data: {
-          organizationId,
-          title: cluster.label,
-          topicKey,
-          problemDescription: cluster.summary,
-          mentionCount: cluster.mentionCount,
-          sourceUrls: cluster.sourceUrls,
-          sampleQuotes,
-          status: 'NEW',
-        },
-      });
-    }
 
     // Regra dura (brief da Task 12): um scan automático NUNCA sobrescreve um
     // registro que um humano já moveu para `PURSUING`/`DISMISSED` — só
@@ -266,11 +277,7 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
 
     return this.prisma.marketOpportunity.update({
       where: { id: existing.id },
-      data: {
-        mentionCount: cluster.mentionCount,
-        sourceUrls: cluster.sourceUrls,
-        sampleQuotes,
-      },
+      data: freshData,
     });
   }
 
@@ -368,7 +375,11 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
       summary: candidate.summary,
       mentionCount: candidate.mentionCount,
       matchedPostIndexes: candidate.matchedPostIndexes as number[],
-      sourceUrls: candidate.sourceUrls as string[],
+      // `sourceUrls` é a IA ecoando URLs de posts raspados do Reddit — texto
+      // de terceiro, que acaba num `href` na fila de revisão do frontend.
+      // Só http/https entra em `MarketOpportunity.sourceUrls`; qualquer
+      // outro esquema (javascript:, data:) é descartado aqui, na ingestão.
+      sourceUrls: (candidate.sourceUrls as unknown[]).filter(isSafeHttpUrl),
       distinctAuthorCount: candidate.distinctAuthorCount,
     };
   }
@@ -378,13 +389,26 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
   // duplicada aqui (não extraída para util compartilhado) porque é uma
   // função de 4 linhas e este módulo já duplica outras constantes pelo
   // mesmo motivo (módulo standalone, ver topo do arquivo).
+  //
+  // Fallback de hash (diferente de `OrganizationsService.slugify`, que nunca
+  // recebe texto de IA): um `label` sem NENHUM alfanumérico ASCII — só emoji,
+  // ou escrita não-latina — sai da cadeia de `replace` como string VAZIA, e
+  // duas oportunidades de temas diferentes colidiriam na mesma `topicKey` ''
+  // (violando a unique composta `(organizationId, topicKey)`, ou pior,
+  // fundindo dois clusters distintos no mesmo registro). Nesse caso a chave
+  // vira um hash curto e estável do label original — estável importa porque
+  // `topicKey` é justamente o que dedupica o MESMO tema entre execuções.
   private slugify(label: string): string {
-    return label
+    const slug = label
       .toLowerCase()
       .normalize('NFD')
       .replace(/[̀-ͯ]/g, '')
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');
+    if (slug !== '') {
+      return slug;
+    }
+    return `topic-${createHash('sha256').update(label).digest('hex').slice(0, 16)}`;
   }
 
   private extractText(response: Anthropic.Message): string {

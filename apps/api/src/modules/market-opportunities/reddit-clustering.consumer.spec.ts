@@ -17,8 +17,7 @@ function buildConfigService() {
 function buildPrisma() {
   return {
     marketOpportunity: {
-      findUnique: jest.fn(),
-      create: jest.fn(),
+      upsert: jest.fn(),
       update: jest.fn(),
     },
     aIRequest: {
@@ -118,8 +117,9 @@ describe('RedditClusteringConsumer', () => {
       gateway: buildGateway(JSON.stringify([cluster])),
       prisma: (() => {
         const p = buildPrisma();
-        p.marketOpportunity.findUnique.mockResolvedValue(null);
-        p.marketOpportunity.create.mockResolvedValue({ id: 'opp-1' });
+        // `upsert` cria (linha não existia) e devolve a linha recém-criada.
+        p.marketOpportunity.upsert.mockResolvedValue({ id: 'opp-1', status: 'NEW' });
+        p.marketOpportunity.update.mockResolvedValue({ id: 'opp-1', status: 'NEW' });
         return p;
       })(),
     });
@@ -130,11 +130,12 @@ describe('RedditClusteringConsumer', () => {
     expect(gateway.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ tools: [], messages: [{ role: 'user', content: expect.any(String) }] }),
     );
-    expect(prisma.marketOpportunity.findUnique).toHaveBeenCalledWith({
+    // `upsert` de verdade (nunca findUnique + create): sem TOCTOU entre dois
+    // jobs concorrentes do mesmo (organizationId, topicKey). `update: {}` é
+    // no-op deliberado — a atualização condicionada ao status vem depois.
+    expect(prisma.marketOpportunity.upsert).toHaveBeenCalledWith({
       where: { organizationId_topicKey: { organizationId: 'org-1', topicKey: 'preciso-de-site-pra-loja' } },
-    });
-    expect(prisma.marketOpportunity.create).toHaveBeenCalledWith({
-      data: {
+      create: {
         organizationId: 'org-1',
         title: cluster.label,
         topicKey: 'preciso-de-site-pra-loja',
@@ -144,6 +145,7 @@ describe('RedditClusteringConsumer', () => {
         sampleQuotes: ['não sei nem por onde começar', 'nunca consegui um site bom'],
         status: 'NEW',
       },
+      update: {},
     });
     expect(budgetService.recordSpend).toHaveBeenCalledWith('org-1', expect.any(Number));
     expect(auditService.log).toHaveBeenCalledWith(
@@ -180,8 +182,7 @@ describe('RedditClusteringConsumer', () => {
     const processor = getRegisteredProcessor();
     await processor({ data: jobData });
 
-    expect(prisma.marketOpportunity.findUnique).not.toHaveBeenCalled();
-    expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
+    expect(prisma.marketOpportunity.upsert).not.toHaveBeenCalled();
     expect(prisma.marketOpportunity.update).not.toHaveBeenCalled();
   });
 
@@ -191,7 +192,7 @@ describe('RedditClusteringConsumer', () => {
     const processor = getRegisteredProcessor();
 
     await expect(processor({ data: jobData })).resolves.toBeUndefined();
-    expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
+    expect(prisma.marketOpportunity.upsert).not.toHaveBeenCalled();
     // Gasto real com a IA ainda é registrado — a chamada aconteceu.
     expect(budgetService.recordSpend).toHaveBeenCalledWith('org-1', expect.any(Number));
     // A chamada à IA teve sucesso (só o parse do JSON falhou depois) — o
@@ -223,7 +224,9 @@ describe('RedditClusteringConsumer', () => {
       gateway: buildGateway(JSON.stringify([cluster])),
       prisma: (() => {
         const p = buildPrisma();
-        p.marketOpportunity.findUnique.mockResolvedValue(existing);
+        // Linha já existe em PURSUING — `upsert` cai no `update: {}` (no-op) e
+        // devolve a linha como está.
+        p.marketOpportunity.upsert.mockResolvedValue(existing);
         return p;
       })(),
     });
@@ -231,8 +234,10 @@ describe('RedditClusteringConsumer', () => {
     const processor = getRegisteredProcessor();
     await processor({ data: jobData });
 
+    expect(prisma.marketOpportunity.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: {} }),
+    );
     expect(prisma.marketOpportunity.update).not.toHaveBeenCalled();
-    expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
   });
 
   it('registro NEW/REVIEWING existente é atualizado (mentionCount/sourceUrls/sampleQuotes), nunca o status', async () => {
@@ -254,7 +259,7 @@ describe('RedditClusteringConsumer', () => {
       gateway: buildGateway(JSON.stringify([cluster])),
       prisma: (() => {
         const p = buildPrisma();
-        p.marketOpportunity.findUnique.mockResolvedValue(existing);
+        p.marketOpportunity.upsert.mockResolvedValue(existing);
         p.marketOpportunity.update.mockResolvedValue({ ...existing, mentionCount: 30 });
         return p;
       })(),
@@ -271,7 +276,73 @@ describe('RedditClusteringConsumer', () => {
         sampleQuotes: ['não sei nem por onde começar'],
       },
     });
-    expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
+  });
+
+  it('label sem alfanumérico ASCII (só emoji) não gera topicKey vazio — cai num hash estável e distinto por label', async () => {
+    async function topicKeyFor(label: string): Promise<string> {
+      const cluster = {
+        label,
+        summary: 'resumo',
+        mentionCount: 12,
+        matchedPostIndexes: [0],
+        sourceUrls: ['https://reddit.com/r/x/1'],
+        distinctAuthorCount: 11,
+      };
+      const { prisma } = buildConsumer({
+        gateway: buildGateway(JSON.stringify([cluster])),
+        prisma: (() => {
+          const p = buildPrisma();
+          p.marketOpportunity.upsert.mockResolvedValue({ id: 'opp-x', status: 'PURSUING' });
+          return p;
+        })(),
+      });
+      await getRegisteredProcessor()({ data: jobData });
+      return prisma.marketOpportunity.upsert.mock.calls[0][0].where.organizationId_topicKey.topicKey;
+    }
+
+    const keyA = await topicKeyFor('🔥🔥🔥');
+    jest.clearAllMocks();
+    const keyB = await topicKeyFor('🚀🚀');
+
+    expect(keyA).not.toBe('');
+    expect(keyB).not.toBe('');
+    // Dois labels diferentes → chaves diferentes (sem colisão na unique
+    // composta `(organizationId, topicKey)`).
+    expect(keyA).not.toBe(keyB);
+    // Estável: o mesmo label gera sempre a mesma chave (é isso que dedupica
+    // o mesmo tema entre execuções).
+    jest.clearAllMocks();
+    expect(await topicKeyFor('🔥🔥🔥')).toBe(keyA);
+  });
+
+  it('sourceUrls com esquema inseguro vindos da IA nunca são persistidos', async () => {
+    const cluster = {
+      label: 'Tema com link malicioso',
+      summary: 'resumo',
+      mentionCount: 12,
+      matchedPostIndexes: [0],
+      sourceUrls: [
+        'javascript:alert(document.cookie)',
+        'https://reddit.com/r/x/1',
+        'data:text/html,<script>alert(1)</script>',
+        'não é uma url',
+      ],
+      distinctAuthorCount: 11,
+    };
+    const { prisma } = buildConsumer({
+      gateway: buildGateway(JSON.stringify([cluster])),
+      prisma: (() => {
+        const p = buildPrisma();
+        p.marketOpportunity.upsert.mockResolvedValue({ id: 'opp-1', status: 'PURSUING' });
+        return p;
+      })(),
+    });
+
+    await getRegisteredProcessor()({ data: jobData });
+
+    expect(prisma.marketOpportunity.upsert.mock.calls[0][0].create.sourceUrls).toEqual([
+      'https://reddit.com/r/x/1',
+    ]);
   });
 
   it('orçamento estourado pula sem chamar a IA, mas persiste um AIRequest BUDGET_EXCEEDED', async () => {
@@ -284,7 +355,7 @@ describe('RedditClusteringConsumer', () => {
     await expect(processor({ data: jobData })).resolves.toBeUndefined();
 
     expect(gateway.sendMessage).not.toHaveBeenCalled();
-    expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
+    expect(prisma.marketOpportunity.upsert).not.toHaveBeenCalled();
     expect(auditService.log).not.toHaveBeenCalled();
     expect(prisma.aIRequest.create).toHaveBeenCalledWith({
       data: {
@@ -326,7 +397,7 @@ describe('RedditClusteringConsumer', () => {
         errorMessage: 'Falha de rede ao chamar o gateway de IA',
       },
     });
-    expect(prisma.marketOpportunity.create).not.toHaveBeenCalled();
+    expect(prisma.marketOpportunity.upsert).not.toHaveBeenCalled();
   });
 
   it('onModuleDestroy fecha o Worker e desconecta o Redis', async () => {

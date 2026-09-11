@@ -140,14 +140,30 @@ export class LeadsService {
     // passa neste filtro mesmo sem contato real — edge case aceito e
     // documentado (não vale a complexidade de uma query SQL crua só pra
     // cobrir isso, ver Task 4 do plano).
-    const contactOr = filter.hasContactMethod
-      ? [
-          { phone: { not: null } },
-          { email: { not: null } },
-          { whatsapp: { not: null } },
-          { socialLinks: { not: Prisma.DbNull } },
-        ]
-      : null;
+    const contactOr =
+      filter.hasContactMethod === true
+        ? [
+            { phone: { not: null } },
+            { email: { not: null } },
+            { whatsapp: { not: null } },
+            { socialLinks: { not: Prisma.DbNull } },
+          ]
+        : null;
+    // `hasContactMethod: false` — NENHUM canal de contato: complemento exato
+    // do `OR` acima, ou seja um `AND` de nulos. Tratado explicitamente por
+    // valor (não por truthiness) pela mesma razão de `hasWebsite` mais
+    // abaixo: com `filter.hasContactMethod ? ... : null`, `false` caía no
+    // mesmo ramo de `undefined` e a opção "Sem contato" da UI devolvia TODOS
+    // os leads parecendo filtrada.
+    const noContactFilter =
+      filter.hasContactMethod === false
+        ? {
+            phone: null,
+            email: null,
+            whatsapp: null,
+            socialLinks: { equals: Prisma.DbNull },
+          }
+        : {};
     // `searchOr`/`contactOr` são dois grupos `OR` independentes — combinados
     // num `AND` só quando ambos presentes, pra não colidir a mesma chave
     // `OR` do objeto `where` (a segunda sobrescreveria silenciosamente a
@@ -172,6 +188,7 @@ export class LeadsService {
         ...(filter.state ? { state: { equals: filter.state, mode: 'insensitive' as const } } : {}),
         ...(filter.hasWebsite === true ? { website: { not: null } } : {}),
         ...(filter.hasWebsite === false ? { website: null } : {}),
+        ...noContactFilter,
         ...orCombination,
       },
       orderBy: { discoveredAt: 'desc' },

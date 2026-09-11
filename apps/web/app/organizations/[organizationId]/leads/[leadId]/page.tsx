@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { isSafeHttpUrl } from '@opsmind/shared-types';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useLead, useConvertLead, useScoreLead } from '@/lib/leads/use-leads';
 import { useEnrichLead, useAnalyzeLeadPotential } from '@/lib/leads/use-lead-enrichment';
@@ -44,11 +45,12 @@ const CHANNEL_LABELS: Record<(typeof OUTREACH_CHANNELS)[number], string> = {
   WHATSAPP: 'WhatsApp',
   LINKEDIN_DM: 'LinkedIn (DM)',
   REDDIT_DM: 'Reddit (DM)',
+  INSTAGRAM_DM: 'Instagram (DM)',
   OTHER: 'Outro',
 };
 
 const generateOutreachSchema = z.object({
-  channel: z.enum(['EMAIL', 'PHONE', 'WHATSAPP', 'LINKEDIN_DM', 'REDDIT_DM', 'OTHER']),
+  channel: z.enum(['EMAIL', 'PHONE', 'WHATSAPP', 'LINKEDIN_DM', 'REDDIT_DM', 'INSTAGRAM_DM', 'OTHER']),
   serviceOfferingId: z.string().optional(),
 });
 type GenerateOutreachFormValues = z.infer<typeof generateOutreachSchema>;
@@ -288,10 +290,18 @@ function LeadIntelligencePanel({
           <Field
             label="Site"
             value={
+              // Mesma regra de `SocialBadges`: `Lead.website` também vem de
+              // raspagem (escrita direto no Prisma pelo worker), então só
+              // vira `href` quando é http/https — caso contrário aparece
+              // como texto, nunca clicável.
               data.website ? (
-                <a href={data.website} target="_blank" rel="noreferrer" className="text-accent-400 hover:underline">
-                  {data.website}
-                </a>
+                isSafeHttpUrl(data.website) ? (
+                  <a href={data.website} target="_blank" rel="noreferrer" className="text-accent-400 hover:underline">
+                    {data.website}
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground">{data.website}</span>
+                )
               ) : (
                 'Sem site'
               )

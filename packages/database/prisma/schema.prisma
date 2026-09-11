@@ -153,6 +153,15 @@ model Organization {
   slug String @unique
   plan String @default("free")
 
+  // Teto de gasto mensal com IA (Anthropic/OpenAI).
+  // Null = sem limite, BudgetService nunca corta (mesma semântica de
+  // scrapingMonthlyBudget abaixo).
+  // IMPORTANTE: até as Tasks 11/12 todo gasto de IA era iniciado por um humano
+  // (chat, /analyze, geração manual de rascunho), então "sem limite" só podia
+  // ser gasto no ritmo de alguém clicando. Isso deixou de valer: o rascunho
+  // automático de outreach (Task 11) e o clustering de Reddit (Task 12) chamam
+  // a IA sozinhos, disparados por scan/fila. Qualquer organização com esses
+  // caminhos ativos DEVE ter este campo configurado.
   aiMonthlyBudget       Decimal? @map("ai_monthly_budget") @db.Decimal(10, 2)
   // Regra de negócio (PRD §8): "cliente inativo há mais de N dias, configurável
   // por organização, padrão 14" — sem este campo não há onde configurar o N.
@@ -713,6 +722,12 @@ model Lead {
   // coluna própria (não fica só dentro de `socialLinks`) porque é o canal de
   // maior prioridade no outreach (Task 10/11) e precisa ser filtrável direto
   // (`hasContactMethod`, Task 4), sem parsear JSON.
+  // SÓ o número (dígitos), NUNCA um link `wa.me`/`api.whatsapp.com`: o link
+  // completo fica em `socialLinks` como entrada de plataforma WHATSAPP. Quem
+  // ingere extrai os dígitos do link antes de gravar aqui
+  // (`extractWhatsappPhone`, apps/worker/src/lead-scrape-processor.ts) —
+  // `OutreachService` injeta este valor no prompt como "Contato WhatsApp:
+  // <número>" e `CreateLeadDto` limita a 40 caracteres.
   whatsapp            String?          @map("whatsapp")
   // Nome do dono/responsável, quando identificável — opcional, sem tensão
   // com a flexibilidade de `socialLinks`.

@@ -215,11 +215,12 @@ async function main(): Promise<void> {
 
   // Scan de mineração no Reddit (Task 13) — mesmo formato de `runScan`/
   // `runProspectingScan` acima, rodando contra o gateway Camoufox já
-  // instanciado nesta função (`gateways.camofox`) e a fila
-  // `redditClusteringQueue` recém-criada.
+  // instanciado nesta função (`gateways.camofox`), a fila
+  // `redditClusteringQueue` recém-criada e a mesma `connection` Redis que o
+  // corte/registro de orçamento de scraping usa nos outros dois caminhos.
   async function runRedditMiningScan(): Promise<void> {
     try {
-      const enqueued = await scanRedditMiningTopics(prisma, gateways.camofox, (data) =>
+      const enqueued = await scanRedditMiningTopics(prisma, gateways.camofox, connection, (data) =>
         redditClusteringQueue.add('cluster', data),
       );
       if (enqueued > 0) {
