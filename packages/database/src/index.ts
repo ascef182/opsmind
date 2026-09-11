@@ -32,9 +32,12 @@ export type {
   Lead,
   LeadEnrichment,
   OutreachMessage,
+  RedditWatchTopic,
+  MarketOpportunity,
   ScrapeSourceType,
   ScrapeJobStatus,
   LeadStatus,
   OutreachChannel,
   OutreachStatus,
+  MarketOpportunityStatus,
 } from '@prisma/client';
