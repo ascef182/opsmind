@@ -34,6 +34,12 @@ const COLORS: Record<string, string> = {
   COMPLETED: 'bg-positive-500/15 text-positive-500',
   FAILED: 'bg-negative-500/15 text-negative-500',
 
+  // MarketOpportunityStatus (packages/database/prisma/schema.prisma)
+  NEW: 'bg-accent-500/15 text-accent-500',
+  REVIEWING: 'bg-info-500/15 text-info-500',
+  PURSUING: 'bg-positive-500/15 text-positive-500',
+  DISMISSED: 'bg-ink-800 text-ink-300 line-through',
+
   // Role (packages/shared-types — ROLE_HIERARCHY), usado na página de Equipe
   OWNER: 'bg-accent-500/15 text-accent-500',
   ADMIN: 'bg-info-500/15 text-info-500',

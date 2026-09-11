@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Building2, Gauge, LayoutDashboard, ListTodo, Send, Sparkles, Target, Users, UsersRound } from 'lucide-react';
+import { Building2, Gauge, LayoutDashboard, Lightbulb, ListTodo, Send, Sparkles, Target, Users, UsersRound } from 'lucide-react';
 
 export interface NavItem {
   label: string;
@@ -16,6 +16,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Leads', segment: 'leads', icon: Users, group: 'workspace' },
   { label: 'Aprovações', segment: 'outreach', icon: Send, group: 'workspace' },
   { label: 'Alvos de prospecção', segment: 'prospecting-targets', icon: Target, group: 'workspace' },
+  { label: 'Oportunidades', segment: 'market-opportunities', icon: Lightbulb, group: 'workspace' },
   { label: 'Clientes', segment: 'customers', icon: Building2, group: 'workspace' },
   { label: 'Tarefas', segment: 'tasks', icon: ListTodo, group: 'workspace' },
   { label: 'Assistente IA', segment: 'ai', icon: Sparkles, group: 'intelligence' },
