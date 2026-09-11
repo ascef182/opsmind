@@ -1,5 +1,5 @@
 import type { PrismaClient, Prisma, ScrapeJob, ScrapeSourceType, Lead, LeadStatus } from '@opsmind/database';
-import type { LeadScrapeJobData } from '@opsmind/shared-types';
+import type { LeadScrapeJobData, OutreachAutodraftJobData, OutreachChannel } from '@opsmind/shared-types';
 import {
   scoreLead,
   QUALIFICATION_THRESHOLD,
@@ -881,6 +881,48 @@ async function finalizeJob(
 }
 
 /**
+ * Teto de rascunhos automáticos de outreach enfileirados POR JOB de scraping
+ * (B4/Task 11) — constante de módulo, contada só dentro da execução atual
+ * (não precisa de estado entre execuções, ver brief): evita que um único
+ * `ScrapeJob` gigante (centenas/milhares de leads) enfileire uma avalanche de
+ * rascunhos de uma vez só. Um `ScrapeJob` que qualifica mais de 10 leads
+ * elegíveis simplesmente para de enfileirar depois do décimo — os demais
+ * ficam sem rascunho automático desta passada (podem ganhar um manualmente,
+ * ou num rescan futuro se ainda não tiverem `OutreachMessage`).
+ */
+const AUTODRAFT_MAX_PER_ORG_PER_JOB = 10;
+
+/**
+ * Resolve o canal de outreach do gatilho automático (B4/Task 11) por
+ * prioridade fixa — WHATSAPP > INSTAGRAM_DM > LINKEDIN_DM > EMAIL, primeiro
+ * campo preenchido — a partir do `Lead` já persistido (pós-`upsertLead`).
+ * `null` quando nenhum dos quatro campos está preenchido (ex.: o lead só tem
+ * `phone`, que sozinho não é um canal suportado por `OutreachService`) — o
+ * chamador trata `null` como "sem canal elegível", nunca força um canal
+ * fora desta lista.
+ */
+function resolveAutodraftChannel(lead: {
+  whatsapp: string | null;
+  email: string | null;
+  socialLinks: Prisma.JsonValue;
+}): OutreachChannel | null {
+  if (lead.whatsapp) {
+    return 'WHATSAPP';
+  }
+  const socialLinks = Array.isArray(lead.socialLinks) ? (lead.socialLinks as unknown as SocialLink[]) : [];
+  if (socialLinks.some((link) => link.platform === 'INSTAGRAM')) {
+    return 'INSTAGRAM_DM';
+  }
+  if (socialLinks.some((link) => link.platform === 'LINKEDIN')) {
+    return 'LINKEDIN_DM';
+  }
+  if (lead.email) {
+    return 'EMAIL';
+  }
+  return null;
+}
+
+/**
  * Processa um job de scraping de leads, consumido da fila `lead-scrape`.
  *
  * Divergência deliberada do padrão de UMA transação grande de
@@ -895,7 +937,15 @@ async function finalizeJob(
  *   2. SEM transação — recarrega o job, checa orçamento, chama o gateway
  *      externo e tenta enriquecer cada lead estruturado (best-effort,
  *      try/catch por lead).
- *   3. tx curta — persiste os leads (upsert + score + enrichment).
+ *   3. tx curta — persiste os leads (upsert + score + enrichment) e, para
+ *      cada lead recém-QUALIFIED com oferta sugerida e canal de contato (ver
+ *      `resolveAutodraftChannel`), acumula um job de rascunho automático de
+ *      outreach (B4/Task 11) — SEM chamar `enqueueAutodraft` ainda dentro da
+ *      tx (é uma chamada de rede ao Redis; a mesma disciplina de não segurar
+ *      a tx Postgres aberta durante rede que justifica as 3 tx curtas acima).
+ *   3.5 SEM transação — enfileira os jobs de rascunho automático acumulados
+ *      no passo 3 (best-effort por job: uma falha ao enfileirar não derruba
+ *      o `ScrapeJob`, que já persistiu os leads corretamente).
  *   4. tx curta — marca o job em status terminal; fora dela, registra gasto
  *      no orçamento e grava AuditLog.
  *
@@ -903,12 +953,18 @@ async function finalizeJob(
  * o `catch` externo marca FAILED via `prisma` direto (nunca dentro de uma
  * tx já revertida) — o job SEMPRE termina em status terminal, nunca fica
  * "pendurado" em QUEUED/RUNNING.
+ *
+ * `enqueueAutodraft`: produtor da fila `outreach-autodraft` (Task 11,
+ * `outreach-autodraft-queue.ts`) — injetado (não instanciado aqui) para que
+ * este módulo continue puro/testável sem mockar BullMQ; default no-op só
+ * para não quebrar os testes/chamadores existentes de antes da Task 11.
  */
 export async function processLeadScrapeJob(
   prisma: PrismaClient,
   gateways: LeadScrapeGateways,
   redis: Redis,
   data: LeadScrapeJobData,
+  enqueueAutodraft: (job: OutreachAutodraftJobData) => Promise<unknown> = async () => undefined,
 ): Promise<ScrapeJob> {
   try {
     // Passo 1 — tx curta: marca RUNNING.
@@ -1054,47 +1110,115 @@ export async function processLeadScrapeJob(
       enriched.push({ candidate, firmographics, enrichmentRaw, contactEnrichment });
     }
 
-    // Passo 3 — tx curta: persiste os leads (upsert + score + enrichment).
-    const leadsFound = await withTenantContext(prisma, data.organizationId, async (tx) => {
-      const offerings = await tx.serviceOffering.findMany({
-        where: { organizationId: data.organizationId, isActive: true },
-      });
-      const offeringsIcp = offerings.map(toOfferingIcp);
+    // Passo 3 — tx curta: persiste os leads (upsert + score + enrichment) e
+    // acumula (sem enfileirar ainda — ver Passo 3.5) os jobs de rascunho
+    // automático de outreach (B4/Task 11).
+    const { count: leadsFound, autodraftJobs } = await withTenantContext(
+      prisma,
+      data.organizationId,
+      async (tx) => {
+        const offerings = await tx.serviceOffering.findMany({
+          where: { organizationId: data.organizationId, isActive: true },
+        });
+        const offeringsIcp = offerings.map(toOfferingIcp);
 
-      let count = 0;
-      for (const { candidate, firmographics, enrichmentRaw, contactEnrichment } of enriched) {
-        const lead = await upsertLead(tx, data, scrapeJob.sourceType, candidate, firmographics, offeringsIcp);
-        if (enrichmentRaw) {
-          await tx.leadEnrichment.create({
-            data: {
-              organizationId: data.organizationId,
-              leadId: lead.id,
-              type: 'explorium_firmographics',
-              data: enrichmentRaw as unknown as Prisma.InputJsonValue,
-              actorType: data.actorType,
-              actorId: data.actorId ?? null,
-            },
-          });
-        }
-        if (contactEnrichment) {
-          await tx.leadEnrichment.create({
-            data: {
-              organizationId: data.organizationId,
-              leadId: lead.id,
-              type: 'contact_enrichment',
+        let count = 0;
+        const autodraftJobs: OutreachAutodraftJobData[] = [];
+        for (const { candidate, firmographics, enrichmentRaw, contactEnrichment } of enriched) {
+          const lead = await upsertLead(tx, data, scrapeJob.sourceType, candidate, firmographics, offeringsIcp);
+          if (enrichmentRaw) {
+            await tx.leadEnrichment.create({
               data: {
-                source: contactEnrichment.source,
-                ...contactEnrichment.data,
-              } as unknown as Prisma.InputJsonValue,
-              actorType: data.actorType,
-              actorId: data.actorId ?? null,
-            },
-          });
+                organizationId: data.organizationId,
+                leadId: lead.id,
+                type: 'explorium_firmographics',
+                data: enrichmentRaw as unknown as Prisma.InputJsonValue,
+                actorType: data.actorType,
+                actorId: data.actorId ?? null,
+              },
+            });
+          }
+          if (contactEnrichment) {
+            await tx.leadEnrichment.create({
+              data: {
+                organizationId: data.organizationId,
+                leadId: lead.id,
+                type: 'contact_enrichment',
+                data: {
+                  source: contactEnrichment.source,
+                  ...contactEnrichment.data,
+                } as unknown as Prisma.InputJsonValue,
+                actorType: data.actorType,
+                actorId: data.actorId ?? null,
+              },
+            });
+          }
+          count += 1;
+
+          // Gatilho por evento do rascunho automático de outreach (B4/Task
+          // 11) — dispara no exato momento em que ESTE lead vira QUALIFIED
+          // com pelo menos um canal de contato suportado, dentro do mesmo
+          // fluxo que já processa o lead (nunca um scan periódico separado,
+          // ver Risks do plano). Três condições, todas exigidas:
+          //   1. `lead.status === 'QUALIFIED'` (score cruzou o threshold).
+          //   2. `lead.suggestedOfferingId` não-nulo — sem oferta sugerida,
+          //      `OutreachService.generateDraft` lançaria BadRequestException
+          //      (não teria o que promover na mensagem).
+          //   3. `resolveAutodraftChannel` resolve um canal — ver seu
+          //      comentário para a ordem de prioridade fixa.
+          // E, adicionalmente: o lead ainda não tem NENHUM `OutreachMessage`
+          // (checado via `count` — nunca reenfileira pra um lead que já
+          // ganhou um rascunho, automático ou manual, numa passada anterior
+          // ou neste mesmo job em caso de o lead já existir), e o teto
+          // `AUTODRAFT_MAX_PER_ORG_PER_JOB` desta execução ainda não foi
+          // atingido.
+          if (
+            lead.status === 'QUALIFIED' &&
+            lead.suggestedOfferingId &&
+            autodraftJobs.length < AUTODRAFT_MAX_PER_ORG_PER_JOB
+          ) {
+            const channel = resolveAutodraftChannel(lead);
+            if (channel) {
+              const existingOutreachCount = await tx.outreachMessage.count({ where: { leadId: lead.id } });
+              if (existingOutreachCount === 0) {
+                autodraftJobs.push({
+                  organizationId: data.organizationId,
+                  leadId: lead.id,
+                  channel,
+                  serviceOfferingId: lead.suggestedOfferingId,
+                });
+              }
+            }
+          }
         }
-        count += 1;
+        return { count, autodraftJobs };
+      },
+    );
+
+    // Passo 3.5 — SEM transação: enfileira os jobs de rascunho automático
+    // acumulados acima (rede ao Redis, nunca dentro da tx Postgres — ver
+    // comentário no topo da função). Best-effort por job: uma falha ao
+    // enfileirar (Redis indisponível, etc.) nunca derruba o `ScrapeJob`, que
+    // já persistiu os leads corretamente no Passo 3 — só reporta e segue,
+    // mesma disciplina do bookkeeping de `finalizeJob` mais abaixo.
+    for (const autodraftJob of autodraftJobs) {
+      try {
+        await enqueueAutodraft(autodraftJob);
+      } catch (enqueueError) {
+        Sentry.captureException(enqueueError, {
+          extra: {
+            leadId: autodraftJob.leadId,
+            organizationId: data.organizationId,
+            phase: 'outreach-autodraft-enqueue',
+          },
+        });
+        // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
+        console.error(
+          `[lead-scrape-processor] falha ao enfileirar rascunho automático de outreach para o lead ${autodraftJob.leadId}:`,
+          enqueueError,
+        );
       }
-      return count;
-    });
+    }
 
     const cost = leadsFound * SCRAPING_COST_PER_LEAD_USD[scrapeJob.sourceType];
     return await finalizeJob(prisma, redis, data, { status: 'COMPLETED', leadsFound, cost });

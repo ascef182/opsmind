@@ -16,6 +16,7 @@ import { createLogger } from './logger';
 import { createPrismaClient } from './tenant-context';
 import { createAutomationQueue, createAutomationWorker, createRedisConnection } from './queue';
 import { createLeadScrapeQueue, createLeadScrapeWorker } from './lead-scrape-queue';
+import { createOutreachAutodraftQueue } from './outreach-autodraft-queue';
 import { scanCustomerInactiveAutomations } from './automation-scan';
 import { scanProspectingTargets } from './prospecting-scan';
 import { processAutomationJob } from './automation-processor';
@@ -146,8 +147,15 @@ async function main(): Promise<void> {
     contactEnrichment: createContactEnrichmentGateway(env),
   };
   const leadScrapeQueue = createLeadScrapeQueue(connection);
+  // Fila `outreach-autodraft` (Task 11): só produtora aqui — quem consome é
+  // `apps/api` (`outreach-autodraft.consumer.ts`). `processLeadScrapeJob`
+  // enfileira nela logo depois de `upsertLead`, quando um lead qualifica com
+  // ao menos um canal de contato (ver comentário no próprio processor).
+  const outreachAutodraftQueue = createOutreachAutodraftQueue(connection);
   const leadScrapeWorker = createLeadScrapeWorker(connection, (job) =>
-    processLeadScrapeJob(prisma, gateways, connection, job.data),
+    processLeadScrapeJob(prisma, gateways, connection, job.data, (data) =>
+      outreachAutodraftQueue.add('autodraft', data),
+    ),
   );
 
   leadScrapeWorker.on('failed', (job, error) => {

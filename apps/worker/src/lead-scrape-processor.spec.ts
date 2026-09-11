@@ -63,6 +63,12 @@ describe('processLeadScrapeJob', () => {
         update: jest.fn(),
       },
       leadEnrichment: { create: jest.fn() },
+      // Usado só pelo gatilho automático de outreach (B4/Task 11, ver
+      // `resolveAutodraftChannel`/trecho no meio do loop do Passo 3) — default
+      // "nenhum OutreachMessage ainda" (0), testes que não são sobre o
+      // gatilho nem chegam a acionar essa checagem (suggestedOfferingId
+      // sempre null nos testes pré-Task 11, ver offerings=[] default).
+      outreachMessage: { count: jest.fn().mockResolvedValue(0) },
     };
   }
 
@@ -742,6 +748,195 @@ describe('processLeadScrapeJob', () => {
       expect(createArg.socialLinks).not.toEqual(
         expect.arrayContaining([{ platform: 'INSTAGRAM', url: 'https://instagram.com/b' }]),
       );
+    });
+  });
+
+  describe('gatilho automático de outreach (B4/Task 11)', () => {
+    // `website: null` em todos os candidatos abaixo: garante `hasNoWebsitePoints
+    // = 50` sozinho já cruza `QUALIFICATION_THRESHOLD` (50), então o teste
+    // não depende de afinar `rating`/`reviewCount`/firmographics pra "cair
+    // certinho" no threshold — e mantém `onlyWithoutWebsite: true`
+    // (`baseScrapeJob`) satisfeito. `website: null` também significa que a
+    // descoberta de contato (Task 9) sempre cai no fallback Camoufox (o
+    // caminho primário exige `candidate.website`) — por isso os mocks de
+    // `gateways.camofox.search` abaixo, não de `contactEnrichment`.
+    const matchingOffering = {
+      id: 'offering-1',
+      signals: [] as string[],
+      targetIndustries: ['Padaria'],
+      minEmployees: null,
+      maxEmployees: null,
+      minRevenueUsd: null,
+      maxRevenueUsd: null,
+    };
+
+    function apifyCandidateNoWebsite(overrides: Record<string, unknown> = {}) {
+      return {
+        name: 'Padaria Autodraft',
+        address: null,
+        city: 'Campinas',
+        state: 'SP',
+        phone: null,
+        website: null,
+        googleCategory: 'Padaria',
+        rating: 4.5,
+        reviewCount: 20,
+        placeId: 'place-autodraft',
+        raw: {},
+        ...overrides,
+      };
+    }
+
+    const matchBusinessResult = {
+      name: 'Padaria Autodraft',
+      website: null,
+      industry: 'Padaria',
+      employeeCount: null,
+      revenueUsd: null,
+      matchConfidence: 0.9,
+      raw: {},
+    };
+
+    function setupQualifyingRun(tx: ReturnType<typeof buildTx>, prisma: ReturnType<typeof buildPrisma>) {
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: `lead-${args.create.placeId as string}`, ...args.create }),
+      );
+    }
+
+    it('QUALIFIED + WhatsApp, mas sem suggestedOfferingId → não enfileira', async () => {
+      const tx = setupTx();
+      const prisma = buildPrisma();
+      setupQualifyingRun(tx, prisma);
+      // offerings vazio (default de `buildTx`) — nenhuma oferta pra casar,
+      // `suggestedOfferingId` fica null mesmo com o lead QUALIFIED.
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateNoWebsite()]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      gateways.camofox.search.mockResolvedValue([
+        { title: 'WhatsApp', url: 'https://wa.me/5519999999999', textContent: null, raw: {} },
+      ]);
+
+      const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+      const result = await processLeadScrapeJob(
+        prisma as never,
+        gateways as never,
+        fakeRedis as never,
+        jobData,
+        enqueueAutodraft,
+      );
+
+      expect(enqueueAutodraft).not.toHaveBeenCalled();
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('QUALIFIED + oferta sugerida + WhatsApp → enfileira no canal WHATSAPP', async () => {
+      const tx = setupTx();
+      const prisma = buildPrisma();
+      setupQualifyingRun(tx, prisma);
+      tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateNoWebsite()]);
+      gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResult);
+      gateways.camofox.search.mockResolvedValue([
+        { title: 'WhatsApp', url: 'https://wa.me/5519999999999', textContent: null, raw: {} },
+      ]);
+
+      const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+      const result = await processLeadScrapeJob(
+        prisma as never,
+        gateways as never,
+        fakeRedis as never,
+        jobData,
+        enqueueAutodraft,
+      );
+
+      expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
+      expect(enqueueAutodraft).toHaveBeenCalledWith({
+        organizationId: 'org-1',
+        leadId: 'lead-place-autodraft',
+        channel: 'WHATSAPP',
+        serviceOfferingId: 'offering-1',
+      });
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('sem WhatsApp mas com Instagram em socialLinks → enfileira no canal INSTAGRAM_DM', async () => {
+      const tx = setupTx();
+      const prisma = buildPrisma();
+      setupQualifyingRun(tx, prisma);
+      tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateNoWebsite()]);
+      gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResult);
+      gateways.camofox.search.mockResolvedValue([
+        { title: 'Instagram', url: 'https://instagram.com/padariaautodraft', textContent: null, raw: {} },
+      ]);
+
+      const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData, enqueueAutodraft);
+
+      expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
+      expect(enqueueAutodraft).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: 'INSTAGRAM_DM', serviceOfferingId: 'offering-1' }),
+      );
+    });
+
+    it('lead já tem OutreachMessage → nunca enfileira de novo', async () => {
+      const tx = setupTx();
+      const prisma = buildPrisma();
+      setupQualifyingRun(tx, prisma);
+      tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+      tx.outreachMessage.count.mockResolvedValue(1);
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateNoWebsite()]);
+      gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResult);
+      gateways.camofox.search.mockResolvedValue([
+        { title: 'WhatsApp', url: 'https://wa.me/5519999999999', textContent: null, raw: {} },
+      ]);
+
+      const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData, enqueueAutodraft);
+
+      expect(tx.outreachMessage.count).toHaveBeenCalledWith({ where: { leadId: 'lead-place-autodraft' } });
+      expect(enqueueAutodraft).not.toHaveBeenCalled();
+    });
+
+    it('teto de 10/job respeitado mesmo com 11 leads elegíveis no mesmo job', async () => {
+      const tx = setupTx();
+      const prisma = buildPrisma();
+      setupQualifyingRun(tx, prisma);
+      tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+
+      const gateways = fakeGateways();
+      const candidates = Array.from({ length: 11 }, (_, i) =>
+        apifyCandidateNoWebsite({ placeId: `place-${i}` }),
+      );
+      gateways.apify.searchBusinesses.mockResolvedValue(candidates);
+      gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResult);
+      gateways.camofox.search.mockResolvedValue([
+        { title: 'WhatsApp', url: 'https://wa.me/5519999999999', textContent: null, raw: {} },
+      ]);
+
+      const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+      const result = await processLeadScrapeJob(
+        prisma as never,
+        gateways as never,
+        fakeRedis as never,
+        jobData,
+        enqueueAutodraft,
+      );
+
+      expect(tx.lead.upsert).toHaveBeenCalledTimes(11); // todos os 11 leads são persistidos normalmente
+      expect(enqueueAutodraft).toHaveBeenCalledTimes(10); // só os 10 primeiros geram rascunho automático
+      expect(result.status).toBe('COMPLETED');
     });
   });
 });

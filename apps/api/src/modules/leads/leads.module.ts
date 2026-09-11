@@ -13,6 +13,7 @@ import { LeadsController } from './leads.controller';
 import { OutreachService } from './outreach.service';
 import { OutreachMessagesController } from './outreach-messages.controller';
 import { LeadAnalysisService } from './lead-analysis.service';
+import { OutreachAutodraftConsumer } from './outreach-autodraft.consumer';
 import { BudgetService } from '../ai/services/budget.service';
 import { AI_GATEWAY } from '../ai/gateway/ai-gateway.interface';
 import { ClaudeGatewayService } from '../ai/gateway/claude-gateway.service';
@@ -52,6 +53,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     LeadsService,
     OutreachService,
     LeadAnalysisService,
+    OutreachAutodraftConsumer,
     BudgetService,
     { provide: AI_GATEWAY, useClass: ClaudeGatewayService },
     TenantGuard,
