@@ -31,7 +31,7 @@ export class OutreachMessagesController {
     @CurrentUser() user: { id: string },
     @Body() dto: GenerateOutreachDto,
   ): Promise<OutreachMessage> {
-    return this.outreachService.generateDraft(organizationId, leadId, dto, user.id);
+    return this.outreachService.generateDraft(organizationId, leadId, dto, { type: 'USER', userId: user.id });
   }
 
   @Get('leads/:leadId/outreach-messages')

@@ -17,7 +17,7 @@ describe('GenerateOutreachMessageTool', () => {
       'org-1',
       'lead-1',
       { channel: 'EMAIL', serviceOfferingId: 'offering-1' },
-      'user-1',
+      { type: 'USER', userId: 'user-1' },
     );
   });
 
@@ -35,7 +35,7 @@ describe('GenerateOutreachMessageTool', () => {
       'org-1',
       'lead-1',
       { channel: 'WHATSAPP', serviceOfferingId: undefined },
-      'user-1',
+      { type: 'USER', userId: 'user-1' },
     );
   });
 

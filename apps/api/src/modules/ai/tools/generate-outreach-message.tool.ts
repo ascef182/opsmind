@@ -61,7 +61,7 @@ export class GenerateOutreachMessageTool implements AiTool<GenerateOutreachMessa
       context.organizationId,
       input.leadId,
       { channel: input.channel, serviceOfferingId: input.serviceOfferingId },
-      context.userId,
+      { type: 'USER', userId: context.userId },
     );
   }
 }

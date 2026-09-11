@@ -7,8 +7,12 @@ export interface AuditLogInput {
   // qualquer organização existir (Decisão #8 do blueprint).
   organizationId?: string;
   actorType: AuditActorType;
-  // Não é FK: o ator pode ser AI/system/automation, não só um User.
-  actorId?: string;
+  // Não é FK: o ator pode ser AI/system/automation, não só um User. Aceita
+  // `null` explícito (não só `undefined`) para chamadores que precisam
+  // registrar "sem usuário por trás" de forma explícita em vez de omitir o
+  // campo (ex.: `OutreachService.generateDraft` com `actor: { type:
+  // 'SYSTEM' }`, Task 10) — a coluna já é nullable no schema.
+  actorId?: string | null;
   action: string;
   resource: string;
   metadata?: Prisma.InputJsonValue;
