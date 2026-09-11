@@ -17,8 +17,10 @@ import { createPrismaClient } from './tenant-context';
 import { createAutomationQueue, createAutomationWorker, createRedisConnection } from './queue';
 import { createLeadScrapeQueue, createLeadScrapeWorker } from './lead-scrape-queue';
 import { createOutreachAutodraftQueue } from './outreach-autodraft-queue';
+import { createRedditClusteringQueue } from './reddit-clustering-queue';
 import { scanCustomerInactiveAutomations } from './automation-scan';
 import { scanProspectingTargets } from './prospecting-scan';
+import { scanRedditMiningTopics } from './reddit-mining-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
 
@@ -119,6 +121,11 @@ async function main(): Promise<void> {
   // real (orçamento de scraping), então cada ambiente pode querer um ritmo
   // diferente sem precisar de rebuild.
   const PROSPECTING_SCAN_INTERVAL_MS = env.PROSPECTING_SCAN_INTERVAL_MS;
+  // Mesmo racional de PROSPECTING_SCAN_INTERVAL_MS acima: cada busca via
+  // Camoufox tem custo (rate-limit próprio, ver CamofoxGatewayService), então
+  // este intervalo também é configurável por ambiente desde já (ver
+  // packages/config/env/schema.ts), default 1 dia.
+  const REDDIT_MINING_SCAN_INTERVAL_MS = env.REDDIT_MINING_SCAN_INTERVAL_MS;
 
   const prisma = createPrismaClient(env);
   // Uma única conexão Redis reaproveitada por ambos os pares fila/worker
@@ -152,6 +159,11 @@ async function main(): Promise<void> {
   // enfileira nela logo depois de `upsertLead`, quando um lead qualifica com
   // ao menos um canal de contato (ver comentário no próprio processor).
   const outreachAutodraftQueue = createOutreachAutodraftQueue(connection);
+  // Fila `reddit-clustering` (Task 13): só produtora aqui — quem consome é
+  // `apps/api` (`reddit-clustering.consumer.ts`, Task 12). `runRedditMiningScan`
+  // (abaixo) enfileira nela quando `scanRedditMiningTopics` encontra posts
+  // candidatos para um `RedditWatchTopic` ativo.
+  const redditClusteringQueue = createRedditClusteringQueue(connection);
   const leadScrapeWorker = createLeadScrapeWorker(connection, (job) =>
     processLeadScrapeJob(prisma, gateways, connection, job.data, (data) =>
       outreachAutodraftQueue.add('autodraft', data),
@@ -201,10 +213,32 @@ async function main(): Promise<void> {
   await runProspectingScan();
   setInterval(runProspectingScan, PROSPECTING_SCAN_INTERVAL_MS);
 
+  // Scan de mineração no Reddit (Task 13) — mesmo formato de `runScan`/
+  // `runProspectingScan` acima, rodando contra o gateway Camoufox já
+  // instanciado nesta função (`gateways.camofox`) e a fila
+  // `redditClusteringQueue` recém-criada.
+  async function runRedditMiningScan(): Promise<void> {
+    try {
+      const enqueued = await scanRedditMiningTopics(prisma, gateways.camofox, (data) =>
+        redditClusteringQueue.add('cluster', data),
+      );
+      if (enqueued > 0) {
+        logger.info({ enqueued }, 'scan de mineração no Reddit enfileirou jobs de clustering');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'scan de mineração no Reddit falhou');
+      Sentry.captureException(error);
+    }
+  }
+
+  await runRedditMiningScan();
+  setInterval(runRedditMiningScan, REDDIT_MINING_SCAN_INTERVAL_MS);
+
   logger.info(
     `OpsMind worker rodando — filas "${queue.name}" (scan a cada ${SCAN_INTERVAL_MS}ms) e "${leadScrapeQueue.name}"`,
   );
   logger.info(`Scan de prospecção autônoma a cada ${PROSPECTING_SCAN_INTERVAL_MS}ms`);
+  logger.info(`Scan de mineração no Reddit a cada ${REDDIT_MINING_SCAN_INTERVAL_MS}ms`);
 }
 
 main().catch((error) => {

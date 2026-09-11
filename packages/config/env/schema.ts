@@ -114,6 +114,12 @@ export const envSchema = z.object({
   // automático tem custo real de orçamento de scraping, ao contrário do
   // scan de automations.
   PROSPECTING_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
+  // Intervalo (ms) do scan automático de `RedditWatchTopic`s ativos
+  // (apps/worker/src/reddit-mining-scan.ts + main.ts, Task 13) — mesmo
+  // padrão de PROSPECTING_SCAN_INTERVAL_MS acima (configurável por ambiente,
+  // default 1 dia), porque cada busca via Camoufox também tem custo/rate
+  // limit próprio.
+  REDDIT_MINING_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
 
   // Observabilidade (Fase 6 — PRD §15: "Sentry + logging estruturado").
   // SENTRY_DSN opcional pelo mesmo motivo de ANTHROPIC_API_KEY: observabilidade

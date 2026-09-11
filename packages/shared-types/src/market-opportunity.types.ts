@@ -1,5 +1,5 @@
 // Nome da fila BullMQ para clustering de tópicos do Reddit — compartilhada
-// entre apps/worker (produtor: enfileira durante lead-scrape-processor.ts) e
+// entre apps/worker (produtor: enfileira em reddit-mining-scan.ts, Task 13) e
 // apps/api (consumidor: reddit-clustering.consumer.ts processa e executa IA).
 // Constante única evita o nome da fila divergir silenciosamente entre os dois
 // processos (mesmo racional de LEAD_SCRAPE_QUEUE e AUTOMATION_EXECUTION_QUEUE).
