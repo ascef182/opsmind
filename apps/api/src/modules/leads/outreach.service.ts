@@ -19,6 +19,7 @@ import { LeadsService } from './leads.service';
 import { ServiceOfferingsService } from './service-offerings.service';
 import { GenerateOutreachDto } from './dto/generate-outreach.dto';
 import { RejectOutreachDto } from './dto/reject-outreach.dto';
+import { EditOutreachDto } from './dto/edit-outreach.dto';
 
 // Mesma tabela de preço usada em `AiService.estimateCost` — mantida
 // duplicada (não extraída para um util compartilhado) porque `LeadsModule`
@@ -369,6 +370,71 @@ export class OutreachService {
       organizationId,
       action: 'outreach.mark-replied',
       resource: messageId,
+    });
+
+    return updated;
+  }
+
+  /**
+   * Edita o texto (`body`/`subject`) de uma mensagem ainda em `DRAFT` (Task
+   * 15) — até aqui, o único jeito de ajustar um rascunho era `reject` +
+   * `regenerate`, que rechama a IA mesmo para um ajuste pequeno. Não é uma
+   * transição de estado (`status` continua `DRAFT`), então não passa por
+   * `applyTransition`, mas usa a MESMA disciplina TOCTOU-safe dela: o
+   * `status: 'DRAFT'` entra no `WHERE` do `updateMany`, não numa checagem em
+   * memória separada de uma leitura anterior — fecha a mesma race (ex.: um
+   * `approve` concorrente comitando entre a leitura e a escrita desta edição)
+   * pelo mesmo mecanismo. `count === 0` produz o mesmo estilo de erro 400 que
+   * uma transição inválida já produz.
+   */
+  async edit(
+    organizationId: string,
+    messageId: string,
+    dto: EditOutreachDto,
+    userId: string,
+  ): Promise<OutreachMessage> {
+    const message = await this.findByIdOrThrow(organizationId, messageId);
+
+    const data: Prisma.OutreachMessageUncheckedUpdateManyInput = { body: dto.body };
+    if (dto.subject !== undefined) {
+      data.subject = dto.subject;
+    }
+
+    const { count } = await this.prisma.outreachMessage.updateMany({
+      where: { id: messageId, organizationId, status: 'DRAFT' },
+      data,
+    });
+
+    if (count === 0) {
+      // Mesmo princípio de `applyTransition`: nunca confiar no status lido
+      // antes desta chamada (pode estar desatualizado pela própria race que
+      // o WHERE condicional existe para fechar) — relê só para compor uma
+      // mensagem de erro mais útil.
+      const current = await this.prisma.outreachMessage.findFirst({
+        where: { id: messageId, organizationId },
+      });
+      throw new BadRequestException(
+        `Não é possível editar uma mensagem com status ${current?.status ?? 'desconhecido'} (esperado DRAFT).`,
+      );
+    }
+
+    const updated = await this.prisma.outreachMessage.findFirst({
+      where: { id: messageId, organizationId },
+    });
+    if (!updated) {
+      throw new NotFoundException('Mensagem de outreach não encontrada');
+    }
+
+    // Audit-loga só o FATO de que foi editada — nunca o texto antigo/novo no
+    // log (mesmo nível de detalhe de `outreach.reject`, que também não grava
+    // o corpo da mensagem).
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: userId,
+      organizationId,
+      action: 'outreach.edited',
+      resource: messageId,
+      metadata: { leadId: message.leadId },
     });
 
     return updated;

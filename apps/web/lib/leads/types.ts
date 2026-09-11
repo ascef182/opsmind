@@ -220,6 +220,13 @@ export interface RejectOutreachInput {
   reason?: string;
 }
 
+// Espelha EditOutreachDto — `body` obrigatório, `subject` opcional. Só é
+// aceito pela API enquanto a mensagem está em DRAFT (Task 15).
+export interface EditOutreachInput {
+  body: string;
+  subject?: string;
+}
+
 export interface ListOutreachMessagesFilter {
   status?: OutreachStatus;
 }

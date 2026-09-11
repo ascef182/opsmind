@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../api-client';
 import type {
+  EditOutreachInput,
   GenerateOutreachInput,
   ListOutreachMessagesFilter,
   OutreachMessage,
@@ -67,6 +68,21 @@ export function useGenerateOutreachDraft(organizationId: string, leadId: string)
     mutationFn: (input: GenerateOutreachInput) =>
       apiFetch<OutreachMessage>(`/organizations/${organizationId}/leads/${leadId}/outreach-messages`, {
         method: 'POST',
+        body: input,
+      }),
+    onSuccess: () => invalidateOutreachDomain(queryClient, organizationId, leadId),
+  });
+}
+
+// Edita body/subject de um rascunho DRAFT (Task 15) — `PATCH
+// .../outreach-messages/:messageId`. Mesmo padrão dos outros hooks de
+// transição (leadId fixo no hook, messageId por chamada).
+export function useEditOutreach(organizationId: string, leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ messageId, ...input }: EditOutreachInput & { messageId: string }) =>
+      apiFetch<OutreachMessage>(`/organizations/${organizationId}/outreach-messages/${messageId}`, {
+        method: 'PATCH',
         body: input,
       }),
     onSuccess: () => invalidateOutreachDomain(queryClient, organizationId, leadId),

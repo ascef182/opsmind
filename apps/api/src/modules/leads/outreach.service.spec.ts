@@ -596,4 +596,101 @@ describe('OutreachService', () => {
       expect(result).toBe(newDraft);
     });
   });
+
+  describe('edit', () => {
+    it('editar um DRAFT funciona, persiste o novo texto (updateMany com status:DRAFT no WHERE) e audit-loga sem o texto', async () => {
+      const { service, prisma, auditService } = buildDeps();
+      const draft = { id: 'msg-1', leadId: 'lead-1', status: 'DRAFT', body: 'texto original', subject: null };
+      const editedRow = { ...draft, body: 'texto editado' };
+      prisma.outreachMessage.findFirst
+        .mockResolvedValueOnce(draft) // findByIdOrThrow no início de edit()
+        .mockResolvedValueOnce(editedRow); // refetch pós-updateMany
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      const result = await service.edit('org-1', 'msg-1', { body: 'texto editado' }, 'user-1');
+
+      expect(result.body).toBe('texto editado');
+      expect(prisma.outreachMessage.updateMany).toHaveBeenCalledWith({
+        where: { id: 'msg-1', organizationId: 'org-1', status: 'DRAFT' },
+        data: { body: 'texto editado' },
+      });
+      expect(auditService.log).toHaveBeenCalledWith({
+        actorType: 'USER',
+        actorId: 'user-1',
+        organizationId: 'org-1',
+        action: 'outreach.edited',
+        resource: 'msg-1',
+        metadata: { leadId: 'lead-1' },
+      });
+      // Nunca grava o texto antigo/novo no audit log — só o fato de que foi
+      // editada.
+      const loggedCall = auditService.log.mock.calls[0][0];
+      expect(JSON.stringify(loggedCall)).not.toContain('texto original');
+      expect(JSON.stringify(loggedCall)).not.toContain('texto editado');
+    });
+
+    it('inclui subject no updateMany quando fornecido', async () => {
+      const { service, prisma } = buildDeps();
+      const draft = { id: 'msg-1', leadId: 'lead-1', status: 'DRAFT', body: 'texto original', subject: null };
+      prisma.outreachMessage.findFirst
+        .mockResolvedValueOnce(draft)
+        .mockResolvedValueOnce({ ...draft, body: 'novo', subject: 'novo assunto' });
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await service.edit('org-1', 'msg-1', { body: 'novo', subject: 'novo assunto' }, 'user-1');
+
+      expect(prisma.outreachMessage.updateMany).toHaveBeenCalledWith({
+        where: { id: 'msg-1', organizationId: 'org-1', status: 'DRAFT' },
+        data: { body: 'novo', subject: 'novo assunto' },
+      });
+    });
+
+    it.each(['APPROVED', 'SENT', 'REJECTED', 'REPLIED'] as const)(
+      'editar uma mensagem %s lança BadRequestException (mesmo estilo de erro de transição inválida)',
+      async (status) => {
+        const { service, prisma, auditService } = buildDeps();
+        const message = { id: 'msg-1', leadId: 'lead-1', status, body: 'texto', subject: null };
+        prisma.outreachMessage.findFirst.mockResolvedValueOnce(message).mockResolvedValueOnce(message);
+        prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 0 });
+
+        await expect(service.edit('org-1', 'msg-1', { body: 'texto novo' }, 'user-1')).rejects.toThrow(
+          new BadRequestException(
+            `Não é possível editar uma mensagem com status ${status} (esperado DRAFT).`,
+          ),
+        );
+        expect(auditService.log).not.toHaveBeenCalled();
+      },
+    );
+
+    it('editar uma mensagem inexistente lança NotFoundException e não chama updateMany', async () => {
+      const { service, prisma } = buildDeps();
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce(null);
+
+      await expect(service.edit('org-1', 'missing', { body: 'texto' }, 'user-1')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.outreachMessage.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('condição de corrida: duas edições concorrentes no mesmo DRAFT — a segunda a commitar no banco vence, a primeira a chegar aqui (já desatualizada) falha', async () => {
+      const { service, prisma } = buildDeps();
+      const draft = { id: 'msg-1', leadId: 'lead-1', status: 'DRAFT', body: 'original', subject: null };
+
+      // Primeira edição "perde": o WHERE (status: 'DRAFT') já não casa mais
+      // no banco real porque a segunda edição concorrente comitou primeiro
+      // — simulado com count: 0, nunca por uma checagem em memória.
+      prisma.outreachMessage.findFirst
+        .mockResolvedValueOnce(draft) // findByIdOrThrow
+        .mockResolvedValueOnce({ ...draft, body: 'editado pela segunda' }); // refetch pro erro
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.edit('org-1', 'msg-1', { body: 'editado pela primeira' }, 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.outreachMessage.updateMany).toHaveBeenCalledWith({
+        where: { id: 'msg-1', organizationId: 'org-1', status: 'DRAFT' },
+        data: { body: 'editado pela primeira' },
+      });
+    });
+  });
 });

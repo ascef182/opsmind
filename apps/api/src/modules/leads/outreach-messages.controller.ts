@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import type { OutreachMessage } from '@opsmind/database';
 import { OutreachService } from './outreach.service';
 import { GenerateOutreachDto } from './dto/generate-outreach.dto';
 import { RejectOutreachDto } from './dto/reject-outreach.dto';
+import { EditOutreachDto } from './dto/edit-outreach.dto';
 import { ListOutreachMessagesQueryDto } from './dto/list-outreach-messages-query.dto';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
@@ -58,6 +59,21 @@ export class OutreachMessagesController {
     @Param('messageId') messageId: string,
   ): Promise<OutreachMessage> {
     return this.outreachService.findByIdOrThrow(organizationId, messageId);
+  }
+
+  // Edita body/subject de um rascunho ainda em DRAFT (Task 15) — não é uma
+  // transição de estado (status continua DRAFT), por isso PATCH em vez de
+  // um dos POST .../<verbo> usados pelas transições reais abaixo.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Patch('outreach-messages/:messageId')
+  edit(
+    @Param('organizationId') organizationId: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: { id: string },
+    @Body() dto: EditOutreachDto,
+  ): Promise<OutreachMessage> {
+    return this.outreachService.edit(organizationId, messageId, dto, user.id);
   }
 
   @Roles(...WRITE_ROLES)

@@ -12,6 +12,7 @@ import { useEnrichLead, useAnalyzeLeadPotential } from '@/lib/leads/use-lead-enr
 import { useServiceOfferings } from '@/lib/leads/use-service-offerings';
 import {
   useApproveOutreach,
+  useEditOutreach,
   useGenerateOutreachDraft,
   useMarkOutreachReplied,
   useMarkOutreachSent,
@@ -24,6 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { FormError } from '@/components/ui/card';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
 import { SocialBadges } from '@/components/leads/social-badges';
@@ -90,14 +92,18 @@ function OutreachMessageCard({
   const regenerate = useRegenerateOutreach(organizationId, leadId);
   const markSent = useMarkOutreachSent(organizationId, leadId);
   const markReplied = useMarkOutreachReplied(organizationId, leadId);
+  const edit = useEditOutreach(organizationId, leadId);
   const [showRejectReason, setShowRejectReason] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editBody, setEditBody] = useState(message.body);
 
   // Ações visíveis batem exatamente na máquina de estado de
   // outreach.service.ts: approve/reject/regenerate só a partir de DRAFT,
   // mark-sent só de APPROVED, mark-replied só de SENT — REJECTED/REPLIED
   // são terminais (sem ação além de gerar um novo rascunho, que é uma OUTRA
-  // mensagem, não uma transição desta).
+  // mensagem, não uma transição desta). "Editar" (Task 15) também só existe
+  // em DRAFT — não é uma transição de status, mas segue a mesma guarda.
   return (
     <li className="rounded-md border border-border bg-background p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -108,16 +114,63 @@ function OutreachMessageCard({
         <span className="text-xs text-muted-foreground">{new Date(message.createdAt).toLocaleString('pt-BR')}</span>
       </div>
       {message.subject && <p className="mt-2 text-sm font-medium text-foreground">{message.subject}</p>}
-      <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/80">{message.body}</p>
+      {isEditing ? (
+        <div className="mt-2 flex flex-col gap-2">
+          <Textarea
+            rows={5}
+            value={editBody}
+            onChange={(e) => setEditBody(e.target.value)}
+            maxLength={4000}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={edit.isPending || editBody.trim().length === 0}
+              onClick={() =>
+                edit.mutate(
+                  { messageId: message.id, body: editBody },
+                  { onSuccess: () => setIsEditing(false) },
+                )
+              }
+            >
+              Salvar
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={edit.isPending}
+              onClick={() => {
+                setEditBody(message.body);
+                setIsEditing(false);
+              }}
+            >
+              Cancelar
+            </Button>
+          </div>
+          <FormError message={edit.isError ? (edit.error as ApiError).message : null} />
+        </div>
+      ) : (
+        <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/80">{message.body}</p>
+      )}
       {message.rejectedReason && (
         <p className="mt-2 text-xs text-negative-500">Motivo da rejeição: {message.rejectedReason}</p>
       )}
 
-      {canWrite && message.status === 'DRAFT' && (
+      {canWrite && message.status === 'DRAFT' && !isEditing && (
         <div className="mt-3 flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">
             <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate(message.id)}>
               Aprovar
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setEditBody(message.body);
+                setIsEditing(true);
+              }}
+            >
+              Editar
             </Button>
             <Button size="sm" variant="secondary" disabled={regenerate.isPending} onClick={() => regenerate.mutate(message.id)}>
               Regenerar

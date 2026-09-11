@@ -4,13 +4,19 @@ import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
-import { useApproveOutreach, useOutreachMessages, useRejectOutreach } from '@/lib/leads/use-outreach-messages';
+import {
+  useApproveOutreach,
+  useEditOutreach,
+  useOutreachMessages,
+  useRejectOutreach,
+} from '@/lib/leads/use-outreach-messages';
 import { WRITE_ROLES, type OutreachMessage, type OutreachStatus } from '@/lib/leads/types';
 import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { FormError } from '@/components/ui/card';
 
 const STATUS_OPTIONS: Array<{ value: OutreachStatus | ''; label: string }> = [
@@ -49,8 +55,11 @@ function QueueCard({
 }) {
   const approve = useApproveOutreach(organizationId, message.leadId);
   const reject = useRejectOutreach(organizationId, message.leadId);
+  const edit = useEditOutreach(organizationId, message.leadId);
   const [showRejectReason, setShowRejectReason] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editBody, setEditBody] = useState(message.body);
 
   return (
     <li className="rounded-lg border border-border bg-card p-4">
@@ -63,7 +72,44 @@ function QueueCard({
       </div>
 
       {message.subject && <p className="mt-2 text-sm font-medium text-foreground">{message.subject}</p>}
-      <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/80">{message.body}</p>
+      {isEditing ? (
+        <div className="mt-2 flex flex-col gap-2">
+          <Textarea
+            rows={5}
+            value={editBody}
+            onChange={(e) => setEditBody(e.target.value)}
+            maxLength={4000}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={edit.isPending || editBody.trim().length === 0}
+              onClick={() =>
+                edit.mutate(
+                  { messageId: message.id, body: editBody },
+                  { onSuccess: () => setIsEditing(false) },
+                )
+              }
+            >
+              Salvar
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={edit.isPending}
+              onClick={() => {
+                setEditBody(message.body);
+                setIsEditing(false);
+              }}
+            >
+              Cancelar
+            </Button>
+          </div>
+          <FormError message={edit.isError ? (edit.error as ApiError).message : null} />
+        </div>
+      ) : (
+        <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/80">{message.body}</p>
+      )}
       {message.rejectedReason && (
         <p className="mt-2 text-xs text-negative-500">Motivo da rejeição: {message.rejectedReason}</p>
       )}
@@ -75,13 +121,25 @@ function QueueCard({
         Ver lead →
       </Link>
 
-      {/* Só DRAFT pode ser aprovada/rejeitada — mesma máquina de estado de
-          outreach.service.ts (approve/reject exigem `fromStatus: 'DRAFT'`). */}
-      {canWrite && message.status === 'DRAFT' && (
+      {/* Só DRAFT pode ser aprovada/rejeitada/editada — mesma máquina de
+          estado de outreach.service.ts (approve/reject exigem
+          `fromStatus: 'DRAFT'`; edit usa a mesma guarda, só que sem mudar
+          status). */}
+      {canWrite && message.status === 'DRAFT' && !isEditing && (
         <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
           <div className="flex flex-wrap gap-2">
             <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate(message.id)}>
               Aprovar
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setEditBody(message.body);
+                setIsEditing(true);
+              }}
+            >
+              Editar
             </Button>
             <Button
               size="sm"
