@@ -129,4 +129,32 @@ describe('scoreLead', () => {
     expect(result.matchedOfferingId).toBe('offering-b');
     expect(result.keywordMatchPoints).toBe(60); // round(2/2*60)
   });
+
+  it('lead só de fonte Apify (sem rawContent, sem firmographics) casa oferta pela googleCategory', () => {
+    const bakeryOffering: ServiceOfferingIcp = {
+      id: 'offering-site',
+      signals: ['padaria', 'bakery'],
+      targetIndustries: [],
+      minEmployees: null,
+      maxEmployees: null,
+      minRevenueUsd: null,
+      maxRevenueUsd: null,
+    };
+
+    const result = scoreLead(
+      {
+        website: null,
+        googleCategory: 'Bakery',
+        rating: null,
+        reviewCount: null,
+        rawContent: null, // Apify nunca preenche isso — cenário real sem Explorium
+        firmographics: null,
+      },
+      [bakeryOffering],
+    );
+
+    expect(result.keywordMatchPoints).toBe(30); // 1 de 2 signals ("bakery") => round(1/2*60)
+    expect(result.matchedOfferingId).toBe('offering-site');
+    expect(result.matchedSignals).toEqual(['bakery']);
+  });
 });

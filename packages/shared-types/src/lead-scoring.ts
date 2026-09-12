@@ -142,17 +142,28 @@ function computeIcpFit(
  * `keywordMatchPoints` (até 60) — fallback usado SÓ quando não há
  * firmographics (fonte não-estruturada, ex.: Camoufox): sem dado
  * estruturado pra casar contra o ICP, o sinal disponível é o texto bruto da
- * página. A offering com mais `signals[]` batidos em `rawContent` vence
- * (empate = a primeira do array, garantido pelo `>` estrito abaixo); a
- * pontuação é proporcional a quanto da lista de sinais DAQUELA offering
- * bateu, não do total entre todas as offerings.
+ * página. A offering com mais `signals[]` batidos vence (empate = a
+ * primeira do array, garantido pelo `>` estrito abaixo); a pontuação é
+ * proporcional a quanto da lista de sinais DAQUELA offering bateu, não do
+ * total entre todas as offerings.
+ *
+ * Texto de busca = `rawContent` (Camoufox) + `googleCategory` (Apify)
+ * concatenados — sem isso, um lead vindo só de fonte Apify (sem Explorium
+ * pra firmographics, cenário real de quem só tem a chave da Apify
+ * configurada) nunca teria `matchedOfferingId`: `rawContent` nunca é
+ * preenchido por fontes estruturadas por design, e `computeIcpFit` já usa
+ * `googleCategory` mas só roda quando `firmographics` existe — sem
+ * Explorium, essa combinação nunca acontece.
  */
 function computeKeywordFallback(
   input: LeadScoringInput,
   offerings: ServiceOfferingIcp[],
 ): OfferingMatchResult {
-  if (!input.rawContent) return NO_MATCH;
-  const content = normalize(input.rawContent);
+  const searchText = [input.rawContent, input.googleCategory]
+    .filter((value): value is string => !!value && value.trim() !== '')
+    .join(' ');
+  if (!searchText) return NO_MATCH;
+  const content = normalize(searchText);
 
   let winner: { offering: ServiceOfferingIcp; matchedSignals: string[] } | null = null;
 
