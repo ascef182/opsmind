@@ -45,6 +45,8 @@ function describeNotification(notification: Notification): string {
       return `Sem resposta ainda${typeof payload.leadName === 'string' ? ` — ${payload.leadName}` : ''}`;
     case 'task.due_reminder':
       return `Tarefa vencida${typeof payload.title === 'string' ? `: ${payload.title}` : ''}`;
+    case 'meeting.reminder':
+      return `Reunião em breve${typeof payload.title === 'string' ? `: ${payload.title}` : ''}`;
     default:
       return notification.type;
   }

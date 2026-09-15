@@ -203,6 +203,7 @@ model Organization {
   redditWatchTopics   RedditWatchTopic[]
   marketOpportunities MarketOpportunity[]
   deals               Deal[]
+  meetings            Meeting[]
 
   @@map("organizations")
 }
@@ -489,12 +490,44 @@ model Deal {
   customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
   originLead   Lead?        @relation(fields: [originLeadId], references: [id], onDelete: SetNull)
   owner        User?        @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  meetings     Meeting[]
 
   @@index([organizationId, stage])
   @@index([organizationId, customerId])
   @@index([organizationId, expectedCloseDate])
   @@index([ownerUserId])
   @@map("deals")
+}
+
+// Agenda/reuniões (plano pensando-como-empresa-com-agile-beaver.md, item
+// "lembretes e agenda" do roadmap) — sempre vinculada a um Deal, nunca solta
+// (uma reunião existe no contexto de uma negociação em andamento).
+model Meeting {
+  id                 String         @id @default(uuid())
+  organizationId     String         @map("organization_id")
+  dealId             String         @map("deal_id")
+  title              String
+  scheduledAt        DateTime       @map("scheduled_at")
+  durationMinutes    Int            @default(30) @map("duration_minutes")
+  location           String?
+  notes              String?
+  // Dedup do scan de lembrete de reunião do worker
+  // (`meeting-reminder-scan.ts`) — limpo quando `scheduledAt` muda
+  // (`MeetingsService.update`), mesmo racional de `Task.dueDateNotifiedAt`.
+  reminderNotifiedAt DateTime?      @map("reminder_notified_at")
+  // Cancelamento é soft (nunca deletado) — mantém histórico da negociação.
+  canceledAt         DateTime?      @map("canceled_at")
+  actorType          AuditActorType @map("actor_type")
+  actorId            String?        @map("actor_id")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deal         Deal         @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, dealId])
+  @@index([scheduledAt, reminderNotifiedAt])
+  @@map("meetings")
 }
 
 model Notification {

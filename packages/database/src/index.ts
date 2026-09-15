@@ -18,6 +18,7 @@ export type {
   TaskStatus,
   Deal,
   DealStage,
+  Meeting,
   AIRequest,
   AIRequestToolCall,
   AIRequestStatus,

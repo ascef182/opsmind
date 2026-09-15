@@ -65,6 +65,12 @@ export const envSchema = z.object({
   // ainda pode variar por instância/demo vs. produção).
   OUTREACH_FOLLOWUP_THRESHOLD_DAYS: z.coerce.number().int().positive().default(3),
   OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
+  // Lembrete de reunião (worker, `meeting-reminder-scan.ts`) — quantos
+  // minutos antes do horário agendado a notificação é disparada. Mesmo
+  // scan de 60s (SCAN_INTERVAL_MS, fixo em apps/worker/src/main.ts) que já
+  // roda para lembrete de tarefa — sem custo de API por trás, então não
+  // precisa de intervalo configurável próprio.
+  MEETING_REMINDER_MINUTES_BEFORE: z.coerce.number().int().positive().default(60),
 
   // IA (Fase 3) — deliberadamente OPCIONAL, ao contrário de toda outra
   // variável acima: IA é um recurso adicional, não uma dependência do resto

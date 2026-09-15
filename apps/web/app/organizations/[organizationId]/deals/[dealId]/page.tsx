@@ -1,11 +1,19 @@
 'use client';
 
+import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useCustomer } from '@/lib/customers/use-customers';
 import { useDeal, useGenerateDealProposal, useMoveDealStage, useUpdateDeal } from '@/lib/deals/use-deals';
 import { DEAL_STAGE_LABELS, DEAL_STAGE_TRANSITIONS, WRITE_ROLES, formatCurrency, type DealStage } from '@/lib/deals/types';
+import {
+  useCancelMeeting,
+  useCreateMeeting,
+  useMeetings,
+  downloadMeetingIcs,
+} from '@/lib/meetings/use-meetings';
+import { buildGoogleCalendarUrl } from '@/lib/meetings/types';
 import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,6 +32,10 @@ export default function DealDetailPage() {
   const moveStage = useMoveDealStage(organizationId, dealId);
   const updateDeal = useUpdateDeal(organizationId, dealId);
   const generateProposal = useGenerateDealProposal(organizationId, dealId);
+  const meetings = useMeetings(organizationId, dealId);
+  const createMeeting = useCreateMeeting(organizationId, dealId);
+  const cancelMeeting = useCancelMeeting(organizationId, dealId);
+  const [icsError, setIcsError] = useState<string | null>(null);
 
   if (deal.isLoading) {
     return <p className="text-muted-foreground">Carregando negócio…</p>;
@@ -196,6 +208,114 @@ export default function DealDetailPage() {
           )}
         </Card>
       )}
+
+      <Card>
+        <h2 className="font-medium text-foreground">Reuniões</h2>
+
+        {canWrite && (
+          <form
+            className="mt-3 grid grid-cols-2 gap-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const form = new FormData(e.currentTarget);
+              const title = String(form.get('title') ?? '');
+              const scheduledAt = String(form.get('scheduledAt') ?? '');
+              if (!title || !scheduledAt) return;
+              createMeeting.mutate(
+                {
+                  title,
+                  scheduledAt: new Date(scheduledAt).toISOString(),
+                  location: String(form.get('location') ?? '') || undefined,
+                  notes: String(form.get('notes') ?? '') || undefined,
+                },
+                { onSuccess: () => (e.target as HTMLFormElement).reset() },
+              );
+            }}
+          >
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Título</label>
+              <Input name="title" placeholder="Call de fechamento" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Data e hora</label>
+              <Input name="scheduledAt" type="datetime-local" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Local (opcional)</label>
+              <Input name="location" placeholder="Link da chamada ou endereço" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Notas (opcional)</label>
+              <Input name="notes" placeholder="Pauta da reunião" />
+            </div>
+            <div className="col-span-2 flex justify-end">
+              <Button type="submit" size="sm" disabled={createMeeting.isPending}>
+                {createMeeting.isPending ? 'Agendando…' : 'Agendar reunião'}
+              </Button>
+            </div>
+          </form>
+        )}
+        <FormError message={createMeeting.isError ? (createMeeting.error as ApiError).message : null} />
+        <FormError message={icsError} />
+
+        {meetings.isLoading && <p className="mt-3 text-sm text-muted-foreground">Carregando reuniões…</p>}
+        {meetings.isSuccess && meetings.data.length === 0 && (
+          <p className="mt-3 text-sm text-muted-foreground">Nenhuma reunião agendada ainda.</p>
+        )}
+        <ul className="mt-3 flex flex-col gap-2">
+          {meetings.data?.map((meeting) => (
+            <li
+              key={meeting.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
+            >
+              <div className="flex flex-col">
+                <span className={meeting.canceledAt ? 'text-muted-foreground line-through' : 'text-foreground'}>
+                  {meeting.title}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(meeting.scheduledAt).toLocaleString('pt-BR')} ({meeting.durationMinutes} min)
+                  {meeting.location ? ` · ${meeting.location}` : ''}
+                </span>
+              </div>
+              {!meeting.canceledAt && (
+                <div className="flex items-center gap-2">
+                  <a
+                    href={buildGoogleCalendarUrl(meeting)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-accent-500 hover:underline"
+                  >
+                    Google Calendar
+                  </a>
+                  <button
+                    type="button"
+                    className="text-xs text-accent-500 hover:underline"
+                    onClick={() => {
+                      setIcsError(null);
+                      downloadMeetingIcs(organizationId, meeting.id, `reuniao-${meeting.id}.ics`).catch(() =>
+                        setIcsError('Não foi possível baixar o arquivo .ics'),
+                      );
+                    }}
+                  >
+                    Baixar .ics
+                  </button>
+                  {canWrite && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-negative-500"
+                      disabled={cancelMeeting.isPending}
+                      onClick={() => cancelMeeting.mutate(meeting.id)}
+                    >
+                      Cancelar
+                    </Button>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </Card>
     </div>
   );
 }

@@ -23,6 +23,7 @@ import { scanProspectingTargets } from './prospecting-scan';
 import { scanRedditMiningTopics } from './reddit-mining-scan';
 import { scanOutreachFollowups } from './outreach-followup-scan';
 import { scanTaskDueReminders } from './task-due-reminder-scan';
+import { scanMeetingReminders } from './meeting-reminder-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
 
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
   // instância/demo vs. produção).
   const OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS = env.OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS;
   const OUTREACH_FOLLOWUP_THRESHOLD_DAYS = env.OUTREACH_FOLLOWUP_THRESHOLD_DAYS;
+  const MEETING_REMINDER_MINUTES_BEFORE = env.MEETING_REMINDER_MINUTES_BEFORE;
 
   const prisma = createPrismaClient(env);
   // Uma única conexão Redis reaproveitada por ambos os pares fila/worker
@@ -221,6 +223,24 @@ async function main(): Promise<void> {
   await runTaskDueReminderScan();
   setInterval(runTaskDueReminderScan, SCAN_INTERVAL_MS);
 
+  // Lembrete de reunião (plano pensando-como-empresa-com-agile-beaver.md) —
+  // mesmo intervalo fixo `SCAN_INTERVAL_MS` de `runTaskDueReminderScan`
+  // acima (sem custo de API por trás, sensível a tempo).
+  async function runMeetingReminderScan(): Promise<void> {
+    try {
+      const notified = await scanMeetingReminders(prisma, MEETING_REMINDER_MINUTES_BEFORE);
+      if (notified > 0) {
+        logger.info({ notified }, 'scan de lembrete de reunião notificou responsáveis');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'scan de lembrete de reunião falhou');
+      Sentry.captureException(error);
+    }
+  }
+
+  await runMeetingReminderScan();
+  setInterval(runMeetingReminderScan, SCAN_INTERVAL_MS);
+
   // Scan de prospecção autônoma (Task 7) — mesmo formato de `runScan`
   // acima, rodando contra a mesma fila `leadScrapeQueue`/`connection` já
   // instanciadas nesta função (nenhuma fila/conexão nova).
@@ -292,6 +312,9 @@ async function main(): Promise<void> {
     `Scan de follow-up de outreach a cada ${OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS}ms (threshold ${OUTREACH_FOLLOWUP_THRESHOLD_DAYS} dias)`,
   );
   logger.info(`Scan de lembrete de vencimento de tarefa a cada ${SCAN_INTERVAL_MS}ms`);
+  logger.info(
+    `Scan de lembrete de reunião a cada ${SCAN_INTERVAL_MS}ms (${MEETING_REMINDER_MINUTES_BEFORE} min antes)`,
+  );
 }
 
 main().catch((error) => {
