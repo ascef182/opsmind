@@ -110,6 +110,20 @@ export class OutreachMessagesController {
     return this.outreachService.regenerate(organizationId, messageId, user.id);
   }
 
+  // Envio real (não um checkbox manual) — só para canal EMAIL, ver
+  // comentário de `OutreachService.send`. Continua sem contraparte de AI
+  // tool, mesma regra dura de toda transição deste controller.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post('outreach-messages/:messageId/send')
+  send(
+    @Param('organizationId') organizationId: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<OutreachMessage> {
+    return this.outreachService.send(organizationId, messageId, user.id);
+  }
+
   @Roles(...WRITE_ROLES)
   @UseGuards(RolesGuard)
   @Post('outreach-messages/:messageId/mark-sent')

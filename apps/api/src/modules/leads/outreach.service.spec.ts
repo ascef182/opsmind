@@ -29,6 +29,7 @@ function buildDeps() {
 
   const leadsService = { findByIdOrThrow: jest.fn() };
   const serviceOfferingsService = { findByIdOrThrow: jest.fn() };
+  const emailService = { sendEmail: jest.fn().mockResolvedValue({ id: null }) };
 
   const service = new OutreachService(
     prisma as never,
@@ -38,6 +39,7 @@ function buildDeps() {
     auditService as never,
     leadsService as never,
     serviceOfferingsService as never,
+    emailService as never,
   );
 
   return {
@@ -49,6 +51,7 @@ function buildDeps() {
     auditService,
     leadsService,
     serviceOfferingsService,
+    emailService,
   };
 }
 
@@ -463,6 +466,72 @@ describe('OutreachService', () => {
         data: expect.objectContaining({ status: 'REPLIED' }),
       });
       expect(prisma.lead.update).toHaveBeenCalledWith({ where: { id: 'lead-1' }, data: { status: 'REPLIED' } });
+    });
+  });
+
+  describe('send (envio real via EmailService, canal EMAIL)', () => {
+    it('envia o email, transiciona APPROVED -> SENT e marca o Lead como CONTACTED', async () => {
+      const { service, prisma, leadsService, emailService, auditService } = buildDeps();
+      const approved = {
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'EMAIL',
+        subject: 'Assunto',
+        body: 'Corpo da mensagem',
+        status: 'APPROVED',
+      };
+      const sent = { ...approved, status: 'SENT' };
+      prisma.outreachMessage.findFirst
+        .mockResolvedValueOnce(approved) // findByIdOrThrow (checagem inicial)
+        .mockResolvedValueOnce(sent); // refetch pós-updateMany dentro de applyTransition
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 1 });
+      leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, email: 'lead@example.com' });
+      emailService.sendEmail.mockResolvedValueOnce({ id: 'resend-email-1' });
+
+      const result = await service.send('org-1', 'msg-1', 'user-1');
+
+      expect(emailService.sendEmail).toHaveBeenCalledWith({
+        to: 'lead@example.com',
+        subject: 'Assunto',
+        html: expect.stringContaining('Corpo da mensagem'),
+        idempotencyKey: 'outreach-message/msg-1',
+      });
+      expect(prisma.outreachMessage.updateMany).toHaveBeenCalledWith({
+        where: { id: 'msg-1', organizationId: 'org-1', status: 'APPROVED' },
+        data: expect.objectContaining({ status: 'SENT', providerMessageId: 'resend-email-1' }),
+      });
+      expect(prisma.lead.update).toHaveBeenCalledWith({ where: { id: 'lead-1' }, data: { status: 'CONTACTED' } });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'outreach.send', resource: 'msg-1' }),
+      );
+      expect(result.status).toBe('SENT');
+    });
+
+    it('rejeita canais diferentes de EMAIL (sem integração real de envio)', async () => {
+      const { service, prisma, emailService } = buildDeps();
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'WHATSAPP',
+        status: 'APPROVED',
+      });
+
+      await expect(service.send('org-1', 'msg-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('rejeita quando o lead não tem e-mail cadastrado', async () => {
+      const { service, prisma, leadsService, emailService } = buildDeps();
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'EMAIL',
+        status: 'APPROVED',
+      });
+      leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, email: null });
+
+      await expect(service.send('org-1', 'msg-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
     });
   });
 

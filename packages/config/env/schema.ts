@@ -38,6 +38,19 @@ export const envSchema = z.object({
 
   // Email
   EMAIL_PROVIDER: z.enum(['console', 'resend']).default('console'),
+  // Só exigido quando EMAIL_PROVIDER=resend — validado no primeiro uso real
+  // por `ResendEmailProvider` (mesma filosofia fail-late de ANTHROPIC_API_KEY
+  // acima), não aqui, porque o Zod não expressa "obrigatório só quando outro
+  // campo tem tal valor" sem `.refine()` cruzando os dois campos, e o
+  // restante do arquivo já resolve esse mesmo padrão (CAMOFOX_*) deixando a
+  // combinação pro gateway checar.
+  RESEND_API_KEY: z.string().optional(),
+  // Remetente usado tanto para convites de organização quanto para envio real
+  // de outreach (plano pensando-como-empresa-com-agile-beaver.md). Default é
+  // o sandbox do Resend — só entrega para o próprio dono da conta Resend;
+  // produção precisa de um domínio verificado aqui (resend:resend skill,
+  // "Common Mistakes" #11/#12).
+  RESEND_FROM_EMAIL: z.string().default('OpsMind <onboarding@resend.dev>'),
 
   // IA (Fase 3) — deliberadamente OPCIONAL, ao contrário de toda outra
   // variável acima: IA é um recurso adicional, não uma dependência do resto

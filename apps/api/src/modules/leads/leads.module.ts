@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ScrapingModule } from '../../infrastructure/scraping/scraping.module';
 import { QueueModule } from '../../infrastructure/queue/queue.module';
+import { EmailModule } from '../../infrastructure/email/email.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { DealsModule } from '../deals/deals.module';
 import { ServiceOfferingsService } from './service-offerings.service';
@@ -39,7 +40,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
  * são `@Global()`.
  */
 @Module({
-  imports: [ScrapingModule, QueueModule, OrganizationsModule, DealsModule],
+  imports: [ScrapingModule, QueueModule, EmailModule, OrganizationsModule, DealsModule],
   controllers: [
     ServiceOfferingsController,
     ScrapeJobsController,

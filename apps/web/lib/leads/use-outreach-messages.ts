@@ -123,6 +123,21 @@ export function useRegenerateOutreach(organizationId: string, leadId: string) {
   });
 }
 
+// Envio real (não um checkbox manual) — só disponível para canal EMAIL, ver
+// `OutreachService.send` no backend. `useMarkOutreachSent` abaixo continua
+// existindo para os demais canais (WhatsApp/LinkedIn/Reddit DM), onde não há
+// integração de envio e o usuário só está confirmando que enviou por fora.
+export function useSendOutreach(organizationId: string, leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (messageId: string) =>
+      apiFetch<OutreachMessage>(`/organizations/${organizationId}/outreach-messages/${messageId}/send`, {
+        method: 'POST',
+      }),
+    onSuccess: () => invalidateOutreachDomain(queryClient, organizationId, leadId),
+  });
+}
+
 export function useMarkOutreachSent(organizationId: string, leadId: string) {
   const queryClient = useQueryClient();
   return useMutation({

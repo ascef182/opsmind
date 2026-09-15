@@ -13,6 +13,7 @@ import type { LeadScoreBreakdown, SocialLink, SocialPlatform } from '@opsmind/sh
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
+import { EMAIL_SERVICE, type EmailService } from '../../infrastructure/email/email.service';
 import { BudgetService } from '../ai/services/budget.service';
 import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
 import { LeadsService } from './leads.service';
@@ -104,6 +105,7 @@ export class OutreachService {
     private readonly auditService: AuditService,
     private readonly leadsService: LeadsService,
     private readonly serviceOfferingsService: ServiceOfferingsService,
+    @Inject(EMAIL_SERVICE) private readonly emailService: EmailService,
   ) {}
 
   // `actor`: quem pediu a geração — `{ type: 'USER', userId }` (chamador
@@ -327,6 +329,72 @@ export class OutreachService {
       { channel: message.channel, serviceOfferingId: message.serviceOfferingId ?? undefined },
       { type: 'USER', userId },
     );
+  }
+
+  /**
+   * `POST .../outreach-messages/:messageId/send` — envio REAL (não um
+   * checkbox manual como `markSent`), só para o canal EMAIL (plano
+   * pensando-como-empresa-com-agile-beaver.md, sprint de envio real de
+   * outreach). WhatsApp/LinkedIn/Reddit DM continuam exigindo `markSent`
+   * manual — nenhuma integração de envio existe para esses canais ainda.
+   *
+   * Continua exigindo `userId` de uma request HTTP autenticada, igual a
+   * toda outra transição deste service (ver comentário da classe) — nunca
+   * existe (nem pode existir) uma AI tool que chame `send`/`markSent`
+   * diretamente, aprovação e envio são sempre humanos.
+   */
+  async send(organizationId: string, messageId: string, userId: string): Promise<OutreachMessage> {
+    const message = await this.findByIdOrThrow(organizationId, messageId);
+    if (message.channel !== 'EMAIL') {
+      throw new BadRequestException(
+        'Envio automático só está disponível para o canal EMAIL — use "marcar como enviada" para os demais canais.',
+      );
+    }
+
+    const lead = await this.leadsService.findByIdOrThrow(organizationId, message.leadId);
+    if (!lead.email) {
+      throw new BadRequestException('Lead não tem e-mail cadastrado — não é possível enviar automaticamente.');
+    }
+
+    const sendResult = await this.emailService.sendEmail({
+      to: lead.email,
+      subject: message.subject ?? `Contato — ${lead.name}`,
+      html: this.renderOutreachHtml(message.body),
+      idempotencyKey: `outreach-message/${messageId}`,
+    });
+
+    const updated = await this.applyTransition(
+      organizationId,
+      messageId,
+      'APPROVED',
+      { status: 'SENT', sentAt: new Date(), providerMessageId: sendResult.id },
+      'enviar',
+    );
+    await this.prisma.lead.update({ where: { id: updated.leadId }, data: { status: 'CONTACTED' } });
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: userId,
+      organizationId,
+      action: 'outreach.send',
+      resource: messageId,
+    });
+
+    return updated;
+  }
+
+  // `body` é texto livre gerado pela IA (ou editado manualmente, ver
+  // `edit()`) — nunca HTML de verdade. Escapa antes de embutir em `<p>` por
+  // linha: o texto pode conter dados de terceiros (nome/categoria do lead,
+  // scraping) e não deve virar HTML executável dentro do cliente de email do
+  // destinatário.
+  private renderOutreachHtml(body: string): string {
+    const escape = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return body
+      .split('\n')
+      .map((line) => `<p>${escape(line)}</p>`)
+      .join('');
   }
 
   async markSent(organizationId: string, messageId: string, userId: string): Promise<OutreachMessage> {

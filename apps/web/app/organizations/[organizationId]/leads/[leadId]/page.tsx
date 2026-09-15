@@ -19,6 +19,7 @@ import {
   useMarkOutreachSent,
   useRegenerateOutreach,
   useRejectOutreach,
+  useSendOutreach,
 } from '@/lib/leads/use-outreach-messages';
 import { OUTREACH_CHANNELS, WRITE_ROLES, type LeadEnrichment as LeadEnrichmentDto, type OutreachMessage } from '@/lib/leads/types';
 import { ApiError } from '@/lib/api-client';
@@ -92,6 +93,7 @@ function OutreachMessageCard({
   const approve = useApproveOutreach(organizationId, leadId);
   const reject = useRejectOutreach(organizationId, leadId);
   const regenerate = useRegenerateOutreach(organizationId, leadId);
+  const send = useSendOutreach(organizationId, leadId);
   const markSent = useMarkOutreachSent(organizationId, leadId);
   const markReplied = useMarkOutreachReplied(organizationId, leadId);
   const edit = useEditOutreach(organizationId, leadId);
@@ -216,7 +218,16 @@ function OutreachMessageCard({
         </div>
       )}
 
-      {canWrite && message.status === 'APPROVED' && (
+      {canWrite && message.status === 'APPROVED' && message.channel === 'EMAIL' && (
+        <div className="mt-3 flex flex-col gap-2">
+          <Button size="sm" disabled={send.isPending} onClick={() => send.mutate(message.id)}>
+            {send.isPending ? 'Enviando…' : 'Enviar por e-mail'}
+          </Button>
+          <FormError message={send.isError ? (send.error as ApiError).message : null} />
+        </div>
+      )}
+
+      {canWrite && message.status === 'APPROVED' && message.channel !== 'EMAIL' && (
         <div className="mt-3">
           <Button size="sm" disabled={markSent.isPending} onClick={() => markSent.mutate(message.id)}>
             Marcar como enviada
