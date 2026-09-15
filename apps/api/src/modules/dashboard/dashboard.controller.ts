@@ -1,5 +1,10 @@
 import { Controller, Get, Param, UseGuards } from '@nestjs/common';
-import { DashboardService, type DashboardOverview, type LeadPipelineOverview } from './dashboard.service';
+import {
+  DashboardService,
+  type DashboardOverview,
+  type DealPipelineOverview,
+  type LeadPipelineOverview,
+} from './dashboard.service';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 
 @UseGuards(TenantGuard)
@@ -17,5 +22,11 @@ export class DashboardController {
   @Get('leads')
   leadPipelineOverview(@Param('organizationId') organizationId: string): Promise<LeadPipelineOverview> {
     return this.dashboardService.getLeadPipelineOverview(organizationId);
+  }
+
+  // Leitura, sem `@Roles(...WRITE_ROLES)` — mesmo padrão das duas rotas acima.
+  @Get('deals')
+  dealPipelineOverview(@Param('organizationId') organizationId: string): Promise<DealPipelineOverview> {
+    return this.dashboardService.getDealPipelineOverview(organizationId);
   }
 }

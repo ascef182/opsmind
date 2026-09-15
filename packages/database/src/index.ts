@@ -16,6 +16,8 @@ export type {
   Notification,
   CustomerStatus,
   TaskStatus,
+  Deal,
+  DealStage,
   AIRequest,
   AIRequestToolCall,
   AIRequestStatus,

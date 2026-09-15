@@ -17,6 +17,7 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
 import { MembershipsModule } from './modules/memberships/memberships.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { TasksModule } from './modules/tasks/tasks.module';
+import { DealsModule } from './modules/deals/deals.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DocumentsModule } from './modules/documents/documents.module';
@@ -66,6 +67,7 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     MembershipsModule,
     CustomersModule,
     TasksModule,
+    DealsModule,
     NotificationsModule,
     DashboardModule,
     DocumentsModule,

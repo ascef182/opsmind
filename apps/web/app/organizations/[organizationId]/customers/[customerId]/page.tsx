@@ -10,6 +10,8 @@ import {
   useUpdateCustomer,
 } from '@/lib/customers/use-customers';
 import type { CustomerStatus } from '@/lib/customers/types';
+import { useCustomerDeals } from '@/lib/deals/use-deals';
+import { formatCurrency } from '@/lib/deals/types';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +23,7 @@ export default function CustomerDetailPage() {
   const { organizationId, customerId } = useParams<{ organizationId: string; customerId: string }>();
   const customer = useCustomer(organizationId, customerId);
   const timeline = useCustomerTimeline(organizationId, customerId);
+  const deals = useCustomerDeals(organizationId, customerId);
   const updateCustomer = useUpdateCustomer(organizationId, customerId);
   const addNote = useAddNote(organizationId, customerId);
   const [note, setNote] = useState('');
@@ -71,6 +74,38 @@ export default function CustomerDetailPage() {
             ))}
           </Select>
         </div>
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between">
+          <h2 className="font-medium text-foreground">Negócios</h2>
+          <Link
+            href={`/organizations/${organizationId}/deals?customerId=${customerId}`}
+            className="text-sm text-accent-500 hover:underline"
+          >
+            + Novo negócio
+          </Link>
+        </div>
+        {deals.isLoading && <p className="mt-3 text-sm text-muted-foreground">Carregando negócios…</p>}
+        {deals.isSuccess && deals.data.length === 0 && (
+          <p className="mt-3 text-sm text-muted-foreground">Nenhum negócio para este cliente ainda.</p>
+        )}
+        <ul className="mt-3 flex flex-col gap-2">
+          {deals.data?.map((deal) => (
+            <li key={deal.id}>
+              <Link
+                href={`/organizations/${organizationId}/deals/${deal.id}`}
+                className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2 text-sm hover:border-accent-500/40"
+              >
+                <span className="text-foreground">{deal.title}</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-muted-foreground">{formatCurrency(deal.value, deal.currency)}</span>
+                  <Badge value={deal.stage} />
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
       </Card>
 
       <Card>

@@ -13,6 +13,7 @@ describe('LeadsService', () => {
   };
   let auditService: { log: jest.Mock };
   let exploriumGateway: { searchBusinesses: jest.Mock; matchBusiness: jest.Mock };
+  let dealsService: { create: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -29,7 +30,13 @@ describe('LeadsService', () => {
     };
     auditService = { log: jest.fn() };
     exploriumGateway = { searchBusinesses: jest.fn(), matchBusiness: jest.fn() };
-    service = new LeadsService(prisma as never, auditService as never, exploriumGateway as never);
+    dealsService = { create: jest.fn().mockResolvedValue({ id: 'deal-1' }) };
+    service = new LeadsService(
+      prisma as never,
+      auditService as never,
+      exploriumGateway as never,
+      dealsService as never,
+    );
   });
 
   describe('create', () => {
@@ -524,6 +531,28 @@ describe('LeadsService', () => {
         expect.objectContaining({ action: 'lead.converted', metadata: { customerId: 'cust-1' } }),
       );
       expect(result).toBe(customer);
+    });
+
+    it('cria um Deal em QUALIFICATION vinculado ao Lead de origem (ponte achar -> fechar)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        name: 'Padaria Central',
+        phone: '111',
+        email: 'a@a.com',
+        convertedCustomerId: null,
+      });
+      prisma.customer.create.mockResolvedValue({ id: 'cust-1', name: 'Padaria Central' });
+      prisma.lead.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.convertToCustomer('org-1', 'lead-1', {}, 'user-1');
+
+      expect(dealsService.create).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({ customerId: 'cust-1', title: 'Padaria Central', value: 0 }),
+        'user-1',
+        { originLeadId: 'lead-1' },
+      );
     });
 
     it('lança 409 quando o lead já tem convertedCustomerId (fast path)', async () => {

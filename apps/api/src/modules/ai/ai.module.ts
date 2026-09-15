@@ -5,6 +5,7 @@ import { ActivityModule } from '../activity/activity.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { LeadsModule } from '../leads/leads.module';
+import { DealsModule } from '../deals/deals.module';
 import { AiService } from './ai.service';
 import { AiController } from './ai.controller';
 import { BudgetService } from './services/budget.service';
@@ -23,6 +24,9 @@ import { FindLeadsTool } from './tools/find-leads.tool';
 import { ScoreLeadTool } from './tools/score-lead.tool';
 import { AnalyzeLeadPotentialTool } from './tools/analyze-lead-potential.tool';
 import { GenerateOutreachMessageTool } from './tools/generate-outreach-message.tool';
+import { CreateDealTool } from './tools/create-deal.tool';
+import { MoveDealStageTool } from './tools/move-deal-stage.tool';
+import { ListDealsTool } from './tools/list-deals.tool';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 
 @Module({
@@ -33,6 +37,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     OrganizationsModule,
     DocumentsModule,
     LeadsModule,
+    DealsModule,
   ],
   controllers: [AiController],
   providers: [
@@ -52,6 +57,9 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     ScoreLeadTool,
     AnalyzeLeadPotentialTool,
     GenerateOutreachMessageTool,
+    CreateDealTool,
+    MoveDealStageTool,
+    ListDealsTool,
     {
       provide: AI_TOOLS,
       useFactory: (
@@ -66,6 +74,9 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         scoreLead: ScoreLeadTool,
         analyzeLeadPotential: AnalyzeLeadPotentialTool,
         generateOutreachMessage: GenerateOutreachMessageTool,
+        createDeal: CreateDealTool,
+        moveDealStage: MoveDealStageTool,
+        listDeals: ListDealsTool,
       ): AiTool[] => [
         getCustomer,
         searchCustomers,
@@ -78,6 +89,9 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         scoreLead,
         analyzeLeadPotential,
         generateOutreachMessage,
+        createDeal,
+        moveDealStage,
+        listDeals,
       ],
       inject: [
         GetCustomerTool,
@@ -91,6 +105,9 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         ScoreLeadTool,
         AnalyzeLeadPotentialTool,
         GenerateOutreachMessageTool,
+        CreateDealTool,
+        MoveDealStageTool,
+        ListDealsTool,
       ],
     },
   ],

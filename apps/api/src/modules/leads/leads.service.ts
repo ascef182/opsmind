@@ -15,6 +15,7 @@ import {
 import { EXPLORIUM_GATEWAY, type ExploriumGateway } from '@opsmind/integrations';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { DealsService } from '../deals/deals.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
@@ -85,6 +86,7 @@ export class LeadsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     @Inject(EXPLORIUM_GATEWAY) private readonly exploriumGateway: ExploriumGateway,
+    private readonly dealsService: DealsService,
   ) {}
 
   async create(organizationId: string, dto: CreateLeadDto, actorUserId: string): Promise<Lead> {
@@ -412,6 +414,19 @@ export class LeadsService {
       resource: `Lead:${leadId}`,
       metadata: { customerId: customer.id },
     });
+
+    // Ponte "achar -> fechar" (plano pensando-como-empresa-com-agile-beaver.md):
+    // sem isso, todo Lead convertido exigiria um passo manual extra (criar o
+    // Deal) fácil de esquecer, esvaziando o propósito do pipeline de
+    // negociação. `value: 0` — não força o vendedor a adivinhar um número no
+    // momento da conversão, só garante que o Deal existe e aparece no
+    // Kanban para ser preenchido depois.
+    await this.dealsService.create(
+      organizationId,
+      { customerId: customer.id, title: lead.name, value: 0 },
+      actorUserId,
+      { originLeadId: leadId },
+    );
 
     return customer;
   }

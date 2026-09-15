@@ -40,6 +40,16 @@ const COLORS: Record<string, string> = {
   PURSUING: 'bg-positive-500/15 text-positive-500',
   DISMISSED: 'bg-ink-800 text-ink-300 line-through',
 
+  // DealStage (packages/database/prisma/schema.prisma) — QUALIFICATION reusa
+  // a cor de DISCOVERED/QUEUED (mesmo espírito: primeiro estágio, neutro).
+  // WON reusa a cor de CONVERTED/DONE (positivo/fechado). LOST já está
+  // mapeado acima (compartilhado com LeadStatus).
+  QUALIFICATION: 'bg-ink-800 text-ink-300',
+  PROPOSAL: 'bg-accent-500/15 text-accent-500',
+  NEGOTIATION: 'bg-info-500/15 text-info-500',
+  CONTRACT_SENT: 'bg-info-500/15 text-info-500',
+  WON: 'bg-positive-500/15 text-positive-500',
+
   // Role (packages/shared-types — ROLE_HIERARCHY), usado na página de Equipe
   OWNER: 'bg-accent-500/15 text-accent-500',
   ADMIN: 'bg-info-500/15 text-info-500',

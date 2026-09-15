@@ -1,0 +1,152 @@
+'use client';
+
+import { useParams } from 'next/navigation';
+import Link from 'next/link';
+import { useCurrentMembership } from '@/lib/memberships/use-memberships';
+import { useCustomer } from '@/lib/customers/use-customers';
+import { useDeal, useMoveDealStage, useUpdateDeal } from '@/lib/deals/use-deals';
+import { DEAL_STAGE_LABELS, DEAL_STAGE_TRANSITIONS, WRITE_ROLES, formatCurrency, type DealStage } from '@/lib/deals/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Card } from '@/components/ui/card';
+
+export default function DealDetailPage() {
+  const { organizationId, dealId } = useParams<{ organizationId: string; dealId: string }>();
+  const { membership } = useCurrentMembership(organizationId);
+  const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
+
+  const deal = useDeal(organizationId, dealId);
+  const customer = useCustomer(organizationId, deal.data?.customerId ?? '');
+  const moveStage = useMoveDealStage(organizationId, dealId);
+  const updateDeal = useUpdateDeal(organizationId, dealId);
+
+  if (deal.isLoading) {
+    return <p className="text-muted-foreground">Carregando negócio…</p>;
+  }
+  if (deal.isError || !deal.data) {
+    return <p className="text-destructive">Negócio não encontrado.</p>;
+  }
+
+  const nextStages = DEAL_STAGE_TRANSITIONS[deal.data.stage];
+
+  return (
+    <div className="flex flex-col gap-6">
+      <Link href={`/organizations/${organizationId}/deals`} className="text-sm text-accent-500 hover:underline">
+        ← Voltar para negócios
+      </Link>
+
+      <Card className="flex items-start justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-xl font-semibold text-foreground">{deal.data.title}</h1>
+          {customer.data && (
+            <Link
+              href={`/organizations/${organizationId}/customers/${customer.data.id}`}
+              className="text-sm text-accent-500 hover:underline"
+            >
+              {customer.data.company ?? customer.data.name}
+            </Link>
+          )}
+          <p className="text-lg font-medium text-foreground">
+            {formatCurrency(deal.data.value, deal.data.currency)}
+          </p>
+          {deal.data.expectedCloseDate && (
+            <p className="text-sm text-muted-foreground">
+              Previsão de fechamento: {new Date(deal.data.expectedCloseDate).toLocaleDateString('pt-BR')}
+            </p>
+          )}
+          {deal.data.actualCloseDate && (
+            <p className="text-sm text-muted-foreground">
+              Fechado em {new Date(deal.data.actualCloseDate).toLocaleDateString('pt-BR')}
+            </p>
+          )}
+          {deal.data.lostReason && (
+            <p className="text-sm text-negative-500">Motivo da perda: {deal.data.lostReason}</p>
+          )}
+          {deal.data.originLeadId && (
+            <Link
+              href={`/organizations/${organizationId}/leads/${deal.data.originLeadId}`}
+              className="text-xs text-accent-500 hover:underline"
+            >
+              Ver lead de origem
+            </Link>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <Badge value={deal.data.stage} />
+          {canWrite && nextStages.length > 0 && (
+            <Select
+              value=""
+              disabled={moveStage.isPending}
+              onChange={(e) => {
+                const stage = e.target.value as DealStage;
+                if (!stage) return;
+                if (stage === 'LOST') {
+                  const reason = window.prompt('Motivo da perda:');
+                  if (!reason) return;
+                  moveStage.mutate({ stage, lostReason: reason });
+                  return;
+                }
+                moveStage.mutate({ stage });
+              }}
+              className="w-48"
+            >
+              <option value="">Mover para…</option>
+              {nextStages.map((stage) => (
+                <option key={stage} value={stage}>
+                  {DEAL_STAGE_LABELS[stage]}
+                </option>
+              ))}
+            </Select>
+          )}
+        </div>
+      </Card>
+
+      {canWrite && (
+        <Card>
+          <h2 className="font-medium text-foreground">Editar</h2>
+          <form
+            className="mt-3 grid grid-cols-2 gap-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const form = new FormData(e.currentTarget);
+              const title = String(form.get('title') ?? '');
+              const value = Number(form.get('value'));
+              const expectedCloseDate = String(form.get('expectedCloseDate') ?? '');
+              updateDeal.mutate({
+                title: title || undefined,
+                value: Number.isFinite(value) && value >= 0 ? value : undefined,
+                expectedCloseDate: expectedCloseDate || undefined,
+              });
+            }}
+          >
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Título</label>
+              <Input name="title" defaultValue={deal.data.title} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Valor</label>
+              <Input name="value" type="number" min={0} step="0.01" defaultValue={deal.data.value} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                Previsão de fechamento
+              </label>
+              <Input
+                name="expectedCloseDate"
+                type="date"
+                defaultValue={deal.data.expectedCloseDate?.slice(0, 10) ?? ''}
+              />
+            </div>
+            <div className="col-span-2 flex justify-end">
+              <Button type="submit" disabled={updateDeal.isPending}>
+                {updateDeal.isPending ? 'Salvando…' : 'Salvar'}
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
+    </div>
+  );
+}

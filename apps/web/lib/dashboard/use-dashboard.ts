@@ -107,3 +107,42 @@ export function useLeadPipelineOverview(organizationId: string) {
     enabled: Boolean(organizationId),
   });
 }
+
+// Espelha `DealPipelineOverview` de
+// apps/api/src/modules/dashboard/dashboard.service.ts (plano
+// pensando-como-empresa-com-agile-beaver.md) — mesma decisão de tipos
+// duplicados ao front que `LeadPipelineOverview` acima.
+export type DealStage = 'QUALIFICATION' | 'PROPOSAL' | 'NEGOTIATION' | 'CONTRACT_SENT' | 'WON' | 'LOST';
+
+export interface DealStageBucket {
+  count: number;
+  value: number;
+}
+
+export interface DealPipelineDeal {
+  id: string;
+  title: string;
+  stage: DealStage;
+  value: string;
+  currency: string;
+  customerId: string;
+  expectedCloseDate: string | null;
+  actualCloseDate: string | null;
+}
+
+export interface DealPipelineOverview {
+  openValue: number;
+  dealsByStage: Record<DealStage, DealStageBucket>;
+  winRate: number;
+  avgSalesCycleDays: number | null;
+  dealsClosingSoon: DealPipelineDeal[];
+  recentlyWonDeals: DealPipelineDeal[];
+}
+
+export function useDealPipelineOverview(organizationId: string) {
+  return useQuery({
+    queryKey: ['organizations', organizationId, 'dashboard', 'deals'],
+    queryFn: () => apiFetch<DealPipelineOverview>(`/organizations/${organizationId}/dashboard/deals`),
+    enabled: Boolean(organizationId),
+  });
+}

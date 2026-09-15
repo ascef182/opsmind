@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ScrapingModule } from '../../infrastructure/scraping/scraping.module';
 import { QueueModule } from '../../infrastructure/queue/queue.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
+import { DealsModule } from '../deals/deals.module';
 import { ServiceOfferingsService } from './service-offerings.service';
 import { ServiceOfferingsController } from './service-offerings.controller';
 import { ScrapeJobsService } from './scrape-jobs.service';
@@ -38,7 +39,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
  * são `@Global()`.
  */
 @Module({
-  imports: [ScrapingModule, QueueModule, OrganizationsModule],
+  imports: [ScrapingModule, QueueModule, OrganizationsModule, DealsModule],
   controllers: [
     ServiceOfferingsController,
     ScrapeJobsController,

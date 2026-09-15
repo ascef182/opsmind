@@ -1,5 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import type { ActivityLog, CustomerStatus, Lead, LeadStatus, ScrapeJob, TaskStatus } from '@opsmind/database';
+import type {
+  ActivityLog,
+  CustomerStatus,
+  Deal,
+  DealStage,
+  Lead,
+  LeadStatus,
+  ScrapeJob,
+  TaskStatus,
+} from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 
 const CUSTOMER_STATUSES: CustomerStatus[] = ['LEAD', 'ACTIVE', 'INACTIVE'];
@@ -21,6 +30,19 @@ const LEADS_BY_DAY_WINDOW_DAYS = 30;
 const TOP_CITIES_LIMIT = 8;
 const RECENT_LEADS_LIMIT = 8;
 const RECENT_SCRAPE_JOBS_LIMIT = 5;
+
+const DEAL_STAGES: DealStage[] = [
+  'QUALIFICATION',
+  'PROPOSAL',
+  'NEGOTIATION',
+  'CONTRACT_SENT',
+  'WON',
+  'LOST',
+];
+const CLOSED_DEAL_STAGES: DealStage[] = ['WON', 'LOST'];
+const DEALS_CLOSING_SOON_WINDOW_DAYS = 30;
+const DEALS_CLOSING_SOON_LIMIT = 10;
+const RECENTLY_WON_DEALS_LIMIT = 5;
 
 export interface LeadsByCityBucket {
   city: string | null;
@@ -53,6 +75,26 @@ interface LeadsByDayRow {
   day: Date;
   total: bigint | number;
   withoutWebsite: bigint | number;
+}
+
+export interface DealStageBucket {
+  count: number;
+  value: number;
+}
+
+export interface DealPipelineOverview {
+  openValue: number;
+  dealsByStage: Record<DealStage, DealStageBucket>;
+  // 0 quando não há nenhum deal WON nem LOST ainda (denominador zero) —
+  // mesmo racional de `qualificationRate` acima.
+  winRate: number;
+  avgSalesCycleDays: number | null;
+  dealsClosingSoon: Deal[];
+  recentlyWonDeals: Deal[];
+}
+
+interface AvgSalesCycleRow {
+  avgDays: number | null;
 }
 
 interface LeadsByCityRow {
@@ -224,6 +266,80 @@ export class DashboardService {
       })),
       recentLeads,
       recentScrapeJobs,
+    };
+  }
+
+  /**
+   * Painel de pipeline de negociação (plano
+   * pensando-como-empresa-com-agile-beaver.md). Aditivo — mesma disciplina de
+   * `getLeadPipelineOverview()`: não altera `getOverview()` nem sua rota,
+   * vive em rota própria (`GET .../dashboard/deals`).
+   */
+  async getDealPipelineOverview(organizationId: string): Promise<DealPipelineOverview> {
+    const closingSoonWindowEnd = new Date();
+    closingSoonWindowEnd.setDate(closingSoonWindowEnd.getDate() + DEALS_CLOSING_SOON_WINDOW_DAYS);
+
+    const [openValueAgg, dealsByStageRaw, avgSalesCycleRows, dealsClosingSoon, recentlyWonDeals] =
+      await Promise.all([
+        this.prisma.deal.aggregate({
+          where: { organizationId, deletedAt: null, stage: { notIn: CLOSED_DEAL_STAGES } },
+          _sum: { value: true },
+        }),
+        this.prisma.deal.groupBy({
+          by: ['stage'],
+          where: { organizationId, deletedAt: null },
+          _count: { _all: true },
+          _sum: { value: true },
+        }),
+        // Prisma não calcula `AVG(date - date)` em `groupBy` — mesmo
+        // precedente de raw SQL parametrizado de `leadsByCity`/`leadsByDay`
+        // acima: tagged template do Prisma parametriza `organizationId`
+        // automaticamente, nunca interpolação de string crua.
+        this.prisma.$queryRaw<AvgSalesCycleRow[]>`
+          SELECT AVG(EXTRACT(EPOCH FROM (actual_close_date - created_at)) / 86400) AS "avgDays"
+          FROM deals
+          WHERE organization_id = ${organizationId} AND deleted_at IS NULL AND stage = 'WON'
+        `,
+        this.prisma.deal.findMany({
+          where: {
+            organizationId,
+            deletedAt: null,
+            stage: { notIn: CLOSED_DEAL_STAGES },
+            expectedCloseDate: { gte: new Date(), lte: closingSoonWindowEnd },
+          },
+          orderBy: { expectedCloseDate: 'asc' },
+          take: DEALS_CLOSING_SOON_LIMIT,
+        }),
+        this.prisma.deal.findMany({
+          where: { organizationId, deletedAt: null, stage: 'WON' },
+          orderBy: { actualCloseDate: 'desc' },
+          take: RECENTLY_WON_DEALS_LIMIT,
+        }),
+      ]);
+
+    const dealsByStage = Object.fromEntries(
+      DEAL_STAGES.map((stage) => [stage, { count: 0, value: 0 }]),
+    ) as Record<DealStage, DealStageBucket>;
+    for (const row of dealsByStageRaw as Array<{
+      stage: DealStage;
+      _count: { _all: number };
+      _sum: { value: number | null };
+    }>) {
+      dealsByStage[row.stage] = { count: row._count._all, value: Number(row._sum.value ?? 0) };
+    }
+
+    const won = dealsByStage.WON.count;
+    const lost = dealsByStage.LOST.count;
+    const winRate = won + lost === 0 ? 0 : won / (won + lost);
+    const avgDays = avgSalesCycleRows[0]?.avgDays ?? null;
+
+    return {
+      openValue: Number(openValueAgg._sum.value ?? 0),
+      dealsByStage,
+      winRate,
+      avgSalesCycleDays: avgDays === null ? null : Number(avgDays),
+      dealsClosingSoon,
+      recentlyWonDeals,
     };
   }
 }

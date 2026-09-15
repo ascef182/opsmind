@@ -2,14 +2,18 @@
 
 import { useParams } from 'next/navigation';
 import clsx from 'clsx';
+import Link from 'next/link';
 import {
   useDashboard,
+  useDealPipelineOverview,
   useLeadPipelineOverview,
+  type DealPipelineOverview,
   type LeadPipelineOverview,
   type LeadsByDayPoint,
   type LeadStatus,
 } from '@/lib/dashboard/use-dashboard';
 import { useAiUsage } from '@/lib/ai/use-ai-chat';
+import { DEAL_STAGES, DEAL_STAGE_LABELS, formatCurrency } from '@/lib/deals/types';
 import { Badge } from '@/components/ui/badge';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
 import { BudgetBar } from '@/components/ai/budget-bar';
@@ -228,10 +232,12 @@ const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   LOST: 'Perdido',
 };
 
-// Não inclui o tile "Pipeline (valor estimado)" citado no brief original da
-// feature — não há campo de valor de negócio modelado em `Lead`/`Customer`
-// (schema já decidido, ver docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md);
-// inventar um campo novo fora desse schema estaria fora do escopo desta task.
+// O tile "Pipeline (valor estimado)" citado no brief original da feature de
+// leads não existia porque não havia campo de valor de negócio modelado em
+// `Lead`/`Customer` (ver docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md).
+// Isso mudou com o pipeline de Deal (plano
+// pensando-como-empresa-com-agile-beaver.md) — ver `DealPipelineSection`
+// abaixo, uma seção própria, não um tile dentro desta.
 function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverview; organizationId: string }) {
   const withoutWebsiteSeries = buildDailySeries(data.leadsByDay, SPARKLINE_DAYS, 'withoutWebsite');
   const totalSeries14d = buildDailySeries(data.leadsByDay, SPARKLINE_DAYS, 'total');
@@ -368,7 +374,96 @@ function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverv
   );
 }
 
-function StatCardDark({ label, value, hint }: { label: string; value: number; hint?: string }) {
+// Painel de pipeline de negociação (plano
+// pensando-como-empresa-com-agile-beaver.md) — aditivo, seção própria abaixo
+// do pipeline de leads, mesma disciplina de não alterar as seções
+// existentes que `getDealPipelineOverview` já segue no backend.
+function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverview; organizationId: string }) {
+  const maxStageValue = Math.max(1, ...DEAL_STAGES.map((stage) => data.dealsByStage[stage].value));
+
+  return (
+    <section className="flex flex-col gap-6 border-t border-border pt-8">
+      <h2 className="text-sm font-medium text-muted-foreground">Pipeline de negociação</h2>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCardDark label="Valor em aberto" value={formatCurrency(data.openValue)} />
+        <StatCardDark label="Taxa de vitória" value={`${Math.round(data.winRate * 100)}%`} hint="dos negócios fechados" />
+        <StatCardDark
+          label="Ciclo médio de venda"
+          value={data.avgSalesCycleDays === null ? '—' : `${Math.round(data.avgSalesCycleDays)} dias`}
+          hint={data.avgSalesCycleDays === null ? 'nenhum negócio ganho ainda' : 'entre criação e fechamento'}
+        />
+      </div>
+
+      <DarkCard title="Negócios por estágio">
+        <ul className="flex flex-col gap-2">
+          {DEAL_STAGES.map((stage) => {
+            const bucket = data.dealsByStage[stage];
+            const widthPct = Math.max(2, (bucket.value / maxStageValue) * 100);
+            return (
+              <li key={stage} className="flex items-center gap-3">
+                <span className="w-32 shrink-0 text-xs text-muted-foreground">{DEAL_STAGE_LABELS[stage]}</span>
+                <div className="h-2 flex-1 rounded-full bg-ink-800">
+                  <div className="h-2 rounded-full bg-accent-500" style={{ width: `${widthPct}%` }} />
+                </div>
+                <span className="w-28 shrink-0 text-right text-xs text-muted-foreground">
+                  {bucket.count} · {formatCurrency(bucket.value)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </DarkCard>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <DarkCard title="Fechando em breve (30 dias)">
+          {data.dealsClosingSoon.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nenhum negócio com fechamento previsto nos próximos 30 dias.</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {data.dealsClosingSoon.map((deal) => (
+                <li key={deal.id}>
+                  <Link
+                    href={`/organizations/${organizationId}/deals/${deal.id}`}
+                    className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2 text-sm hover:border-accent-500/40"
+                  >
+                    <span className="truncate text-foreground">{deal.title}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <span className="text-muted-foreground">{formatCurrency(deal.value, deal.currency)}</span>
+                      <Badge value={deal.stage} />
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </DarkCard>
+
+        <DarkCard title="Ganhos recentes">
+          {data.recentlyWonDeals.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nenhum negócio ganho ainda.</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {data.recentlyWonDeals.map((deal) => (
+                <li key={deal.id}>
+                  <Link
+                    href={`/organizations/${organizationId}/deals/${deal.id}`}
+                    className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2 text-sm hover:border-accent-500/40"
+                  >
+                    <span className="truncate text-foreground">{deal.title}</span>
+                    <span className="text-positive-500">{formatCurrency(deal.value, deal.currency)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </DarkCard>
+      </div>
+    </section>
+  );
+}
+
+function StatCardDark({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <p className="text-sm text-muted-foreground">{label}</p>
@@ -382,6 +477,7 @@ export default function OrganizationDashboardPage() {
   const { organizationId } = useParams<{ organizationId: string }>();
   const dashboard = useDashboard(organizationId);
   const leadPipeline = useLeadPipelineOverview(organizationId);
+  const dealPipeline = useDealPipelineOverview(organizationId);
 
   return (
     <div className="flex flex-col gap-8">
@@ -395,6 +491,12 @@ export default function OrganizationDashboardPage() {
           <p className="text-negative-500">Não foi possível carregar o pipeline de leads desta organização.</p>
         )}
         {leadPipeline.isSuccess && <LeadPipelineSection data={leadPipeline.data} organizationId={organizationId} />}
+
+        {dealPipeline.isLoading && <p className="text-muted-foreground">Carregando pipeline de negociação…</p>}
+        {dealPipeline.isError && (
+          <p className="text-negative-500">Não foi possível carregar o pipeline de negociação desta organização.</p>
+        )}
+        {dealPipeline.isSuccess && <DealPipelineSection data={dealPipeline.data} organizationId={organizationId} />}
 
         <section className="flex flex-col gap-6 border-t border-border pt-8">
           <h2 className="text-sm font-medium text-muted-foreground">Clientes e tarefas</h2>
