@@ -30,8 +30,12 @@ function buildDeps() {
     aIRequest: { create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }) },
     aIRequestToolCall: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
-  const prisma = {
-    runInTransaction: jest.fn((fn: (tx: typeof txMock) => unknown) => fn(txMock)),
+  const prismaOutOfBand = {
+    // Ver comentário em `PrismaOutOfBandService`: `persistRequest` precisa
+    // escrever fora da transação da request pra um `AIRequest`
+    // ERROR/BUDGET_EXCEEDED sobreviver ao rollback quando `chat()` relança o
+    // erro logo depois. Mock simplificado invoca `fn` com o mesmo `txMock`.
+    runOutsideTransaction: jest.fn((_organizationId: string, fn: (tx: typeof txMock) => unknown) => fn(txMock)),
   };
 
   const actor = { organizationId: 'org-1', userId: 'user-1', role: 'MEMBER' as const };
@@ -42,7 +46,7 @@ function buildDeps() {
     budgetService as never,
     organizationsService as never,
     auditService as never,
-    prisma as never,
+    prismaOutOfBand as never,
   );
 
   return { service, gateway, searchCustomersTool, budgetService, organizationsService, auditService, txMock, actor };

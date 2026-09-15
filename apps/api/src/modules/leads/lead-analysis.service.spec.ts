@@ -8,6 +8,10 @@ function buildDeps() {
     aIRequest: { create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }) },
     leadEnrichment: { create: jest.fn() },
   };
+  // Ver comentário em PrismaOutOfBandService / outreach.service.spec.ts.
+  const prismaOutOfBand = {
+    runOutsideTransaction: jest.fn((_organizationId: string, fn: (tx: typeof prisma) => unknown) => fn(prisma)),
+  };
   const gateway: jest.Mocked<AiGateway> = { sendMessage: jest.fn() };
   const budgetService = {
     isOverBudget: jest.fn().mockResolvedValue(false),
@@ -20,6 +24,7 @@ function buildDeps() {
 
   const service = new LeadAnalysisService(
     prisma as never,
+    prismaOutOfBand as never,
     gateway,
     budgetService as never,
     organizationsService as never,

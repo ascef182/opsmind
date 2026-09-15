@@ -89,6 +89,35 @@ describe('ClaudeGatewayService', () => {
     expect(AnthropicCtor).toHaveBeenCalledTimes(1);
   });
 
+  it('inclui o header anthropic-workspace-id quando ANTHROPIC_WORKSPACE_ID está configurado (chave de organização não escopada)', async () => {
+    mockEnv({ ANTHROPIC_WORKSPACE_ID: 'wrkspc_123' });
+    mockCreate.mockResolvedValue({ id: 'msg_1', stop_reason: 'end_turn', content: [] });
+    const service = await build();
+    const AnthropicCtor = jest.requireMock('@anthropic-ai/sdk').default;
+    AnthropicCtor.mockClear();
+
+    await service.sendMessage({ system: 's', messages: [], tools: [] });
+
+    expect(AnthropicCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'sk-ant-test-key',
+        defaultHeaders: { 'anthropic-workspace-id': 'wrkspc_123' },
+      }),
+    );
+  });
+
+  it('não inclui defaultHeaders quando ANTHROPIC_WORKSPACE_ID não está configurado (chave já escopada a um workspace)', async () => {
+    mockEnv();
+    mockCreate.mockResolvedValue({ id: 'msg_1', stop_reason: 'end_turn', content: [] });
+    const service = await build();
+    const AnthropicCtor = jest.requireMock('@anthropic-ai/sdk').default;
+    AnthropicCtor.mockClear();
+
+    await service.sendMessage({ system: 's', messages: [], tools: [] });
+
+    expect(AnthropicCtor).toHaveBeenCalledWith({ apiKey: 'sk-ant-test-key' });
+  });
+
   it('usa ANTHROPIC_MODEL do ambiente em vez do hardcode quando configurado', async () => {
     mockEnv({ ANTHROPIC_MODEL: 'claude-haiku-4-5' });
     mockCreate.mockResolvedValue({ id: 'msg_1', stop_reason: 'end_turn', content: [] });

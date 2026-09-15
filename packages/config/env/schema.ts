@@ -74,6 +74,15 @@ export const envSchema = z.object({
   // chave só falha, alto e claro, no primeiro uso real do endpoint de IA —
   // ver ClaudeGatewayService.
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Só necessário quando `ANTHROPIC_API_KEY` é uma chave de ORGANIZAÇÃO (não
+  // escopada a nenhum workspace específico) — a API da Anthropic recusa
+  // requests dessas chaves sem o header `anthropic-workspace-id` dizendo
+  // qual workspace usar (achado ao vivo, plano
+  // pensando-como-empresa-com-agile-beaver.md: `ClaudeGatewayService` falhava
+  // com "This API key is not scoped to a workspace" mesmo com a chave
+  // válida). Opcional pelo mesmo motivo de `ANTHROPIC_API_KEY`: uma chave já
+  // escopada a um workspace não precisa disto.
+  ANTHROPIC_WORKSPACE_ID: z.string().optional(),
   // Eval suite de IA (Fase 7) — permite ao script `pnpm --filter api eval`
   // usar claude-sonnet-5 (mais barato, ainda suporta thinking adaptativo)
   // sem tocar em código; produção continua em claude-opus-5 por default.

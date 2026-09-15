@@ -2,7 +2,7 @@ import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { AIRequest, AIRequestStatus, Prisma } from '@opsmind/database';
 import type { Role } from '@opsmind/shared-types';
-import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { PrismaOutOfBandService } from '../../infrastructure/database/prisma-out-of-band.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { BudgetService } from './services/budget.service';
@@ -61,7 +61,7 @@ export class AiService {
     private readonly budgetService: BudgetService,
     private readonly organizationsService: OrganizationsService,
     private readonly auditService: AuditService,
-    private readonly prisma: PrismaService,
+    private readonly prismaOutOfBand: PrismaOutOfBandService,
   ) {}
 
   async chat(actor: ChatActor, dto: ChatDto): Promise<ChatResult> {
@@ -203,6 +203,16 @@ export class AiService {
     });
   }
 
+  // `runOutsideTransaction`, não `runInTransaction` — sem isso, o registro
+  // de uma tentativa ERROR/BUDGET_EXCEEDED nunca sobrevivia: `chat()` relança
+  // o erro logo depois de chamar este método, e a transação da request
+  // inteira (aberta pelo `TenantContextInterceptor`) sofria rollback,
+  // descartando junto o `AIRequest`/`AIRequestToolCall` que documentariam
+  // essa falha (achado ao vivo, plano
+  // pensando-como-empresa-com-agile-beaver.md — ver comentário completo em
+  // `PrismaService.runOutsideTransaction`). No caminho de SUCCESS isso
+  // também é mais correto, não só inofensivo: o custo real já foi gasto na
+  // API de IA independentemente do que a request fizer depois.
   private async persistRequest(
     actor: ChatActor,
     status: AIRequestStatus,
@@ -213,7 +223,7 @@ export class AiService {
     toolCalls: ToolCallLog[],
     errorMessage?: string,
   ): Promise<AIRequest> {
-    return this.prisma.runInTransaction(async (tx) => {
+    return this.prismaOutOfBand.runOutsideTransaction(actor.organizationId, async (tx) => {
       const aiRequest = await tx.aIRequest.create({
         data: {
           organizationId: actor.organizationId,

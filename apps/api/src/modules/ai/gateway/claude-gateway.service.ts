@@ -48,7 +48,18 @@ export class ClaudeGatewayService implements AiGateway {
       );
     }
 
-    this.client = new Anthropic({ apiKey });
+    // `ANTHROPIC_WORKSPACE_ID` — só necessário quando a chave é de
+    // ORGANIZAÇÃO, não escopada a nenhum workspace (achado ao vivo, plano
+    // pensando-como-empresa-com-agile-beaver.md: a API recusa toda request
+    // dessas chaves com "This API key is not scoped to a workspace" até o
+    // header `anthropic-workspace-id` dizer qual workspace usar). Uma chave
+    // já escopada não precisa disso — `defaultHeaders` fica de fora nesse
+    // caso, em vez de mandar um header vazio à toa.
+    const workspaceId = this.configService.get('ANTHROPIC_WORKSPACE_ID', { infer: true });
+    this.client = new Anthropic({
+      apiKey,
+      ...(workspaceId ? { defaultHeaders: { 'anthropic-workspace-id': workspaceId } } : {}),
+    });
     return this.client;
   }
 }

@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
+import { PrismaOutOfBandService } from './prisma-out-of-band.service';
 
 /**
  * Global: todo módulo de domínio precisa do PrismaService, e declará-lo global
@@ -13,7 +14,7 @@ import { PrismaService } from './prisma.service';
  */
 @Global()
 @Module({
-  providers: [PrismaService],
-  exports: [PrismaService],
+  providers: [PrismaService, PrismaOutOfBandService],
+  exports: [PrismaService, PrismaOutOfBandService],
 })
 export class PrismaModule {}

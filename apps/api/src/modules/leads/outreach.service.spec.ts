@@ -13,6 +13,14 @@ function buildDeps() {
     lead: { update: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
     aIRequest: { create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }) },
   };
+  // `PrismaOutOfBandService` mock: invoca `fn` com o mock de `aIRequest`
+  // acima — simplificação de teste (não importa aqui que seja uma
+  // transação genuinamente separada, isso é coberto por
+  // prisma-out-of-band.service.spec.ts), só que `persistAiRequest` chame
+  // este serviço (não `prisma.aIRequest.create` direto).
+  const prismaOutOfBand = {
+    runOutsideTransaction: jest.fn((_organizationId: string, fn: (tx: typeof prisma) => unknown) => fn(prisma)),
+  };
 
   const gateway: jest.Mocked<AiGateway> = { sendMessage: jest.fn() };
 
@@ -33,6 +41,7 @@ function buildDeps() {
 
   const service = new OutreachService(
     prisma as never,
+    prismaOutOfBand as never,
     gateway,
     budgetService as never,
     organizationsService as never,

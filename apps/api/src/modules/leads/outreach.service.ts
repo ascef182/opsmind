@@ -11,6 +11,7 @@ import type {
 } from '@opsmind/database';
 import type { LeadScoreBreakdown, SocialLink, SocialPlatform } from '@opsmind/shared-types';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { PrismaOutOfBandService } from '../../infrastructure/database/prisma-out-of-band.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EMAIL_SERVICE, type EmailService } from '../../infrastructure/email/email.service';
@@ -99,6 +100,7 @@ export type OutreachDraftActor = { type: 'USER'; userId: string } | { type: 'SYS
 export class OutreachService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly prismaOutOfBand: PrismaOutOfBandService,
     @Inject(AI_GATEWAY) private readonly gateway: AiGateway,
     private readonly budgetService: BudgetService,
     private readonly organizationsService: OrganizationsService,
@@ -710,6 +712,15 @@ export class OutreachService {
   // genérica compartilhada com `AuditLog`/`Lead`/`LeadEnrichment`); um
   // pedido do sistema (Task 11) nunca inventa um usuário — `userId`/
   // `actorId` ficam `null`, só `actorType: 'SYSTEM'` identifica a origem.
+  // Escreve fora da transação da request (`runOutsideTransaction`, não
+  // `this.prisma.aIRequest.create` direto) — chamado tanto no caminho de
+  // sucesso quanto logo antes de relançar um erro (`generateDraft` acima).
+  // Sem isso, o registro de uma tentativa ERROR/BUDGET_EXCEEDED nunca
+  // sobrevivia: a transação da request inteira sofre rollback quando o
+  // método relança o erro, descartando junto o `AIRequest` que documentaria
+  // essa falha (achado ao vivo, plano
+  // pensando-como-empresa-com-agile-beaver.md — ver comentário completo em
+  // `PrismaService.runOutsideTransaction`).
   private persistAiRequest(
     organizationId: string,
     actor: OutreachDraftActor,
@@ -720,20 +731,22 @@ export class OutreachService {
     cost: number,
     errorMessage?: string,
   ): Promise<AIRequest> {
-    return this.prisma.aIRequest.create({
-      data: {
-        organizationId,
-        userId: actor.type === 'USER' ? actor.userId : null,
-        actorType: actor.type,
-        actorId: actor.type === 'SYSTEM' ? null : actor.userId,
-        model: MODEL_NAME,
-        inputTokens,
-        outputTokens,
-        latencyMs,
-        estimatedCost: cost,
-        status,
-        errorMessage,
-      },
-    });
+    return this.prismaOutOfBand.runOutsideTransaction(organizationId, (tx) =>
+      tx.aIRequest.create({
+        data: {
+          organizationId,
+          userId: actor.type === 'USER' ? actor.userId : null,
+          actorType: actor.type,
+          actorId: actor.type === 'SYSTEM' ? null : actor.userId,
+          model: MODEL_NAME,
+          inputTokens,
+          outputTokens,
+          latencyMs,
+          estimatedCost: cost,
+          status,
+          errorMessage,
+        },
+      }),
+    );
   }
 }

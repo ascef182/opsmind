@@ -2,6 +2,7 @@ import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nest
 import type Anthropic from '@anthropic-ai/sdk';
 import type { AIRequest, AIRequestStatus, Lead, LeadEnrichment, Prisma } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { PrismaOutOfBandService } from '../../infrastructure/database/prisma-out-of-band.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { BudgetService } from '../ai/services/budget.service';
@@ -46,6 +47,7 @@ const ANALYSIS_SYSTEM_PROMPT = [
 export class LeadAnalysisService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly prismaOutOfBand: PrismaOutOfBandService,
     @Inject(AI_GATEWAY) private readonly gateway: AiGateway,
     private readonly budgetService: BudgetService,
     private readonly organizationsService: OrganizationsService,
@@ -166,6 +168,12 @@ export class LeadAnalysisService {
     );
   }
 
+  // `runOutsideTransaction`, não `this.prisma.aIRequest.create` direto —
+  // mesmo racional (e mesmo bug corrigido) de
+  // `OutreachService.persistAiRequest`/`DealProposalService.persistAiRequest`:
+  // sem isso, o registro de uma tentativa ERROR/BUDGET_EXCEEDED nunca
+  // sobrevivia ao rollback da transação da request quando
+  // `analyzeLeadPotential` relança o erro logo em seguida.
   private persistAiRequest(
     organizationId: string,
     userId: string,
@@ -176,18 +184,20 @@ export class LeadAnalysisService {
     cost: number,
     errorMessage?: string,
   ): Promise<AIRequest> {
-    return this.prisma.aIRequest.create({
-      data: {
-        organizationId,
-        userId,
-        model: MODEL_NAME,
-        inputTokens,
-        outputTokens,
-        latencyMs,
-        estimatedCost: cost,
-        status,
-        errorMessage,
-      },
-    });
+    return this.prismaOutOfBand.runOutsideTransaction(organizationId, (tx) =>
+      tx.aIRequest.create({
+        data: {
+          organizationId,
+          userId,
+          model: MODEL_NAME,
+          inputTokens,
+          outputTokens,
+          latencyMs,
+          estimatedCost: cost,
+          status,
+          errorMessage,
+        },
+      }),
+    );
   }
 }
