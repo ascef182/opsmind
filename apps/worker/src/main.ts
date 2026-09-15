@@ -21,6 +21,7 @@ import { createRedditClusteringQueue } from './reddit-clustering-queue';
 import { scanCustomerInactiveAutomations } from './automation-scan';
 import { scanProspectingTargets } from './prospecting-scan';
 import { scanRedditMiningTopics } from './reddit-mining-scan';
+import { scanOutreachFollowups } from './outreach-followup-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
 
@@ -126,6 +127,12 @@ async function main(): Promise<void> {
   // este intervalo também é configurável por ambiente desde já (ver
   // packages/config/env/schema.ts), default 1 dia.
   const REDDIT_MINING_SCAN_INTERVAL_MS = env.REDDIT_MINING_SCAN_INTERVAL_MS;
+  // Lembrete de follow-up (plano pensando-como-empresa-com-agile-beaver.md)
+  // — mesmo racional de configurabilidade por ambiente dos dois intervalos
+  // acima (sem custo de API por trás, mas o ritmo ainda pode variar por
+  // instância/demo vs. produção).
+  const OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS = env.OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS;
+  const OUTREACH_FOLLOWUP_THRESHOLD_DAYS = env.OUTREACH_FOLLOWUP_THRESHOLD_DAYS;
 
   const prisma = createPrismaClient(env);
   // Uma única conexão Redis reaproveitada por ambos os pares fila/worker
@@ -235,11 +242,34 @@ async function main(): Promise<void> {
   await runRedditMiningScan();
   setInterval(runRedditMiningScan, REDDIT_MINING_SCAN_INTERVAL_MS);
 
+  // Scan de lembrete de follow-up (plano
+  // pensando-como-empresa-com-agile-beaver.md) — mesmo formato de
+  // `runScan`/`runProspectingScan`/`runRedditMiningScan` acima, mas sem fila
+  // (ver comentário de `scanOutreachFollowups`: ação local, sem chamada de
+  // rede externa).
+  async function runOutreachFollowupScan(): Promise<void> {
+    try {
+      const notified = await scanOutreachFollowups(prisma, OUTREACH_FOLLOWUP_THRESHOLD_DAYS);
+      if (notified > 0) {
+        logger.info({ notified }, 'scan de follow-up de outreach notificou usuários');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'scan de follow-up de outreach falhou');
+      Sentry.captureException(error);
+    }
+  }
+
+  await runOutreachFollowupScan();
+  setInterval(runOutreachFollowupScan, OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS);
+
   logger.info(
     `OpsMind worker rodando — filas "${queue.name}" (scan a cada ${SCAN_INTERVAL_MS}ms) e "${leadScrapeQueue.name}"`,
   );
   logger.info(`Scan de prospecção autônoma a cada ${PROSPECTING_SCAN_INTERVAL_MS}ms`);
   logger.info(`Scan de mineração no Reddit a cada ${REDDIT_MINING_SCAN_INTERVAL_MS}ms`);
+  logger.info(
+    `Scan de follow-up de outreach a cada ${OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS}ms (threshold ${OUTREACH_FOLLOWUP_THRESHOLD_DAYS} dias)`,
+  );
 }
 
 main().catch((error) => {

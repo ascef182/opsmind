@@ -836,26 +836,34 @@ model LeadEnrichment {
 }
 
 model OutreachMessage {
-  id                String          @id @default(uuid())
-  organizationId    String          @map("organization_id")
-  leadId            String          @map("lead_id")
-  serviceOfferingId String?         @map("service_offering_id")
-  channel           OutreachChannel
-  subject           String?
-  body              String          @db.Text
-  evidenceQuotes    Json            @map("evidence_quotes")
-  status            OutreachStatus  @default(DRAFT)
-  generatedByModel  String?         @map("generated_by_model")
-  aiRequestId       String?         @map("ai_request_id")
-  approvedByUserId  String?         @map("approved_by_user_id")
-  approvedAt        DateTime?       @map("approved_at")
-  rejectedReason    String?         @map("rejected_reason")
-  sentAt            DateTime?       @map("sent_at")
-  repliedAt         DateTime?       @map("replied_at")
-  actorType         AuditActorType  @map("actor_type")
-  actorId           String?         @map("actor_id")
-  createdAt         DateTime        @default(now()) @map("created_at")
-  updatedAt         DateTime        @updatedAt @map("updated_at")
+  id                 String          @id @default(uuid())
+  organizationId     String          @map("organization_id")
+  leadId             String          @map("lead_id")
+  serviceOfferingId  String?         @map("service_offering_id")
+  channel            OutreachChannel
+  subject            String?
+  body               String          @db.Text
+  evidenceQuotes     Json            @map("evidence_quotes")
+  status             OutreachStatus  @default(DRAFT)
+  generatedByModel   String?         @map("generated_by_model")
+  aiRequestId        String?         @map("ai_request_id")
+  approvedByUserId   String?         @map("approved_by_user_id")
+  approvedAt         DateTime?       @map("approved_at")
+  rejectedReason     String?         @map("rejected_reason")
+  sentAt             DateTime?       @map("sent_at")
+  repliedAt          DateTime?       @map("replied_at")
+  // Id retornado pelo Resend no envio real (`OutreachService.send`) —
+  // correlaciona uma resposta recebida via webhook inbound de volta a esta
+  // linha, sem adivinhar organização/lead por endereço de email (evita
+  // ambiguidade cross-tenant). Ver migration `outreach_reply_tracking`.
+  providerMessageId  String?         @map("provider_message_id")
+  // Dedup do scan de follow-up do worker (`outreach-followup-scan.ts`) —
+  // nunca notifica duas vezes a mesma mensagem sem resposta.
+  followUpNotifiedAt DateTime?       @map("follow_up_notified_at")
+  actorType          AuditActorType  @map("actor_type")
+  actorId            String?         @map("actor_id")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
 
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   lead            Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -864,6 +872,7 @@ model OutreachMessage {
 
   @@index([organizationId, status])
   @@index([leadId])
+  @@index([status, sentAt])
   @@map("outreach_messages")
 }
 

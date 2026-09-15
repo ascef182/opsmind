@@ -420,6 +420,37 @@ export class OutreachService {
     return updated;
   }
 
+  /**
+   * `SENT -> REPLIED` disparado pelo webhook inbound do Resend
+   * (`ResendWebhookService`), nunca por um humano — por isso não recebe
+   * `userId` (auditado com `actorType: 'SYSTEM'`, `actorId: null`, mesmo
+   * padrão de `AuditLogInput.actorId` documentado em `audit.service.ts`).
+   * Não é uma exceção à regra "aprovação/envio são sempre humanos": esta
+   * transição não aprova nem envia nada, só registra um FATO objetivo
+   * (chegou uma resposta) que o próprio chamador (webhook) já verificou de
+   * forma independente do sistema de IA — nenhuma AI tool aciona isto.
+   */
+  async markRepliedFromWebhook(organizationId: string, messageId: string): Promise<OutreachMessage> {
+    const updated = await this.applyTransition(
+      organizationId,
+      messageId,
+      'SENT',
+      { status: 'REPLIED', repliedAt: new Date() },
+      'marcar como respondida (webhook)',
+    );
+    await this.prisma.lead.update({ where: { id: updated.leadId }, data: { status: 'REPLIED' } });
+
+    await this.auditService.log({
+      actorType: 'SYSTEM',
+      actorId: null,
+      organizationId,
+      action: 'outreach.replied_webhook',
+      resource: messageId,
+    });
+
+    return updated;
+  }
+
   async markReplied(organizationId: string, messageId: string, userId: string): Promise<OutreachMessage> {
     await this.findByIdOrThrow(organizationId, messageId);
 

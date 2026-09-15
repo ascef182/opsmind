@@ -469,6 +469,36 @@ describe('OutreachService', () => {
     });
   });
 
+  describe('markRepliedFromWebhook (rastreio automático de resposta)', () => {
+    it('transiciona SENT -> REPLIED, atualiza Lead.status e audita com actorType SYSTEM', async () => {
+      const { service, prisma, auditService } = buildDeps();
+      const sent = { id: 'msg-1', leadId: 'lead-1', status: 'SENT' };
+      const replied = { ...sent, status: 'REPLIED' };
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 1 });
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce(replied);
+
+      const result = await service.markRepliedFromWebhook('org-1', 'msg-1');
+
+      expect(prisma.outreachMessage.updateMany).toHaveBeenCalledWith({
+        where: { id: 'msg-1', organizationId: 'org-1', status: 'SENT' },
+        data: expect.objectContaining({ status: 'REPLIED' }),
+      });
+      expect(prisma.lead.update).toHaveBeenCalledWith({ where: { id: 'lead-1' }, data: { status: 'REPLIED' } });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ actorType: 'SYSTEM', action: 'outreach.replied_webhook', resource: 'msg-1' }),
+      );
+      expect(result.status).toBe('REPLIED');
+    });
+
+    it('lança quando a mensagem não está em SENT (idempotência fica a cargo do chamador)', async () => {
+      const { service, prisma } = buildDeps();
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 0 });
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce({ id: 'msg-1', status: 'REPLIED' });
+
+      await expect(service.markRepliedFromWebhook('org-1', 'msg-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('send (envio real via EmailService, canal EMAIL)', () => {
     it('envia o email, transiciona APPROVED -> SENT e marca o Lead como CONTACTED', async () => {
       const { service, prisma, leadsService, emailService, auditService } = buildDeps();

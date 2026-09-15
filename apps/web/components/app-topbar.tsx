@@ -4,6 +4,8 @@ import { useRouter } from 'next/navigation';
 import { Bell, LogOut, Search } from 'lucide-react';
 import { useLogout } from '@/lib/auth/use-auth';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
+import { useMarkNotificationRead, useNotifications } from '@/lib/notifications/use-notifications';
+import type { Notification } from '@/lib/notifications/types';
 import type { OrganizationDto } from '@opsmind/shared-types';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { Input } from '@/components/ui/input';
@@ -28,6 +30,71 @@ function initials(name: string): string {
     .join('');
 }
 
+// `type` é string livre no backend (ver NotificationsService) — mapa de
+// rótulos amigáveis pros tipos conhecidos hoje, com fallback pro tipo cru
+// pra qualquer tipo novo não listado aqui (nunca quebra, só fica menos
+// bonito até alguém adicionar o rótulo).
+function describeNotification(notification: Notification): string {
+  const payload = notification.payload ?? {};
+  switch (notification.type) {
+    case 'task.assigned':
+      return `Nova tarefa atribuída${typeof payload.title === 'string' ? `: ${payload.title}` : ''}`;
+    case 'automation.customer_inactive':
+      return `Cliente inativo${typeof payload.customerName === 'string' ? `: ${payload.customerName}` : ''}`;
+    case 'outreach.followup_due':
+      return `Sem resposta ainda${typeof payload.leadName === 'string' ? ` — ${payload.leadName}` : ''}`;
+    default:
+      return notification.type;
+  }
+}
+
+function NotificationsMenu({ organizationId }: { organizationId: string }) {
+  const notifications = useNotifications(organizationId);
+  const markRead = useMarkNotificationRead(organizationId);
+  const unreadCount = notifications.data?.filter((n) => !n.readAt).length ?? 0;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="relative" aria-label="Notificações">
+          <Bell className="size-4" />
+          {unreadCount > 0 && (
+            <span className="absolute top-0.5 right-0.5 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80">
+        <DropdownMenuLabel>Notificações</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {notifications.isLoading && <p className="px-2 py-3 text-sm text-muted-foreground">Carregando…</p>}
+        {notifications.isSuccess && notifications.data.length === 0 && (
+          <p className="px-2 py-3 text-sm text-muted-foreground">Nenhuma notificação ainda.</p>
+        )}
+        {notifications.data?.slice(0, 15).map((notification) => (
+          <DropdownMenuItem
+            key={notification.id}
+            className="flex flex-col items-start gap-0.5 whitespace-normal"
+            onClick={() => {
+              if (!notification.readAt) {
+                markRead.mutate(notification.id);
+              }
+            }}
+          >
+            <span className={notification.readAt ? 'text-muted-foreground' : 'font-medium text-foreground'}>
+              {describeNotification(notification)}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {new Date(notification.createdAt).toLocaleString('pt-BR')}
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function AppTopbar({
   organizationId,
   organization,
@@ -49,9 +116,7 @@ export function AppTopbar({
       </div>
 
       <div className="ml-auto flex items-center gap-1">
-        <Button variant="ghost" size="icon" disabled aria-label="Notificações">
-          <Bell className="size-4" />
-        </Button>
+        <NotificationsMenu organizationId={organizationId} />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

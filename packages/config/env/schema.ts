@@ -51,6 +51,20 @@ export const envSchema = z.object({
   // produção precisa de um domínio verificado aqui (resend:resend skill,
   // "Common Mistakes" #11/#12).
   RESEND_FROM_EMAIL: z.string().default('OpsMind <onboarding@resend.dev>'),
+  // Rastreio de resposta (sprint de follow-up do plano
+  // pensando-como-empresa-com-agile-beaver.md) — assina o payload do webhook
+  // inbound do Resend (`ResendWebhookService`). Opcional pelo mesmo motivo
+  // de RESEND_API_KEY: sem ela, o endpoint do webhook recusa processar
+  // qualquer evento (fail-closed — nunca aceita um evento não verificado),
+  // mas o boot da API não trava.
+  RESEND_WEBHOOK_SECRET: z.string().optional(),
+  // Lembrete de follow-up (worker) — depois de quantos dias sem resposta uma
+  // `OutreachMessage` SENT gera uma notificação pro usuário que aprovou o
+  // envio. Configurável por ambiente pelo mesmo motivo de
+  // PROSPECTING_SCAN_INTERVAL_MS (sem custo de API por trás, mas o ritmo
+  // ainda pode variar por instância/demo vs. produção).
+  OUTREACH_FOLLOWUP_THRESHOLD_DAYS: z.coerce.number().int().positive().default(3),
+  OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
 
   // IA (Fase 3) — deliberadamente OPCIONAL, ao contrário de toda outra
   // variável acima: IA é um recurso adicional, não uma dependência do resto

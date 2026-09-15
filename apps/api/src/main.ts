@@ -16,7 +16,12 @@ async function bootstrap() {
   // `bufferLogs: true` + `useLogger()` logo em seguida: bufferiza os logs do
   // próprio bootstrap do Nest (antes do logger do pino estar pronto) em vez
   // de perdê-los ou deixar o Nest usar o console.log padrão nesse meio-tempo.
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // `rawBody: true` — exigido por `ResendWebhookController` (assinatura HMAC
+  // do webhook precisa dos bytes exatos do payload, `req.rawBody`, não do
+  // corpo já reparseado como JSON). Não afeta nenhuma outra rota: o
+  // body-parser padrão do Nest continua populando `req.body` normalmente em
+  // paralelo, isto só ADICIONA o buffer cru também.
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
   app.useLogger(app.get(Logger));
 
   app.enableCors({
