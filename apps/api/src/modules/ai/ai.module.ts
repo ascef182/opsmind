@@ -27,6 +27,7 @@ import { GenerateOutreachMessageTool } from './tools/generate-outreach-message.t
 import { CreateDealTool } from './tools/create-deal.tool';
 import { MoveDealStageTool } from './tools/move-deal-stage.tool';
 import { ListDealsTool } from './tools/list-deals.tool';
+import { GenerateDealProposalTool } from './tools/generate-deal-proposal.tool';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 
 @Module({
@@ -60,6 +61,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     CreateDealTool,
     MoveDealStageTool,
     ListDealsTool,
+    GenerateDealProposalTool,
     {
       provide: AI_TOOLS,
       useFactory: (
@@ -77,6 +79,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         createDeal: CreateDealTool,
         moveDealStage: MoveDealStageTool,
         listDeals: ListDealsTool,
+        generateDealProposal: GenerateDealProposalTool,
       ): AiTool[] => [
         getCustomer,
         searchCustomers,
@@ -92,6 +95,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         createDeal,
         moveDealStage,
         listDeals,
+        generateDealProposal,
       ],
       inject: [
         GetCustomerTool,
@@ -108,6 +112,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         CreateDealTool,
         MoveDealStageTool,
         ListDealsTool,
+        GenerateDealProposalTool,
       ],
     },
   ],

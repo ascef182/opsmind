@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsDate, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsDate, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 // Exclui `stage` deliberadamente — mesma lógica de `UpdateLeadDto` rejeitando
 // `CONVERTED`: mudança de estágio só passa pelo endpoint dedicado
@@ -27,4 +27,13 @@ export class UpdateDealDto {
   @IsOptional()
   @IsUUID()
   ownerUserId?: string;
+
+  // Edição manual do rascunho gerado por IA (`DealProposalService.generate`)
+  // — mesmo endpoint genérico, sem rota própria, já que isto é só texto de
+  // apoio (não um documento gerenciado). Limite generoso o bastante pra uma
+  // proposta comercial real, mas não ilimitado.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20_000)
+  proposalDraft?: string;
 }

@@ -4,13 +4,15 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useCustomer } from '@/lib/customers/use-customers';
-import { useDeal, useMoveDealStage, useUpdateDeal } from '@/lib/deals/use-deals';
+import { useDeal, useGenerateDealProposal, useMoveDealStage, useUpdateDeal } from '@/lib/deals/use-deals';
 import { DEAL_STAGE_LABELS, DEAL_STAGE_TRANSITIONS, WRITE_ROLES, formatCurrency, type DealStage } from '@/lib/deals/types';
+import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Card } from '@/components/ui/card';
+import { Textarea } from '@/components/ui/textarea';
+import { Card, FormError } from '@/components/ui/card';
 
 export default function DealDetailPage() {
   const { organizationId, dealId } = useParams<{ organizationId: string; dealId: string }>();
@@ -21,6 +23,7 @@ export default function DealDetailPage() {
   const customer = useCustomer(organizationId, deal.data?.customerId ?? '');
   const moveStage = useMoveDealStage(organizationId, dealId);
   const updateDeal = useUpdateDeal(organizationId, dealId);
+  const generateProposal = useGenerateDealProposal(organizationId, dealId);
 
   if (deal.isLoading) {
     return <p className="text-muted-foreground">Carregando negócio…</p>;
@@ -145,6 +148,52 @@ export default function DealDetailPage() {
               </Button>
             </div>
           </form>
+        </Card>
+      )}
+
+      {canWrite && (
+        <Card>
+          <div className="flex items-center justify-between">
+            <h2 className="font-medium text-foreground">Proposta</h2>
+            <Button size="sm" disabled={generateProposal.isPending} onClick={() => generateProposal.mutate()}>
+              {generateProposal.isPending
+                ? 'Gerando…'
+                : deal.data.proposalDraft
+                  ? 'Gerar novamente'
+                  : 'Gerar proposta'}
+            </Button>
+          </div>
+          <FormError
+            message={generateProposal.isError ? (generateProposal.error as ApiError).message : null}
+          />
+          {deal.data.proposalDraft ? (
+            <form
+              key={deal.data.proposalGeneratedAt ?? deal.data.proposalDraft}
+              className="mt-3 flex flex-col gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const form = new FormData(e.currentTarget);
+                updateDeal.mutate({ proposalDraft: String(form.get('proposalDraft') ?? '') });
+              }}
+            >
+              <Textarea name="proposalDraft" rows={12} defaultValue={deal.data.proposalDraft} />
+              {deal.data.proposalGeneratedAt && (
+                <p className="text-xs text-muted-foreground">
+                  Gerada em {new Date(deal.data.proposalGeneratedAt).toLocaleString('pt-BR')} — minuta editável,
+                  revise antes de enviar ao cliente.
+                </p>
+              )}
+              <div className="flex justify-end">
+                <Button type="submit" size="sm" disabled={updateDeal.isPending}>
+                  {updateDeal.isPending ? 'Salvando…' : 'Salvar edição'}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Nenhuma proposta gerada ainda para este negócio.
+            </p>
+          )}
         </Card>
       )}
     </div>

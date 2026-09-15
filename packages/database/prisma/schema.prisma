@@ -382,23 +382,27 @@ model Customer {
 }
 
 model Task {
-  id             String         @id @default(uuid())
-  organizationId String         @map("organization_id")
-  customerId     String?        @map("customer_id")
-  title          String
-  description    String?
-  status         TaskStatus     @default(OPEN)
-  assigneeId     String?        @map("assignee_id")
-  dueDate        DateTime?      @map("due_date")
-  completedAt    DateTime?      @map("completed_at")
+  id                String         @id @default(uuid())
+  organizationId    String         @map("organization_id")
+  customerId        String?        @map("customer_id")
+  title             String
+  description       String?
+  status            TaskStatus     @default(OPEN)
+  assigneeId        String?        @map("assignee_id")
+  dueDate           DateTime?      @map("due_date")
+  completedAt       DateTime?      @map("completed_at")
+  // Dedup do scan de lembrete de vencimento do worker
+  // (`task-due-reminder-scan.ts`) — nunca notifica duas vezes a mesma
+  // tarefa vencida; limpo quando `dueDate` muda (`TasksService.update`).
+  dueDateNotifiedAt DateTime?      @map("due_date_notified_at")
   // Ator polimórfico (database-reviewer-review.md §4.2): substitui o
   // `created_by (user|ai|automation)` do PRD §9 por actor_type/actor_id,
   // replicando o padrão já correto de AuditLog — sem FK rígida, o ator pode
   // ser AI/automation, não só um User.
-  actorType      AuditActorType @map("actor_type")
-  actorId        String?        @map("actor_id")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  updatedAt      DateTime       @updatedAt @map("updated_at")
+  actorType         AuditActorType @map("actor_type")
+  actorId           String?        @map("actor_id")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -449,32 +453,37 @@ enum DealStage {
 // estágio, valor esperado e data de fechamento, coisas que `Customer` nunca
 // teve.
 model Deal {
-  id                String         @id @default(uuid())
-  organizationId    String         @map("organization_id")
-  customerId        String         @map("customer_id")
+  id                  String         @id @default(uuid())
+  organizationId      String         @map("organization_id")
+  customerId          String         @map("customer_id")
   // Ponte "achar -> fechar": rastreia o Lead de prospecção que originou este
   // Deal, quando aplicável (ver `LeadsService.convertToCustomer`). Nullable
   // porque um Deal também pode ser criado manualmente para um Customer que
   // já existia antes deste pipeline.
-  originLeadId      String?        @map("origin_lead_id")
-  title             String
-  stage             DealStage      @default(QUALIFICATION)
-  value             Decimal        @db.Decimal(12, 2)
-  currency          String         @default("BRL")
-  expectedCloseDate DateTime?      @map("expected_close_date")
-  actualCloseDate   DateTime?      @map("actual_close_date")
-  ownerUserId       String?        @map("owner_user_id")
+  originLeadId        String?        @map("origin_lead_id")
+  title               String
+  stage               DealStage      @default(QUALIFICATION)
+  value               Decimal        @db.Decimal(12, 2)
+  currency            String         @default("BRL")
+  expectedCloseDate   DateTime?      @map("expected_close_date")
+  actualCloseDate     DateTime?      @map("actual_close_date")
+  ownerUserId         String?        @map("owner_user_id")
   // Obrigatório quando stage = LOST (validado em DealsService.moveStage, não
   // no schema — mesmo racional de outros campos condicionais no resto deste
   // arquivo).
-  lostReason        String?        @map("lost_reason")
-  actorType         AuditActorType @map("actor_type")
-  actorId           String?        @map("actor_id")
+  lostReason          String?        @map("lost_reason")
+  // Minuta gerada por IA (`DealProposalService.generate`) — editável via
+  // `UpdateDealDto.proposalDraft`, nunca escrita diretamente por uma AI
+  // tool (mesma regra de aprovação/edição humana de `OutreachMessage`).
+  proposalDraft       String?        @map("proposal_draft") @db.Text
+  proposalGeneratedAt DateTime?      @map("proposal_generated_at")
+  actorType           AuditActorType @map("actor_type")
+  actorId             String?        @map("actor_id")
   // Soft-delete (padrão de Customer, não de Lead): um Deal é registro
   // financeiro/de negociação, nunca apagado de fato, só marcado.
-  deletedAt         DateTime?      @map("deleted_at")
-  createdAt         DateTime       @default(now()) @map("created_at")
-  updatedAt         DateTime       @updatedAt @map("updated_at")
+  deletedAt           DateTime?      @map("deleted_at")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)

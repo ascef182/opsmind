@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import type { Deal } from '@opsmind/database';
 import { DealsService } from './deals.service';
+import { DealProposalService } from './deal-proposal.service';
 import { CreateDealDto } from './dto/create-deal.dto';
 import { UpdateDealDto } from './dto/update-deal.dto';
 import { MoveDealStageDto } from './dto/move-deal-stage.dto';
@@ -14,7 +15,10 @@ import { WRITE_ROLES } from '../../shared/constants/roles.constant';
 @UseGuards(TenantGuard)
 @Controller('organizations/:organizationId/deals')
 export class DealsController {
-  constructor(private readonly dealsService: DealsService) {}
+  constructor(
+    private readonly dealsService: DealsService,
+    private readonly dealProposalService: DealProposalService,
+  ) {}
 
   @Roles(...WRITE_ROLES)
   @UseGuards(RolesGuard)
@@ -53,6 +57,17 @@ export class DealsController {
     @Body() dto: UpdateDealDto,
   ): Promise<Deal> {
     return this.dealsService.update(organizationId, dealId, dto, user.id);
+  }
+
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post(':dealId/generate-proposal')
+  generateProposal(
+    @Param('organizationId') organizationId: string,
+    @Param('dealId') dealId: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<Deal> {
+    return this.dealProposalService.generate(organizationId, dealId, user.id);
   }
 
   @Roles(...WRITE_ROLES)

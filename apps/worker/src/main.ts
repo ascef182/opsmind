@@ -22,6 +22,7 @@ import { scanCustomerInactiveAutomations } from './automation-scan';
 import { scanProspectingTargets } from './prospecting-scan';
 import { scanRedditMiningTopics } from './reddit-mining-scan';
 import { scanOutreachFollowups } from './outreach-followup-scan';
+import { scanTaskDueReminders } from './task-due-reminder-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
 
@@ -200,6 +201,26 @@ async function main(): Promise<void> {
   await runScan();
   setInterval(runScan, SCAN_INTERVAL_MS);
 
+  // Lembrete de vencimento de tarefa (plano
+  // pensando-como-empresa-com-agile-beaver.md) — mesmo intervalo fixo
+  // `SCAN_INTERVAL_MS` de `runScan` acima (sem custo de API por trás, e
+  // vencimento de tarefa é sensível a tempo — checagem a cada 60s é
+  // responsiva sem ser cara).
+  async function runTaskDueReminderScan(): Promise<void> {
+    try {
+      const notified = await scanTaskDueReminders(prisma);
+      if (notified > 0) {
+        logger.info({ notified }, 'scan de lembrete de vencimento notificou responsáveis');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'scan de lembrete de vencimento falhou');
+      Sentry.captureException(error);
+    }
+  }
+
+  await runTaskDueReminderScan();
+  setInterval(runTaskDueReminderScan, SCAN_INTERVAL_MS);
+
   // Scan de prospecção autônoma (Task 7) — mesmo formato de `runScan`
   // acima, rodando contra a mesma fila `leadScrapeQueue`/`connection` já
   // instanciadas nesta função (nenhuma fila/conexão nova).
@@ -270,6 +291,7 @@ async function main(): Promise<void> {
   logger.info(
     `Scan de follow-up de outreach a cada ${OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS}ms (threshold ${OUTREACH_FOLLOWUP_THRESHOLD_DAYS} dias)`,
   );
+  logger.info(`Scan de lembrete de vencimento de tarefa a cada ${SCAN_INTERVAL_MS}ms`);
 }
 
 main().catch((error) => {

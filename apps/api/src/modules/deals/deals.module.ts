@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ActivityModule } from '../activity/activity.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { DealsService } from './deals.service';
+import { DealProposalService } from './deal-proposal.service';
 import { DealsController } from './deals.controller';
 import { BudgetService } from '../ai/services/budget.service';
 import { AI_GATEWAY } from '../ai/gateway/ai-gateway.interface';
@@ -22,11 +23,12 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
   controllers: [DealsController],
   providers: [
     DealsService,
+    DealProposalService,
     BudgetService,
     { provide: AI_GATEWAY, useClass: ClaudeGatewayService },
     TenantGuard,
     RolesGuard,
   ],
-  exports: [DealsService],
+  exports: [DealsService, DealProposalService],
 })
 export class DealsModule {}

@@ -56,6 +56,10 @@ export interface Deal {
   actualCloseDate: string | null;
   ownerUserId: string | null;
   lostReason: string | null;
+  // Minuta gerada por IA (`DealProposalService.generate`) — nulo até a
+  // primeira geração. Editável via `UpdateDealInput.proposalDraft`.
+  proposalDraft: string | null;
+  proposalGeneratedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,6 +77,7 @@ export interface UpdateDealInput {
   value?: number;
   currency?: string;
   expectedCloseDate?: string;
+  proposalDraft?: string;
 }
 
 export interface MoveDealStageInput {

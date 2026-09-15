@@ -77,6 +77,15 @@ export function useMoveDealStage(organizationId: string, dealId: string) {
   });
 }
 
+export function useGenerateDealProposal(organizationId: string, dealId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<Deal>(`/organizations/${organizationId}/deals/${dealId}/generate-proposal`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'deals'] }),
+  });
+}
+
 export function useDeleteDeal(organizationId: string) {
   const queryClient = useQueryClient();
   return useMutation({

@@ -43,6 +43,8 @@ function describeNotification(notification: Notification): string {
       return `Cliente inativo${typeof payload.customerName === 'string' ? `: ${payload.customerName}` : ''}`;
     case 'outreach.followup_due':
       return `Sem resposta ainda${typeof payload.leadName === 'string' ? ` — ${payload.leadName}` : ''}`;
+    case 'task.due_reminder':
+      return `Tarefa vencida${typeof payload.title === 'string' ? `: ${payload.title}` : ''}`;
     default:
       return notification.type;
   }
