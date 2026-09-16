@@ -385,13 +385,18 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
     <section className="flex flex-col gap-6 border-t border-border pt-8">
       <h2 className="text-sm font-medium text-muted-foreground">Pipeline de negociação</h2>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCardDark label="Valor em aberto" value={formatCurrency(data.openValue)} />
         <StatCardDark label="Taxa de vitória" value={`${Math.round(data.winRate * 100)}%`} hint="dos negócios fechados" />
         <StatCardDark
           label="Ciclo médio de venda"
           value={data.avgSalesCycleDays === null ? '—' : `${Math.round(data.avgSalesCycleDays)} dias`}
           hint={data.avgSalesCycleDays === null ? 'nenhum negócio ganho ainda' : 'entre criação e fechamento'}
+        />
+        <StatCardDark
+          label="Propostas assinadas"
+          value={`${data.signatureFunnel.signed}/${data.signatureFunnel.sent}`}
+          hint={data.signatureFunnel.sent === 0 ? 'nenhuma enviada pra assinatura ainda' : 'assinadas / enviadas'}
         />
       </div>
 

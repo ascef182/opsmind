@@ -13,15 +13,17 @@ function buildDeps() {
   };
   const auditService = { log: jest.fn().mockResolvedValue(undefined) };
   const dealsService = { findByIdOrThrow: jest.fn() };
+  const notificationsService = { create: jest.fn().mockResolvedValue(undefined) };
 
   const service = new DealSignatureService(
     prisma as never,
     signatureService,
     auditService as never,
     dealsService as never,
+    notificationsService as never,
   );
 
-  return { service, prisma, signatureService, auditService, dealsService };
+  return { service, prisma, signatureService, auditService, dealsService, notificationsService };
 }
 
 const baseDeal = {
@@ -128,14 +130,17 @@ describe('DealSignatureService.list', () => {
 
 describe('DealSignatureService.syncStatusFromProvider', () => {
   it('confirma o status via getStatus (defesa em profundidade, nunca confia só no payload do webhook) e marca SIGNED', async () => {
-    const { service, prisma, signatureService } = buildDeps();
+    const { service, prisma, signatureService, dealsService } = buildDeps();
     prisma.dealSignatureRequest.findFirst.mockResolvedValue({
       id: 'sig-1',
       organizationId: 'org-1',
       dealId: 'deal-1',
       externalEnvelopeId: 'env-1',
       status: 'SENT',
+      actorType: 'SYSTEM',
+      actorId: null,
     });
+    dealsService.findByIdOrThrow.mockResolvedValue({ ...baseDeal, ownerUserId: null });
     signatureService.getStatus.mockResolvedValue({ status: 'closed', documentUrl: 'https://sandbox.clicksign.com/f/abc' });
     prisma.dealSignatureRequest.update.mockResolvedValue({ id: 'sig-1', status: 'SIGNED' });
 
@@ -153,8 +158,76 @@ describe('DealSignatureService.syncStatusFromProvider', () => {
     expect(result?.status).toBe('SIGNED');
   });
 
-  it('marca CANCELED quando o provider confirma envelope cancelado', async () => {
-    const { service, prisma, signatureService } = buildDeps();
+  it('quando assinado, notifica o dono do negócio sugerindo mover pra WON (nunca move o estágio sozinho)', async () => {
+    const { service, prisma, signatureService, dealsService, notificationsService } = buildDeps();
+    prisma.dealSignatureRequest.findFirst.mockResolvedValue({
+      id: 'sig-1',
+      organizationId: 'org-1',
+      dealId: 'deal-1',
+      externalEnvelopeId: 'env-1',
+      status: 'SENT',
+      actorType: 'USER',
+      actorId: 'user-quem-pediu',
+    });
+    signatureService.getStatus.mockResolvedValue({ status: 'closed', documentUrl: 'https://sandbox.clicksign.com/f/abc' });
+    prisma.dealSignatureRequest.update.mockResolvedValue({ id: 'sig-1', status: 'SIGNED' });
+    dealsService.findByIdOrThrow.mockResolvedValue({ ...baseDeal, ownerUserId: 'user-dono' });
+
+    await service.syncStatusFromProvider('env-1');
+
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org-1',
+        userId: 'user-dono',
+        type: 'deal.signed',
+        payload: expect.objectContaining({ dealId: 'deal-1' }),
+      }),
+    );
+  });
+
+  it('sem dono do deal, notifica quem pediu a assinatura (se for USER)', async () => {
+    const { service, prisma, signatureService, dealsService, notificationsService } = buildDeps();
+    prisma.dealSignatureRequest.findFirst.mockResolvedValue({
+      id: 'sig-1',
+      organizationId: 'org-1',
+      dealId: 'deal-1',
+      externalEnvelopeId: 'env-1',
+      status: 'SENT',
+      actorType: 'USER',
+      actorId: 'user-quem-pediu',
+    });
+    signatureService.getStatus.mockResolvedValue({ status: 'closed', documentUrl: null });
+    prisma.dealSignatureRequest.update.mockResolvedValue({ id: 'sig-1', status: 'SIGNED' });
+    dealsService.findByIdOrThrow.mockResolvedValue({ ...baseDeal, ownerUserId: null });
+
+    await service.syncStatusFromProvider('env-1');
+
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-quem-pediu' }),
+    );
+  });
+
+  it('sem dono do deal nem ator humano, não notifica ninguém (nunca lança erro)', async () => {
+    const { service, prisma, signatureService, dealsService, notificationsService } = buildDeps();
+    prisma.dealSignatureRequest.findFirst.mockResolvedValue({
+      id: 'sig-1',
+      organizationId: 'org-1',
+      dealId: 'deal-1',
+      externalEnvelopeId: 'env-1',
+      status: 'SENT',
+      actorType: 'SYSTEM',
+      actorId: null,
+    });
+    signatureService.getStatus.mockResolvedValue({ status: 'closed', documentUrl: null });
+    prisma.dealSignatureRequest.update.mockResolvedValue({ id: 'sig-1', status: 'SIGNED' });
+    dealsService.findByIdOrThrow.mockResolvedValue({ ...baseDeal, ownerUserId: null });
+
+    await expect(service.syncStatusFromProvider('env-1')).resolves.not.toThrow();
+    expect(notificationsService.create).not.toHaveBeenCalled();
+  });
+
+  it('marca CANCELED quando o provider confirma envelope cancelado, sem notificar ninguém', async () => {
+    const { service, prisma, signatureService, notificationsService } = buildDeps();
     prisma.dealSignatureRequest.findFirst.mockResolvedValue({
       id: 'sig-1',
       organizationId: 'org-1',
@@ -170,6 +243,7 @@ describe('DealSignatureService.syncStatusFromProvider', () => {
       where: { id: 'sig-1' },
       data: expect.objectContaining({ status: 'CANCELED', canceledAt: expect.any(Date) }),
     });
+    expect(notificationsService.create).not.toHaveBeenCalled();
   });
 
   it('não atualiza nada quando o status ainda não é terminal (draft/running)', async () => {

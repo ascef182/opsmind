@@ -6,29 +6,33 @@ describe('DashboardService.getDealPipelineOverview', () => {
   let service: DashboardService;
   let prisma: {
     deal: { groupBy: jest.Mock; aggregate: jest.Mock; findMany: jest.Mock };
+    dealSignatureRequest: { groupBy: jest.Mock };
     $queryRaw: jest.Mock;
   };
 
   // Ordem de resolução em `Promise.all` bate com a ordem das chamadas no
   // service: aggregate (valor em aberto), groupBy (por estágio), $queryRaw
   // (ciclo médio de venda), findMany (fechando em breve), findMany (ganhos
-  // recentes).
+  // recentes), groupBy (funil de assinatura).
   function mockAll({
     openValue = null as number | null,
     byStage = [] as Array<{ stage: string; _count: { _all: number }; _sum: { value: number | null } }>,
     avgSalesCycleRows = [] as Array<{ avgDays: number | null }>,
     dealsClosingSoon = [] as unknown[],
     recentlyWonDeals = [] as unknown[],
+    signatureStatusCounts = [] as Array<{ status: string; _count: { _all: number } }>,
   } = {}) {
     prisma.deal.aggregate.mockResolvedValue({ _sum: { value: openValue } });
     prisma.deal.groupBy.mockResolvedValue(byStage);
     prisma.$queryRaw.mockResolvedValue(avgSalesCycleRows);
     prisma.deal.findMany.mockResolvedValueOnce(dealsClosingSoon).mockResolvedValueOnce(recentlyWonDeals);
+    prisma.dealSignatureRequest.groupBy.mockResolvedValue(signatureStatusCounts);
   }
 
   beforeEach(async () => {
     prisma = {
       deal: { groupBy: jest.fn(), aggregate: jest.fn(), findMany: jest.fn() },
+      dealSignatureRequest: { groupBy: jest.fn() },
       $queryRaw: jest.fn(),
     };
 
@@ -140,5 +144,32 @@ describe('DashboardService.getDealPipelineOverview', () => {
       orderBy: { actualCloseDate: 'desc' },
       take: 5,
     });
+  });
+
+  it('agrega o funil de assinatura (enviadas -> assinadas), 0 quando nenhuma foi enviada ainda', async () => {
+    mockAll({ signatureStatusCounts: [] });
+
+    const result = await service.getDealPipelineOverview('org-1');
+
+    expect(prisma.dealSignatureRequest.groupBy).toHaveBeenCalledWith({
+      by: ['status'],
+      where: { organizationId: 'org-1' },
+      _count: { _all: true },
+    });
+    expect(result.signatureFunnel).toEqual({ sent: 0, signed: 0 });
+  });
+
+  it('conta todas as solicitações como "sent" e só SIGNED como "signed"', async () => {
+    mockAll({
+      signatureStatusCounts: [
+        { status: 'SENT', _count: { _all: 2 } },
+        { status: 'SIGNED', _count: { _all: 3 } },
+        { status: 'CANCELED', _count: { _all: 1 } },
+      ],
+    });
+
+    const result = await service.getDealPipelineOverview('org-1');
+
+    expect(result.signatureFunnel).toEqual({ sent: 6, signed: 3 });
   });
 });

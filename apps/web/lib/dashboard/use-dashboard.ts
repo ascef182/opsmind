@@ -130,6 +130,11 @@ export interface DealPipelineDeal {
   actualCloseDate: string | null;
 }
 
+export interface DealSignatureFunnel {
+  sent: number;
+  signed: number;
+}
+
 export interface DealPipelineOverview {
   openValue: number;
   dealsByStage: Record<DealStage, DealStageBucket>;
@@ -137,6 +142,7 @@ export interface DealPipelineOverview {
   avgSalesCycleDays: number | null;
   dealsClosingSoon: DealPipelineDeal[];
   recentlyWonDeals: DealPipelineDeal[];
+  signatureFunnel: DealSignatureFunnel;
 }
 
 export function useDealPipelineOverview(organizationId: string) {

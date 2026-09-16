@@ -82,6 +82,13 @@ export interface DealStageBucket {
   value: number;
 }
 
+export interface DealSignatureFunnel {
+  // Toda `DealSignatureRequest` já criada (SENT/SIGNED/DECLINED/CANCELED) —
+  // não só as ainda pendentes.
+  sent: number;
+  signed: number;
+}
+
 export interface DealPipelineOverview {
   openValue: number;
   dealsByStage: Record<DealStage, DealStageBucket>;
@@ -91,6 +98,10 @@ export interface DealPipelineOverview {
   avgSalesCycleDays: number | null;
   dealsClosingSoon: Deal[];
   recentlyWonDeals: Deal[];
+  // Funil de fechamento de verdade (trilha "proposta -> assinatura", plano
+  // pensando-como-empresa-com-agile-beaver.md) — quantas propostas foram
+  // enviadas pra assinatura vs. quantas voltaram assinadas.
+  signatureFunnel: DealSignatureFunnel;
 }
 
 interface AvgSalesCycleRow {
@@ -279,7 +290,7 @@ export class DashboardService {
     const closingSoonWindowEnd = new Date();
     closingSoonWindowEnd.setDate(closingSoonWindowEnd.getDate() + DEALS_CLOSING_SOON_WINDOW_DAYS);
 
-    const [openValueAgg, dealsByStageRaw, avgSalesCycleRows, dealsClosingSoon, recentlyWonDeals] =
+    const [openValueAgg, dealsByStageRaw, avgSalesCycleRows, dealsClosingSoon, recentlyWonDeals, signatureStatusCounts] =
       await Promise.all([
         this.prisma.deal.aggregate({
           where: { organizationId, deletedAt: null, stage: { notIn: CLOSED_DEAL_STAGES } },
@@ -315,6 +326,11 @@ export class DashboardService {
           orderBy: { actualCloseDate: 'desc' },
           take: RECENTLY_WON_DEALS_LIMIT,
         }),
+        this.prisma.dealSignatureRequest.groupBy({
+          by: ['status'],
+          where: { organizationId },
+          _count: { _all: true },
+        }),
       ]);
 
     const dealsByStage = Object.fromEntries(
@@ -333,12 +349,24 @@ export class DashboardService {
     const winRate = won + lost === 0 ? 0 : won / (won + lost);
     const avgDays = avgSalesCycleRows[0]?.avgDays ?? null;
 
+    const signatureFunnel = (signatureStatusCounts as Array<{ status: string; _count: { _all: number } }>).reduce(
+      (acc, row) => {
+        acc.sent += row._count._all;
+        if (row.status === 'SIGNED') {
+          acc.signed += row._count._all;
+        }
+        return acc;
+      },
+      { sent: 0, signed: 0 },
+    );
+
     return {
       openValue: Number(openValueAgg._sum.value ?? 0),
       dealsByStage,
       winRate,
       avgSalesCycleDays: avgDays === null ? null : Number(avgDays),
       dealsClosingSoon,
+      signatureFunnel,
       recentlyWonDeals,
     };
   }

@@ -47,6 +47,8 @@ function describeNotification(notification: Notification): string {
       return `Tarefa vencida${typeof payload.title === 'string' ? `: ${payload.title}` : ''}`;
     case 'meeting.reminder':
       return `Reunião em breve${typeof payload.title === 'string' ? `: ${payload.title}` : ''}`;
+    case 'deal.signed':
+      return `Contrato assinado${typeof payload.dealTitle === 'string' ? `: ${payload.dealTitle}` : ''} — mova para Ganho`;
     default:
       return notification.type;
   }

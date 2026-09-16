@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ActivityModule } from '../activity/activity.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { SignatureModule } from '../../infrastructure/signature/signature.module';
 import { DealsService } from './deals.service';
 import { DealProposalService } from './deal-proposal.service';
@@ -21,7 +22,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
  * porque `RedisModule` é `@Global()`.
  */
 @Module({
-  imports: [ActivityModule, OrganizationsModule, SignatureModule],
+  imports: [ActivityModule, OrganizationsModule, SignatureModule, NotificationsModule],
   controllers: [DealsController],
   providers: [
     DealsService,

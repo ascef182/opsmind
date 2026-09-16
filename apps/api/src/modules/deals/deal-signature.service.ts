@@ -3,6 +3,7 @@ import type { DealSignatureRequest } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { SIGNATURE_SERVICE, type SignatureService } from '../../infrastructure/signature/signature.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { DealsService } from './deals.service';
 import { buildProposalPdf } from './utils/build-proposal-pdf';
 
@@ -25,6 +26,7 @@ export class DealSignatureService {
     @Inject(SIGNATURE_SERVICE) private readonly signatureService: SignatureService,
     private readonly auditService: AuditService,
     private readonly dealsService: DealsService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async requestSignature(organizationId: string, dealId: string, userId: string): Promise<DealSignatureRequest> {
@@ -115,10 +117,14 @@ export class DealSignatureService {
     const { status, documentUrl } = await this.signatureService.getStatus(externalEnvelopeId);
 
     if (status === 'closed') {
-      return this.prisma.dealSignatureRequest.update({
+      const updated = await this.prisma.dealSignatureRequest.update({
         where: { id: existing.id },
         data: { status: 'SIGNED', documentUrl, signedAt: new Date() },
       });
+      // `existing` (não `updated`) — garante organizationId/dealId/actorType
+      // mesmo se algum dia `update` usar `select` e devolver menos campos.
+      await this.notifyDealSigned(existing);
+      return updated;
     }
     if (status === 'canceled') {
       return this.prisma.dealSignatureRequest.update({
@@ -129,5 +135,27 @@ export class DealSignatureService {
 
     // 'draft'/'running' — nada terminal ainda, não há o que atualizar.
     return null;
+  }
+
+  /**
+   * Notifica pra sugerir mover o negócio pra `WON` — nunca move sozinho
+   * (mesma regra dura de toda transição de `Deal.stage`: sempre humana, ver
+   * `DealsService.moveStage`). Destinatário: dono do negócio, com fallback
+   * pra quem pediu a assinatura (só quando humano) — mesmo racional de
+   * `scanMeetingReminders` (apps/worker/src/meeting-reminder-scan.ts).
+   */
+  private async notifyDealSigned(request: DealSignatureRequest): Promise<void> {
+    const deal = await this.dealsService.findByIdOrThrow(request.organizationId, request.dealId);
+    const recipientUserId = deal.ownerUserId ?? (request.actorType === 'USER' ? request.actorId : null);
+    if (!recipientUserId) {
+      return;
+    }
+
+    await this.notificationsService.create({
+      organizationId: request.organizationId,
+      userId: recipientUserId,
+      type: 'deal.signed',
+      payload: { dealId: deal.id, dealTitle: deal.title },
+    });
   }
 }
