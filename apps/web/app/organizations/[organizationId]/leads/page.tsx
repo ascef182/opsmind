@@ -7,7 +7,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { MessageCircle } from 'lucide-react';
-import { useCurrentMembership } from '@/lib/memberships/use-memberships';
+import { useCurrentMembership, useMembers } from '@/lib/memberships/use-memberships';
 import { useLeads } from '@/lib/leads/use-leads';
 import { useCreateScrapeJob, useScrapeJobs } from '@/lib/leads/use-scrape-jobs';
 import { SCRAPE_SOURCE_LABELS, WRITE_ROLES, type LeadStatus, type ScrapeSourceType } from '@/lib/leads/types';
@@ -135,6 +135,7 @@ export default function LeadsPage() {
   const { organizationId } = useParams<{ organizationId: string }>();
   const { membership } = useCurrentMembership(organizationId);
   const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
+  const members = useMembers(organizationId);
 
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
@@ -295,6 +296,7 @@ export default function LeadsPage() {
                 <TableHead>Redes</TableHead>
                 <TableHead>Score</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Atribuído a</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -334,6 +336,9 @@ export default function LeadsPage() {
                   </TableCell>
                   <TableCell>
                     <Badge value={lead.status} />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-foreground/80">
+                    {members.data?.find((m) => m.userId === lead.assignedUserId)?.user.name ?? '—'}
                   </TableCell>
                 </TableRow>
               ))}

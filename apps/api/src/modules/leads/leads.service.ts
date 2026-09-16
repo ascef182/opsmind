@@ -9,6 +9,7 @@ import { Prisma, type Customer, type Lead, type LeadStatus } from '@opsmind/data
 import {
   QUALIFICATION_THRESHOLD,
   scoreLead,
+  pickRoundRobinAssignee,
   type LeadScoringInput,
   type ServiceOfferingIcp,
 } from '@opsmind/shared-types';
@@ -16,6 +17,7 @@ import { EXPLORIUM_GATEWAY, type ExploriumGateway } from '@opsmind/integrations'
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { DealsService } from '../deals/deals.service';
+import { WRITE_ROLES } from '../../shared/constants/roles.constant';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
@@ -116,7 +118,100 @@ export class LeadsService {
       resource: `Lead:${lead.id}`,
     });
 
-    return lead;
+    return this.autoAssign(organizationId, lead.id, lead);
+  }
+
+  /**
+   * Round-robin por carga (`pickRoundRobinAssignee`, packages/shared-types)
+   * — sem isso, todo lead novo ficava solto até alguém pegar na mão. Chamado
+   * sempre na criação (`create()` acima); nunca reatribui um lead que já
+   * tem dono (essa é a decisão de `assign()`, sempre manual/explícita).
+   * Devolve o próprio lead sem alterar nada quando a organização não tem
+   * nenhum membro elegível (nunca lança erro por isso).
+   */
+  async autoAssign(organizationId: string, leadId: string, currentLead?: Lead): Promise<Lead> {
+    const lead = currentLead ?? (await this.findByIdOrThrow(organizationId, leadId));
+
+    const members = await this.prisma.membership.findMany({
+      where: { organizationId, role: { in: [...WRITE_ROLES] } },
+      orderBy: { createdAt: 'asc' },
+      select: { userId: true },
+    });
+    if (members.length === 0) {
+      return lead;
+    }
+
+    const openCounts = await this.prisma.lead.groupBy({
+      by: ['assignedUserId'],
+      where: {
+        organizationId,
+        assignedUserId: { in: members.map((m) => m.userId) },
+        status: { notIn: ['CONVERTED', 'LOST'] },
+      },
+      _count: { _all: true },
+    });
+    const countByUser = new Map(
+      (openCounts as Array<{ assignedUserId: string | null; _count: { _all: number } }>).map((row) => [
+        row.assignedUserId,
+        row._count._all,
+      ]),
+    );
+
+    const assigneeId = pickRoundRobinAssignee(
+      members.map((m) => ({ userId: m.userId, openLeadCount: countByUser.get(m.userId) ?? 0 })),
+    );
+    if (!assigneeId) {
+      return lead;
+    }
+
+    const updated = await this.prisma.lead.update({
+      where: { id: leadId },
+      data: { assignedUserId: assigneeId },
+    });
+
+    await this.auditService.log({
+      actorType: 'SYSTEM',
+      actorId: null,
+      organizationId,
+      action: 'lead.auto_assigned',
+      resource: `Lead:${leadId}`,
+      metadata: { assignedUserId: assigneeId },
+    });
+
+    return updated;
+  }
+
+  /**
+   * Atribuição manual/explícita — sempre vence e nunca é sobrescrita por
+   * `autoAssign` depois (que só roda uma vez, na criação). Usada tanto pra
+   * reatribuir um lead quanto pra atribuir um lead que nasceu sem nenhum
+   * membro elegível na organização.
+   */
+  async assign(organizationId: string, leadId: string, assigneeUserId: string, actorUserId: string): Promise<Lead> {
+    await this.findByIdOrThrow(organizationId, leadId);
+
+    const membership = await this.prisma.membership.findFirst({
+      where: { organizationId, userId: assigneeUserId },
+    });
+    if (!membership) {
+      throw new BadRequestException('Usuário não é membro desta organização.');
+    }
+
+    const updated = await this.prisma.lead.update({
+      where: { id: leadId },
+      data: { assignedUserId: assigneeUserId },
+    });
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: actorUserId,
+      organizationId,
+      action: 'lead.assigned',
+      resource: `Lead:${leadId}`,
+      metadata: { assignedUserId: assigneeUserId },
+    });
+
+    return updated;
   }
 
   async findByIdOrThrow(organizationId: string, id: string): Promise<Lead> {

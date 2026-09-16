@@ -7,8 +7,8 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { isSafeHttpUrl } from '@opsmind/shared-types';
-import { useCurrentMembership } from '@/lib/memberships/use-memberships';
-import { useLead, useConvertLead, useScoreLead } from '@/lib/leads/use-leads';
+import { useCurrentMembership, useMembers } from '@/lib/memberships/use-memberships';
+import { useAssignLead, useLead, useConvertLead, useScoreLead } from '@/lib/leads/use-leads';
 import { useEnrichLead, useAnalyzeLeadPotential } from '@/lib/leads/use-lead-enrichment';
 import { useServiceOfferings } from '@/lib/leads/use-service-offerings';
 import {
@@ -372,6 +372,8 @@ export default function LeadDetailPage() {
   const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
 
   const lead = useLead(organizationId, leadId);
+  const members = useMembers(organizationId);
+  const assignLead = useAssignLead(organizationId, leadId);
   const offerings = useServiceOfferings(organizationId, true);
   const scoreLead = useScoreLead(organizationId, leadId);
   const enrichLead = useEnrichLead(organizationId, leadId);
@@ -472,6 +474,32 @@ export default function LeadDetailPage() {
           <Badge value={data.status} />
           <span className="text-xs text-muted-foreground">{[data.city, data.state].filter(Boolean).join('/') || '—'}</span>
           {data.googleCategory && <span className="text-xs text-muted-foreground">· {data.googleCategory}</span>}
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Atribuído a:</span>
+          {canWrite ? (
+            <Select
+              value={data.assignedUserId ?? ''}
+              disabled={assignLead.isPending}
+              onChange={(e) => {
+                if (e.target.value) assignLead.mutate(e.target.value);
+              }}
+              className="h-7 w-48 text-xs"
+            >
+              <option value="" disabled>
+                Ninguém
+              </option>
+              {members.data?.map((member) => (
+                <option key={member.userId} value={member.userId}>
+                  {member.user.name}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <span className="text-xs text-foreground">
+              {members.data?.find((m) => m.userId === data.assignedUserId)?.user.name ?? 'Ninguém'}
+            </span>
+          )}
         </div>
       </div>
 

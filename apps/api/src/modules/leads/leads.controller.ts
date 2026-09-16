@@ -6,6 +6,7 @@ import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
 import { ConvertLeadDto } from './dto/convert-lead.dto';
+import { AssignLeadDto } from './dto/assign-lead.dto';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
@@ -90,6 +91,18 @@ export class LeadsController {
     @CurrentUser() user: { id: string },
   ): Promise<LeadEnrichment> {
     return this.leadAnalysisService.analyzeLeadPotential(organizationId, leadId, user.id);
+  }
+
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post(':leadId/assign')
+  assign(
+    @Param('organizationId') organizationId: string,
+    @Param('leadId') leadId: string,
+    @CurrentUser() user: { id: string },
+    @Body() dto: AssignLeadDto,
+  ): Promise<Lead> {
+    return this.leadsService.assign(organizationId, leadId, dto.userId, user.id);
   }
 
   @Roles(...WRITE_ROLES)

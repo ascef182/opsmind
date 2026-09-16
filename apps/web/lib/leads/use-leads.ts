@@ -63,6 +63,20 @@ export function useScoreLead(organizationId: string, leadId: string) {
   });
 }
 
+// `POST .../leads/:leadId/assign` — reatribuição manual/explícita, sempre
+// vence sobre o round-robin automático da criação (ver LeadsService.assign).
+export function useAssignLead(organizationId: string, leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) =>
+      apiFetch<Lead>(`/organizations/${organizationId}/leads/${leadId}/assign`, {
+        method: 'POST',
+        body: { userId },
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'leads'] }),
+  });
+}
+
 // `POST .../leads/:leadId/convert` — promove o Lead a Customer. Invalida
 // também a lista de customers (efeito colateral real da mutation: um
 // Customer novo passa a existir) além do domínio de leads.

@@ -6,10 +6,18 @@ import type { SocialLinkDto } from './dto/social-link.dto';
 describe('LeadsService', () => {
   let service: LeadsService;
   let prisma: {
-    lead: { create: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
+    lead: {
+      create: jest.Mock;
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+      groupBy: jest.Mock;
+    };
     serviceOffering: { findMany: jest.Mock };
     leadEnrichment: { findFirst: jest.Mock; create: jest.Mock };
     customer: { create: jest.Mock };
+    membership: { findMany: jest.Mock; findFirst: jest.Mock };
   };
   let auditService: { log: jest.Mock };
   let exploriumGateway: { searchBusinesses: jest.Mock; matchBusiness: jest.Mock };
@@ -23,10 +31,12 @@ describe('LeadsService', () => {
         findMany: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
+        groupBy: jest.fn().mockResolvedValue([]),
       },
       serviceOffering: { findMany: jest.fn() },
       leadEnrichment: { findFirst: jest.fn(), create: jest.fn() },
       customer: { create: jest.fn() },
+      membership: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
     };
     auditService = { log: jest.fn() };
     exploriumGateway = { searchBusinesses: jest.fn(), matchBusiness: jest.fn() };
@@ -59,6 +69,22 @@ describe('LeadsService', () => {
         expect.objectContaining({ action: 'lead.created', resource: 'Lead:lead-1' }),
       );
       expect(result).toBe(created);
+    });
+
+    it('atribui o lead recém-criado automaticamente (round-robin) quando há membros elegíveis', async () => {
+      const created = { id: 'lead-1', organizationId: 'org-1', name: 'Padaria Central', status: 'DISCOVERED' };
+      prisma.lead.create.mockResolvedValue(created);
+      prisma.membership.findMany.mockResolvedValue([{ userId: 'user-a' }]);
+      prisma.lead.groupBy.mockResolvedValue([]);
+      prisma.lead.update.mockResolvedValue({ ...created, assignedUserId: 'user-a' });
+
+      const result = await service.create('org-1', { name: 'Padaria Central' }, 'user-1');
+
+      expect(prisma.lead.update).toHaveBeenCalledWith({
+        where: { id: 'lead-1' },
+        data: { assignedUserId: 'user-a' },
+      });
+      expect(result.assignedUserId).toBe('user-a');
     });
 
     it('repassa socialLinks/whatsapp/contactName pro Prisma quando presentes no DTO', async () => {
@@ -584,6 +610,82 @@ describe('LeadsService', () => {
         ConflictException,
       );
       expect(auditService.log).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('autoAssign', () => {
+    it('atribui ao membro (WRITE_ROLES) com menos leads em aberto', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', organizationId: 'org-1', status: 'DISCOVERED' });
+      prisma.membership.findMany.mockResolvedValue([
+        { userId: 'user-a' },
+        { userId: 'user-b' },
+      ]);
+      prisma.lead.groupBy.mockResolvedValue([
+        { assignedUserId: 'user-a', _count: { _all: 5 } },
+        { assignedUserId: 'user-b', _count: { _all: 1 } },
+      ]);
+      prisma.lead.update.mockResolvedValue({ id: 'lead-1', assignedUserId: 'user-b' });
+
+      const result = await service.autoAssign('org-1', 'lead-1');
+
+      expect(prisma.membership.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: 'org-1', role: { in: ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'] } } }),
+      );
+      expect(prisma.lead.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: 'org-1',
+            status: { notIn: ['CONVERTED', 'LOST'] },
+          }),
+        }),
+      );
+      expect(prisma.lead.update).toHaveBeenCalledWith({
+        where: { id: 'lead-1' },
+        data: { assignedUserId: 'user-b' },
+      });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ actorType: 'SYSTEM', action: 'lead.auto_assigned', resource: 'Lead:lead-1' }),
+      );
+      expect(result.assignedUserId).toBe('user-b');
+    });
+
+    it('sem nenhum membro elegível na organização, devolve o lead sem atribuir (nunca lança erro)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', organizationId: 'org-1', status: 'DISCOVERED' });
+      prisma.membership.findMany.mockResolvedValue([]);
+
+      const result = await service.autoAssign('org-1', 'lead-1');
+
+      expect(prisma.lead.update).not.toHaveBeenCalled();
+      expect(result.assignedUserId).toBeUndefined();
+    });
+  });
+
+  describe('assign', () => {
+    it('atribui manualmente a um membro específico da organização e audita como ação humana', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', organizationId: 'org-1' });
+      prisma.membership.findFirst.mockResolvedValue({ id: 'mem-1', userId: 'user-b', organizationId: 'org-1' });
+      prisma.lead.update.mockResolvedValue({ id: 'lead-1', assignedUserId: 'user-b' });
+
+      const result = await service.assign('org-1', 'lead-1', 'user-b', 'user-1');
+
+      expect(prisma.lead.update).toHaveBeenCalledWith({
+        where: { id: 'lead-1' },
+        data: { assignedUserId: 'user-b' },
+      });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ actorType: 'USER', actorId: 'user-1', action: 'lead.assigned', resource: 'Lead:lead-1' }),
+      );
+      expect(result.assignedUserId).toBe('user-b');
+    });
+
+    it('rejeita quando o usuário indicado não é membro desta organização', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', organizationId: 'org-1' });
+      prisma.membership.findFirst.mockResolvedValue(null);
+
+      await expect(service.assign('org-1', 'lead-1', 'user-de-outra-org', 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.lead.update).not.toHaveBeenCalled();
     });
   });
 });

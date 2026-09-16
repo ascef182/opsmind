@@ -268,6 +268,10 @@ export interface Lead {
   scoreBreakdown: LeadScoreBreakdown | null;
   suggestedOfferingId: string | null;
   convertedCustomerId: string | null;
+  // Atribuição de dono (round-robin por carga na criação, reatribuível a
+  // qualquer momento) — `null` só quando a organização não tinha nenhum
+  // membro elegível (WRITE_ROLES) no momento da criação.
+  assignedUserId: string | null;
   discoveredAt: string;
   createdAt: string;
   updatedAt: string;

@@ -229,6 +229,7 @@ model User {
   uploadedDocuments        Document[]
   approvedOutreachMessages OutreachMessage[]        @relation("OutreachApprovedBy")
   dealsOwned               Deal[]                   @relation("DealOwner")
+  assignedLeads            Lead[]                   @relation("LeadAssignee")
 
   @@map("users")
 }
@@ -865,6 +866,12 @@ model Lead {
   scoreBreakdown      Json?            @map("score_breakdown")
   suggestedOfferingId String?          @map("suggested_offering_id")
   convertedCustomerId String?          @map("converted_customer_id")
+  // Atribuição de dono (plano pensando-como-empresa-com-agile-beaver.md,
+  // trilha B — roteamento) — round-robin por carga (`pickRoundRobinAssignee`,
+  // packages/shared-types) na criação do Lead, nunca automático depois: uma
+  // reatribuição manual sempre vence e nunca é sobrescrita por um scan
+  // futuro.
+  assignedUserId      String?          @map("assigned_user_id")
   // Número confirmado como WhatsApp — nem sempre igual a `phone`. Promovido a
   // coluna própria (não fica só dentro de `socialLinks`) porque é o canal de
   // maior prioridade no outreach (Task 10/11) e precisa ser filtrável direto
@@ -893,6 +900,7 @@ model Lead {
   scrapeJob         ScrapeJob?        @relation(fields: [scrapeJobId], references: [id], onDelete: SetNull)
   suggestedOffering ServiceOffering?  @relation("SuggestedOffering", fields: [suggestedOfferingId], references: [id], onDelete: SetNull)
   convertedCustomer Customer?         @relation(fields: [convertedCustomerId], references: [id], onDelete: SetNull)
+  assignedTo        User?             @relation("LeadAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
   enrichments       LeadEnrichment[]
   outreachMessages  OutreachMessage[]
   deals             Deal[]
@@ -903,6 +911,7 @@ model Lead {
   @@index([organizationId, discoveredAt])
   @@index([scrapeJobId])
   @@index([convertedCustomerId])
+  @@index([organizationId, assignedUserId])
   @@map("leads")
 }
 

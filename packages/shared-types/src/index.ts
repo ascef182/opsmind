@@ -5,6 +5,7 @@ export * from './audit.types';
 export * from './automation.types';
 export * from './lead-scraping.types';
 export * from './lead-scoring';
+export * from './lead-routing';
 export * from './market-opportunity.types';
 export * from './outreach-autodraft.types';
 export * from './social-link.types';
