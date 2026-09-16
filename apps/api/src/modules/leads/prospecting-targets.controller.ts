@@ -10,7 +10,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import type { ProspectingTarget } from '@opsmind/database';
+import type { ProspectingTarget, ScrapeJob } from '@opsmind/database';
 import { ProspectingTargetsService } from './prospecting-targets.service';
 import { CreateProspectingTargetDto } from './dto/create-prospecting-target.dto';
 import { UpdateProspectingTargetDto } from './dto/update-prospecting-target.dto';
@@ -64,6 +64,19 @@ export class ProspectingTargetsController {
     @Body() dto: UpdateProspectingTargetDto,
   ): Promise<ProspectingTarget> {
     return this.prospectingTargetsService.update(organizationId, targetId, dto, user.id);
+  }
+
+  // Dispara um ScrapeJob imediato pro alvo, ignorando cooldown — mesmo
+  // padrão de escrita dos demais endpoints do controller.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post(':targetId/scan-now')
+  scanNow(
+    @Param('organizationId') organizationId: string,
+    @Param('targetId') targetId: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<ScrapeJob | null> {
+    return this.prospectingTargetsService.runNow(organizationId, targetId, user.id);
   }
 
   @Roles(...WRITE_ROLES)

@@ -12,6 +12,7 @@ import {
   useCreateProspectingTarget,
   useProspectingTargets,
   useRemoveProspectingTarget,
+  useRunProspectingTargetNow,
   useUpdateProspectingTarget,
 } from '@/lib/leads/use-prospecting-targets';
 import type { ProspectingTarget } from '@/lib/leads/types';
@@ -70,6 +71,7 @@ export default function ProspectingTargetsPage() {
   const createTarget = useCreateProspectingTarget(organizationId);
   const updateTarget = useUpdateProspectingTarget(organizationId);
   const removeTarget = useRemoveProspectingTarget(organizationId);
+  const runNow = useRunProspectingTargetNow(organizationId);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingTarget, setEditingTarget] = useState<ProspectingTarget | null>(null);
@@ -127,6 +129,19 @@ export default function ProspectingTargetsPage() {
       },
     });
   });
+
+  function handleRunNow(target: ProspectingTarget) {
+    runNow.mutate(target.id, {
+      onSuccess: (job) => {
+        toast.success(
+          job
+            ? 'Busca iniciada agora — acompanhe em Leads.'
+            : 'Não foi possível iniciar a busca agora. O sweep diário ainda vai tentar.',
+        );
+      },
+      onError: () => toast.error('Não foi possível iniciar a busca agora.'),
+    });
+  }
 
   function confirmRemove() {
     if (!removingTarget) return;
@@ -256,6 +271,12 @@ export default function ProspectingTargetsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            disabled={runNow.isPending && runNow.variables === target.id}
+                            onSelect={() => handleRunNow(target)}
+                          >
+                            {runNow.isPending && runNow.variables === target.id ? 'Buscando…' : 'Buscar agora'}
+                          </DropdownMenuItem>
                           <DropdownMenuItem onSelect={() => openEditDialog(target)}>Editar</DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem variant="destructive" onSelect={() => setRemovingTarget(target)}>

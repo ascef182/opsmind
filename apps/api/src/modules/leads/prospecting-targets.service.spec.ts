@@ -322,6 +322,64 @@ describe('ProspectingTargetsService', () => {
     });
   });
 
+  describe('runNow', () => {
+    it('dispara um scan imediato pro alvo existente, ignorando cooldown/isActive', async () => {
+      const target = {
+        id: 'target-1',
+        organizationId: 'org-1',
+        city: 'São Paulo',
+        state: 'SP',
+        businessType: 'Barbearias',
+        sourceType: 'APIFY_GOOGLE_MAPS',
+        onlyWithoutWebsite: true,
+        limit: 50,
+        isActive: true,
+      };
+      prisma.prospectingTarget.findFirst.mockResolvedValue(target);
+      const job = { id: 'job-1' };
+      scrapeJobsService.create.mockResolvedValue(job);
+
+      const result = await service.runNow('org-1', 'target-1', 'user-1');
+
+      expect(scrapeJobsService.create).toHaveBeenCalledWith(
+        'org-1',
+        {
+          sourceType: 'APIFY_GOOGLE_MAPS',
+          city: 'São Paulo',
+          state: 'SP',
+          businessType: 'Barbearias',
+          onlyWithoutWebsite: true,
+          limit: 50,
+        },
+        'user-1',
+      );
+      expect(result).toBe(job);
+    });
+
+    it('lança 404 quando o alvo não existe', async () => {
+      prisma.prospectingTarget.findFirst.mockResolvedValue(null);
+
+      await expect(service.runNow('org-1', 'missing', 'user-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('retorna null (não lança) quando o enfileiramento falha', async () => {
+      prisma.prospectingTarget.findFirst.mockResolvedValue({
+        id: 'target-1',
+        organizationId: 'org-1',
+        city: 'São Paulo',
+        state: 'SP',
+        businessType: 'Barbearias',
+        sourceType: 'APIFY_GOOGLE_MAPS',
+        onlyWithoutWebsite: true,
+        limit: 50,
+        isActive: true,
+      });
+      scrapeJobsService.create.mockRejectedValue(new Error('fila indisponível'));
+
+      await expect(service.runNow('org-1', 'target-1', 'user-1')).resolves.toBeNull();
+    });
+  });
+
   describe('remove', () => {
     it('remove e audita', async () => {
       prisma.prospectingTarget.findFirst.mockResolvedValue({ id: 'target-1', organizationId: 'org-1' });

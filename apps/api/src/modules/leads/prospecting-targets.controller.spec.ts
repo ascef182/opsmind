@@ -81,6 +81,23 @@ describe('ProspectingTargetsController', () => {
     expect(service.update).toHaveBeenCalledWith('org-1', 'target-1', dto, 'user-1');
   });
 
+  it('scanNow: repassa organizationId, targetId e userId para o service', async () => {
+    const service = {
+      create: jest.fn(),
+      list: jest.fn(),
+      findByIdOrThrow: jest.fn(),
+      update: jest.fn(),
+      runNow: jest.fn().mockResolvedValue({ id: 'job-1' }),
+      remove: jest.fn(),
+    };
+    const controller = new ProspectingTargetsController(service as never);
+
+    const result = await controller.scanNow('org-1', 'target-1', { id: 'user-1' } as never);
+
+    expect(result).toEqual({ id: 'job-1' });
+    expect(service.runNow).toHaveBeenCalledWith('org-1', 'target-1', 'user-1');
+  });
+
   it('remove: repassa organizationId, targetId e userId para o service', async () => {
     const service = {
       create: jest.fn(),

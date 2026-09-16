@@ -6,6 +6,7 @@ import type {
   CreateProspectingTargetInput,
   ListProspectingTargetsFilter,
   ProspectingTarget,
+  ScrapeJob,
   UpdateProspectingTargetInput,
 } from './types';
 
@@ -48,6 +49,19 @@ export function useUpdateProspectingTarget(organizationId: string) {
       }),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'prospecting-targets'] }),
+  });
+}
+
+// Dispara um scan manual "agora" (ignora cooldown) — endpoint
+// `POST .../prospecting-targets/:id/scan-now`, `ProspectingTargetsService.runNow`.
+// Não invalida a query de targets (nada no alvo muda); quem quiser ver o
+// resultado acompanha em `/leads` (painel de buscas).
+export function useRunProspectingTargetNow(organizationId: string) {
+  return useMutation({
+    mutationFn: (targetId: string) =>
+      apiFetch<ScrapeJob | null>(`/organizations/${organizationId}/prospecting-targets/${targetId}/scan-now`, {
+        method: 'POST',
+      }),
   });
 }
 

@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { ProspectingTarget } from '@opsmind/database';
+import type { ProspectingTarget, ScrapeJob } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScrapeJobsService } from './scrape-jobs.service';
@@ -157,17 +157,30 @@ export class ProspectingTargetsService {
     });
   }
 
+  /**
+   * Dispara um scan manual "agora" pro alvo, ignorando `cooldownDays` (ação
+   * explícita do usuário = mesma confiança que "+ Nova busca" em `/leads`
+   * já tem) — service nunca checou cooldown, só o sweep agendado do worker
+   * checa, então não há nada a "ignorar" de propósito aqui além de não
+   * reimplementar aquela checagem.
+   */
+  async runNow(organizationId: string, id: string, actorUserId: string): Promise<ScrapeJob | null> {
+    const target = await this.findByIdOrThrow(organizationId, id);
+    return this.triggerScan(organizationId, target, actorUserId);
+  }
+
   // Best-effort: um `ScrapeJob` disparado por aqui é um acelerador, não a
   // única forma do alvo ser escaneado — o sweep diário do worker continua
   // como rede de segurança. Por isso uma falha aqui (fila/Redis indisponível)
-  // nunca deve derrubar `create()`/`update()`, só fica registrada no log.
+  // nunca deve derrubar `create()`/`update()`/`runNow()`, só fica registrada
+  // no log e retorna `null`.
   private async triggerScan(
     organizationId: string,
     target: ProspectingTarget,
     actorUserId: string,
-  ): Promise<void> {
+  ): Promise<ScrapeJob | null> {
     try {
-      await this.scrapeJobsService.create(
+      return await this.scrapeJobsService.create(
         organizationId,
         {
           sourceType: target.sourceType,
@@ -183,6 +196,7 @@ export class ProspectingTargetsService {
       this.logger.warn(
         `Falha ao disparar scan imediato pro alvo ${target.id}: ${error instanceof Error ? error.message : String(error)}`,
       );
+      return null;
     }
   }
 
