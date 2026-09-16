@@ -6,6 +6,7 @@ import { OrganizationsModule } from '../organizations/organizations.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { LeadsModule } from '../leads/leads.module';
 import { DealsModule } from '../deals/deals.module';
+import { DashboardModule } from '../dashboard/dashboard.module';
 import { AiService } from './ai.service';
 import { AiController } from './ai.controller';
 import { BudgetService } from './services/budget.service';
@@ -28,6 +29,7 @@ import { CreateDealTool } from './tools/create-deal.tool';
 import { MoveDealStageTool } from './tools/move-deal-stage.tool';
 import { ListDealsTool } from './tools/list-deals.tool';
 import { GenerateDealProposalTool } from './tools/generate-deal-proposal.tool';
+import { GetSalesForecastTool } from './tools/get-sales-forecast.tool';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 
 @Module({
@@ -39,6 +41,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     DocumentsModule,
     LeadsModule,
     DealsModule,
+    DashboardModule,
   ],
   controllers: [AiController],
   providers: [
@@ -62,6 +65,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     MoveDealStageTool,
     ListDealsTool,
     GenerateDealProposalTool,
+    GetSalesForecastTool,
     {
       provide: AI_TOOLS,
       useFactory: (
@@ -80,6 +84,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         moveDealStage: MoveDealStageTool,
         listDeals: ListDealsTool,
         generateDealProposal: GenerateDealProposalTool,
+        getSalesForecast: GetSalesForecastTool,
       ): AiTool[] => [
         getCustomer,
         searchCustomers,
@@ -96,6 +101,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         moveDealStage,
         listDeals,
         generateDealProposal,
+        getSalesForecast,
       ],
       inject: [
         GetCustomerTool,
@@ -113,6 +119,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         MoveDealStageTool,
         ListDealsTool,
         GenerateDealProposalTool,
+        GetSalesForecastTool,
       ],
     },
   ],
