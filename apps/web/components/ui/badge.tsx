@@ -50,6 +50,12 @@ const COLORS: Record<string, string> = {
   CONTRACT_SENT: 'bg-info-500/15 text-info-500',
   WON: 'bg-positive-500/15 text-positive-500',
 
+  // SignatureRequestStatus (packages/database/prisma/schema.prisma) — SENT
+  // já mapeado acima (compartilhado com OutreachStatus).
+  SIGNED: 'bg-positive-500/15 text-positive-500',
+  DECLINED: 'bg-negative-500/15 text-negative-500',
+  CANCELED: 'bg-ink-800 text-ink-300 line-through',
+
   // Role (packages/shared-types — ROLE_HIERARCHY), usado na página de Equipe
   OWNER: 'bg-accent-500/15 text-accent-500',
   ADMIN: 'bg-info-500/15 text-info-500',

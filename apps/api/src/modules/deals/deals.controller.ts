@@ -14,9 +14,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { Deal } from '@opsmind/database';
+import type { Deal, DealSignatureRequest } from '@opsmind/database';
 import { DealsService } from './deals.service';
 import { DealProposalService } from './deal-proposal.service';
+import { DealSignatureService } from './deal-signature.service';
 import { CreateDealDto } from './dto/create-deal.dto';
 import { UpdateDealDto } from './dto/update-deal.dto';
 import { MoveDealStageDto } from './dto/move-deal-stage.dto';
@@ -33,6 +34,7 @@ export class DealsController {
   constructor(
     private readonly dealsService: DealsService,
     private readonly dealProposalService: DealProposalService,
+    private readonly dealSignatureService: DealSignatureService,
   ) {}
 
   @Roles(...WRITE_ROLES)
@@ -101,6 +103,26 @@ export class DealsController {
     const pdf = await this.dealProposalService.downloadPdf(organizationId, dealId);
     res.setHeader('Content-Disposition', `attachment; filename="proposta-${dealId}.pdf"`);
     return new StreamableFile(pdf);
+  }
+
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post(':dealId/request-signature')
+  requestSignature(
+    @Param('organizationId') organizationId: string,
+    @Param('dealId') dealId: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<DealSignatureRequest> {
+    return this.dealSignatureService.requestSignature(organizationId, dealId, user.id);
+  }
+
+  // Sem `@Roles` — leitura, mesmo padrão de `findOne`/`list` acima.
+  @Get(':dealId/signature-requests')
+  listSignatureRequests(
+    @Param('organizationId') organizationId: string,
+    @Param('dealId') dealId: string,
+  ): Promise<DealSignatureRequest[]> {
+    return this.dealSignatureService.list(organizationId, dealId);
   }
 
   @Roles(...WRITE_ROLES)

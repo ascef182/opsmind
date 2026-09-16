@@ -182,28 +182,29 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships         Membership[]
-  invitations         Invitation[]
-  auditLogs           AuditLog[]
-  customers           Customer[]
-  tasks               Task[]
-  activityLogs        ActivityLog[]
-  notifications       Notification[]
-  aiRequests          AIRequest[]
-  automations         Automation[]
-  automationRuns      AutomationRun[]
-  documents           Document[]
-  documentChunks      DocumentChunk[]
-  serviceOfferings    ServiceOffering[]
-  scrapeJobs          ScrapeJob[]
-  leads               Lead[]
-  leadEnrichments     LeadEnrichment[]
-  outreachMessages    OutreachMessage[]
-  prospectingTargets  ProspectingTarget[]
-  redditWatchTopics   RedditWatchTopic[]
-  marketOpportunities MarketOpportunity[]
-  deals               Deal[]
-  meetings            Meeting[]
+  memberships           Membership[]
+  invitations           Invitation[]
+  auditLogs             AuditLog[]
+  customers             Customer[]
+  tasks                 Task[]
+  activityLogs          ActivityLog[]
+  notifications         Notification[]
+  aiRequests            AIRequest[]
+  automations           Automation[]
+  automationRuns        AutomationRun[]
+  documents             Document[]
+  documentChunks        DocumentChunk[]
+  serviceOfferings      ServiceOffering[]
+  scrapeJobs            ScrapeJob[]
+  leads                 Lead[]
+  leadEnrichments       LeadEnrichment[]
+  outreachMessages      OutreachMessage[]
+  prospectingTargets    ProspectingTarget[]
+  redditWatchTopics     RedditWatchTopic[]
+  marketOpportunities   MarketOpportunity[]
+  deals                 Deal[]
+  meetings              Meeting[]
+  dealSignatureRequests DealSignatureRequest[]
 
   @@map("organizations")
 }
@@ -486,17 +487,63 @@ model Deal {
   createdAt           DateTime       @default(now()) @map("created_at")
   updatedAt           DateTime       @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  originLead   Lead?        @relation(fields: [originLeadId], references: [id], onDelete: SetNull)
-  owner        User?        @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  meetings     Meeting[]
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer          Customer               @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  originLead        Lead?                  @relation(fields: [originLeadId], references: [id], onDelete: SetNull)
+  owner             User?                  @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  meetings          Meeting[]
+  signatureRequests DealSignatureRequest[]
 
   @@index([organizationId, stage])
   @@index([organizationId, customerId])
   @@index([organizationId, expectedCloseDate])
   @@index([ownerUserId])
   @@map("deals")
+}
+
+enum SignatureRequestStatus {
+  SENT
+  SIGNED
+  DECLINED
+  CANCELED
+}
+
+// Fechamento via assinatura eletrônica (plano
+// pensando-como-empresa-com-agile-beaver.md, trilha A — Proposta em PDF já
+// existia, isso fecha o loop até o contrato assinado). Um Deal pode ter
+// várias tentativas ao longo do tempo (reenvio após recusa, nova minuta) —
+// nunca atualiza uma linha existente, sempre cria uma nova, mesmo racional
+// de nunca sobrescrever `OutreachMessage`/histórico de tentativas.
+model DealSignatureRequest {
+  id                 String                 @id @default(uuid())
+  organizationId     String                 @map("organization_id")
+  dealId             String                 @map("deal_id")
+  // Único provider suportado por ora (Clicksign, foco PT-BR) — coluna
+  // existe desde já para não forçar uma migration de schema no dia em que
+  // um segundo provider for adicionado (ex.: DocuSign para clientes fora do
+  // Brasil).
+  provider           String                 @default("clicksign")
+  externalEnvelopeId String                 @map("external_envelope_id")
+  externalDocumentId String                 @map("external_document_id")
+  status             SignatureRequestStatus @default(SENT)
+  signerName         String                 @map("signer_name")
+  signerEmail        String                 @map("signer_email")
+  // URL assinada do documento final — só populada quando `status = SIGNED`
+  // (webhook `document_closed`, ver `ClicksignWebhookService`).
+  documentUrl        String?                @map("document_url")
+  signedAt           DateTime?              @map("signed_at")
+  canceledAt         DateTime?              @map("canceled_at")
+  actorType          AuditActorType         @map("actor_type")
+  actorId            String?                @map("actor_id")
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deal         Deal         @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, dealId])
+  @@index([externalEnvelopeId])
+  @@map("deal_signature_requests")
 }
 
 // Agenda/reuniões (plano pensando-como-empresa-com-agile-beaver.md, item

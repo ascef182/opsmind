@@ -85,6 +85,22 @@ export interface MoveDealStageInput {
   lostReason?: string;
 }
 
+export type SignatureRequestStatus = 'SENT' | 'SIGNED' | 'DECLINED' | 'CANCELED';
+
+// Espelha o model DealSignatureRequest de apps/api (@opsmind/database).
+export interface DealSignatureRequest {
+  id: string;
+  dealId: string;
+  provider: string;
+  status: SignatureRequestStatus;
+  signerName: string;
+  signerEmail: string;
+  documentUrl: string | null;
+  signedAt: string | null;
+  canceledAt: string | null;
+  createdAt: string;
+}
+
 export interface ListDealsFilter {
   stage?: DealStage;
   customerId?: string;

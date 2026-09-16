@@ -72,6 +72,24 @@ export const envSchema = z.object({
   // precisa de intervalo configurável próprio.
   MEETING_REMINDER_MINUTES_BEFORE: z.coerce.number().int().positive().default(60),
 
+  // Assinatura eletrônica (plano pensando-como-empresa-com-agile-beaver.md,
+  // trilha de fechamento) — Clicksign (foco PT-BR), único provider por ora.
+  // Opcional pelo mesmo motivo de ANTHROPIC_API_KEY/RESEND_API_KEY: a
+  // feature não existe em toda instância; falha alto e claro só no primeiro
+  // uso real — ver ClicksignSignatureProvider.
+  CLICKSIGN_API_TOKEN: z.string().optional(),
+  // sandbox.clicksign.com para dev/teste (grátis, sandbox.clicksign.com/signup);
+  // app.clicksign.com em produção, com conta paga.
+  CLICKSIGN_BASE_URL: z.string().url().default('https://sandbox.clicksign.com'),
+  // Chave da conta Clicksign (`event.data.account.key` no payload do
+  // webhook) — usada por `ClicksignWebhookService` pra confirmar que um
+  // evento recebido é mesmo desta conta antes de agir, defesa em
+  // profundidade já que a Clicksign não documenta um esquema de assinatura
+  // HMAC pro payload do webhook (verificado nesta sessão). Opcional pelo
+  // mesmo motivo do token acima; sem ela, o endpoint do webhook recusa
+  // processar qualquer evento (fail-closed).
+  CLICKSIGN_ACCOUNT_KEY: z.string().optional(),
+
   // IA (Fase 3) — deliberadamente OPCIONAL, ao contrário de toda outra
   // variável acima: IA é um recurso adicional, não uma dependência do resto
   // da aplicação (Fase 1/2 funcionam inteiramente sem ela). Exigi-la no

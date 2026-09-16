@@ -10,6 +10,8 @@ import {
   useDeal,
   useGenerateDealProposal,
   useMoveDealStage,
+  useRequestSignature,
+  useSignatureRequests,
   useUpdateDeal,
 } from '@/lib/deals/use-deals';
 import {
@@ -44,6 +46,8 @@ export default function DealDetailPage() {
   const moveStage = useMoveDealStage(organizationId, dealId);
   const updateDeal = useUpdateDeal(organizationId, dealId);
   const generateProposal = useGenerateDealProposal(organizationId, dealId);
+  const signatureRequests = useSignatureRequests(organizationId, dealId);
+  const requestSignature = useRequestSignature(organizationId, dealId);
   const meetings = useMeetings(organizationId, dealId);
   const createMeeting = useCreateMeeting(organizationId, dealId);
   const cancelMeeting = useCancelMeeting(organizationId, dealId);
@@ -236,6 +240,65 @@ export default function DealDetailPage() {
               Nenhuma proposta gerada ainda para este negócio.
             </p>
           )}
+        </Card>
+      )}
+
+      {canWrite && (
+        <Card>
+          <div className="flex items-center justify-between">
+            <h2 className="font-medium text-foreground">Assinatura eletrônica</h2>
+            {deal.data.proposalDraft && (
+              <Button
+                size="sm"
+                disabled={requestSignature.isPending}
+                onClick={() => requestSignature.mutate()}
+              >
+                {requestSignature.isPending ? 'Enviando…' : 'Enviar para assinatura'}
+              </Button>
+            )}
+          </div>
+          <FormError
+            message={requestSignature.isError ? (requestSignature.error as ApiError).message : null}
+          />
+          {!deal.data.proposalDraft && (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Gere a proposta acima antes de enviar para assinatura.
+            </p>
+          )}
+          {signatureRequests.isLoading && (
+            <p className="mt-3 text-sm text-muted-foreground">Carregando solicitações…</p>
+          )}
+          {signatureRequests.isSuccess && signatureRequests.data.length === 0 && deal.data.proposalDraft && (
+            <p className="mt-3 text-sm text-muted-foreground">Nenhuma solicitação de assinatura enviada ainda.</p>
+          )}
+          <ul className="mt-3 flex flex-col gap-2">
+            {signatureRequests.data?.map((request) => (
+              <li
+                key={request.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
+              >
+                <div className="flex flex-col">
+                  <span className="text-foreground">{request.signerName}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {request.signerEmail} · enviado em {new Date(request.createdAt).toLocaleString('pt-BR')}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge value={request.status} />
+                  {request.status === 'SIGNED' && request.documentUrl && (
+                    <a
+                      href={request.documentUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-accent-500 hover:underline"
+                    >
+                      Ver documento assinado
+                    </a>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
 

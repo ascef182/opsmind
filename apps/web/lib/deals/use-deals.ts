@@ -4,7 +4,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '../api-client';
 import { getStoredTokens } from '../auth/token-storage';
 import { env } from '../env';
-import type { CreateDealInput, Deal, ListDealsFilter, MoveDealStageInput, UpdateDealInput } from './types';
+import type {
+  CreateDealInput,
+  Deal,
+  DealSignatureRequest,
+  ListDealsFilter,
+  MoveDealStageInput,
+  UpdateDealInput,
+} from './types';
 
 function queryString(filter: ListDealsFilter): string {
   const params = new URLSearchParams();
@@ -108,6 +115,29 @@ export async function downloadDealProposalPdf(organizationId: string, dealId: st
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export function useSignatureRequests(organizationId: string, dealId: string) {
+  return useQuery({
+    queryKey: ['organizations', organizationId, 'deals', dealId, 'signature-requests'],
+    queryFn: () =>
+      apiFetch<DealSignatureRequest[]>(`/organizations/${organizationId}/deals/${dealId}/signature-requests`),
+    enabled: Boolean(organizationId) && Boolean(dealId),
+  });
+}
+
+export function useRequestSignature(organizationId: string, dealId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<DealSignatureRequest>(`/organizations/${organizationId}/deals/${dealId}/request-signature`, {
+        method: 'POST',
+      }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ['organizations', organizationId, 'deals', dealId, 'signature-requests'],
+      }),
+  });
 }
 
 export function useDeleteDeal(organizationId: string) {

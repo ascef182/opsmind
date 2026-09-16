@@ -19,6 +19,8 @@ export type {
   Deal,
   DealStage,
   Meeting,
+  DealSignatureRequest,
+  SignatureRequestStatus,
   AIRequest,
   AIRequestToolCall,
   AIRequestStatus,
