@@ -7,7 +7,8 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useCreateCustomer, useCustomers } from '@/lib/customers/use-customers';
-import type { CustomerStatus } from '@/lib/customers/types';
+import { WRITE_ROLES, type CustomerStatus } from '@/lib/customers/types';
+import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { ApiError } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,6 +29,8 @@ const createCustomerSchema = z.object({
   name: z.string().min(1, 'Informe um nome'),
   company: z.string().optional(),
   email: z.string().email('E-mail inválido').optional().or(z.literal('')),
+  phone: z.string().optional(),
+  tags: z.string().optional(),
 });
 
 type CreateCustomerFormValues = z.infer<typeof createCustomerSchema>;
@@ -41,6 +44,8 @@ const STATUS_OPTIONS: Array<{ value: CustomerStatus | ''; label: string }> = [
 
 export default function CustomersPage() {
   const { organizationId } = useParams<{ organizationId: string }>();
+  const { membership } = useCurrentMembership(organizationId);
+  const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
   const [status, setStatus] = useState<CustomerStatus | ''>('');
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -59,7 +64,15 @@ export default function CustomersPage() {
 
   const onSubmit = handleSubmit((values) => {
     createCustomer.mutate(
-      { name: values.name, company: values.company || undefined, email: values.email || undefined },
+      {
+        name: values.name,
+        company: values.company || undefined,
+        email: values.email || undefined,
+        phone: values.phone || undefined,
+        tags: values.tags
+          ? values.tags.split(',').map((t) => t.trim()).filter(Boolean)
+          : undefined,
+      },
       { onSuccess: () => { reset(); setDialogOpen(false); } },
     );
   });
@@ -68,38 +81,50 @@ export default function CustomersPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold text-foreground">Clientes</h1>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>+ Novo cliente</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Novo cliente</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={onSubmit} className="flex flex-col gap-4">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Nome</label>
-                <Input placeholder="Nome" {...register('name')} />
-                <FormError message={errors.name?.message} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Empresa (opcional)</label>
-                <Input placeholder="Empresa" {...register('company')} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">E-mail (opcional)</label>
-                <Input placeholder="E-mail" {...register('email')} />
-                <FormError message={errors.email?.message} />
-              </div>
-              <FormError message={createCustomer.isError ? (createCustomer.error as ApiError).message : null} />
-              <DialogFooter>
-                <Button type="submit" isLoading={createCustomer.isPending}>
-                  Criar
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+        {canWrite && (
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>+ Novo cliente</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Novo cliente</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={onSubmit} className="flex flex-col gap-4">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Nome</label>
+                  <Input placeholder="Nome" {...register('name')} />
+                  <FormError message={errors.name?.message} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Empresa (opcional)</label>
+                  <Input placeholder="Empresa" {...register('company')} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">E-mail (opcional)</label>
+                  <Input placeholder="E-mail" {...register('email')} />
+                  <FormError message={errors.email?.message} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Telefone (opcional)</label>
+                  <Input placeholder="Telefone" {...register('phone')} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    Tags (opcional, separadas por vírgula)
+                  </label>
+                  <Input placeholder="ex.: vip, indicação" {...register('tags')} />
+                </div>
+                <FormError message={createCustomer.isError ? (createCustomer.error as ApiError).message : null} />
+                <DialogFooter>
+                  <Button type="submit" isLoading={createCustomer.isPending}>
+                    Criar
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

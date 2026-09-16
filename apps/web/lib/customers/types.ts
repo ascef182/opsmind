@@ -1,6 +1,12 @@
 // Espelha os models Customer/ActivityLog de apps/api (@opsmind/database) —
 // sem pacote compartilhado de DTOs de resposta ainda, mantido local ao front
 // (mesma decisão de lib/dashboard/use-dashboard.ts).
+import type { Role } from '@opsmind/shared-types';
+
+// Espelha WRITE_ROLES de apps/api/src/shared/constants/roles.constant.ts —
+// mesma duplicação já feita em lib/deals/types.ts e lib/leads/types.ts.
+export const WRITE_ROLES: Role[] = ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'];
+
 export type CustomerStatus = 'LEAD' | 'ACTIVE' | 'INACTIVE';
 
 export interface Customer {

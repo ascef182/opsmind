@@ -67,6 +67,16 @@ export function useUpdateCustomer(organizationId: string, customerId: string) {
   });
 }
 
+export function useDeleteCustomer(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (customerId: string) =>
+      apiFetch<void>(`/organizations/${organizationId}/customers/${customerId}`, { method: 'DELETE' }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'customers'] }),
+  });
+}
+
 export function useAddNote(organizationId: string, customerId: string) {
   const queryClient = useQueryClient();
   return useMutation({

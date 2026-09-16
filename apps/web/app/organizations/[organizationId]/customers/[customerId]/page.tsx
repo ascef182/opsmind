@@ -1,30 +1,38 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   useAddNote,
   useCustomer,
   useCustomerTimeline,
+  useDeleteCustomer,
   useUpdateCustomer,
 } from '@/lib/customers/use-customers';
-import type { CustomerStatus } from '@/lib/customers/types';
+import { WRITE_ROLES, type CustomerStatus } from '@/lib/customers/types';
+import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useCustomerDeals } from '@/lib/deals/use-deals';
 import { formatCurrency } from '@/lib/deals/types';
+import { ApiError } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
+import { Card, FormError } from '@/components/ui/card';
 
 const STATUS_OPTIONS: CustomerStatus[] = ['LEAD', 'ACTIVE', 'INACTIVE'];
 
 export default function CustomerDetailPage() {
   const { organizationId, customerId } = useParams<{ organizationId: string; customerId: string }>();
+  const router = useRouter();
+  const { membership } = useCurrentMembership(organizationId);
+  const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
   const customer = useCustomer(organizationId, customerId);
   const timeline = useCustomerTimeline(organizationId, customerId);
   const deals = useCustomerDeals(organizationId, customerId);
   const updateCustomer = useUpdateCustomer(organizationId, customerId);
+  const deleteCustomer = useDeleteCustomer(organizationId);
   const addNote = useAddNote(organizationId, customerId);
   const [note, setNote] = useState('');
 
@@ -62,19 +70,95 @@ export default function CustomerDetailPage() {
         </div>
         <div className="flex flex-col items-end gap-2">
           <Badge value={customer.data.status} />
-          <Select
-            value={customer.data.status}
-            onChange={(e) => updateCustomer.mutate({ status: e.target.value as CustomerStatus })}
-            className="w-40"
-          >
-            {STATUS_OPTIONS.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </Select>
+          {canWrite && (
+            <Select
+              value={customer.data.status}
+              onChange={(e) => updateCustomer.mutate({ status: e.target.value as CustomerStatus })}
+              className="w-40"
+            >
+              {STATUS_OPTIONS.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </Select>
+          )}
         </div>
       </Card>
+
+      {canWrite && (
+        <Card>
+          <h2 className="font-medium text-foreground">Editar</h2>
+          <form
+            className="mt-3 grid grid-cols-2 gap-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const form = new FormData(e.currentTarget);
+              const name = String(form.get('name') ?? '');
+              const company = String(form.get('company') ?? '');
+              const email = String(form.get('email') ?? '');
+              const phone = String(form.get('phone') ?? '');
+              const tags = String(form.get('tags') ?? '');
+              updateCustomer.mutate({
+                name: name || undefined,
+                company: company || undefined,
+                email: email || undefined,
+                phone: phone || undefined,
+                tags: tags
+                  ? tags.split(',').map((t) => t.trim()).filter(Boolean)
+                  : undefined,
+              });
+            }}
+          >
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Nome</label>
+              <Input name="name" defaultValue={customer.data.name} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Empresa</label>
+              <Input name="company" defaultValue={customer.data.company ?? ''} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">E-mail</label>
+              <Input name="email" type="email" defaultValue={customer.data.email ?? ''} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Telefone</label>
+              <Input name="phone" defaultValue={customer.data.phone ?? ''} />
+            </div>
+            <div className="col-span-2">
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                Tags (separadas por vírgula)
+              </label>
+              <Input name="tags" defaultValue={customer.data.tags.join(', ')} />
+            </div>
+            <FormError
+              message={updateCustomer.isError ? (updateCustomer.error as ApiError).message : null}
+            />
+            <div className="col-span-2 flex items-center justify-between">
+              <Button
+                type="button"
+                variant="ghost"
+                className="text-negative-500 hover:bg-negative-500/10"
+                disabled={deleteCustomer.isPending}
+                onClick={() => {
+                  if (!window.confirm(`Excluir o cliente "${customer.data.name}"? Esta ação não pode ser desfeita.`)) {
+                    return;
+                  }
+                  deleteCustomer.mutate(customerId, {
+                    onSuccess: () => router.push(`/organizations/${organizationId}/customers`),
+                  });
+                }}
+              >
+                {deleteCustomer.isPending ? 'Excluindo…' : 'Excluir cliente'}
+              </Button>
+              <Button type="submit" disabled={updateCustomer.isPending}>
+                {updateCustomer.isPending ? 'Salvando…' : 'Salvar'}
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
 
       <Card>
         <div className="flex items-center justify-between">
