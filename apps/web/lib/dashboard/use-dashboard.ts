@@ -152,3 +152,34 @@ export function useDealPipelineOverview(organizationId: string) {
     enabled: Boolean(organizationId),
   });
 }
+
+// Espelha `SalesForecast` de
+// apps/api/src/modules/dashboard/dashboard.service.ts (Trilha C,
+// forecasting) — mesma decisão de tipos duplicados ao front.
+export interface ForecastMonthBucket {
+  month: string;
+  openValue: number;
+  weightedValue: number;
+  dealCount: number;
+}
+
+export interface WonRevenueMonthPoint {
+  month: string;
+  wonValue: number;
+  wonCount: number;
+}
+
+export interface SalesForecast {
+  weightedPipelineValue: number;
+  unscheduledValue: number;
+  forecastByMonth: ForecastMonthBucket[];
+  wonRevenueByMonth: WonRevenueMonthPoint[];
+}
+
+export function useSalesForecast(organizationId: string) {
+  return useQuery({
+    queryKey: ['organizations', organizationId, 'dashboard', 'forecast'],
+    queryFn: () => apiFetch<SalesForecast>(`/organizations/${organizationId}/dashboard/forecast`),
+    enabled: Boolean(organizationId),
+  });
+}

@@ -44,6 +44,22 @@ const DEALS_CLOSING_SOON_WINDOW_DAYS = 30;
 const DEALS_CLOSING_SOON_LIMIT = 10;
 const RECENTLY_WON_DEALS_LIMIT = 5;
 
+// Probabilidade de fechamento por estágio (Trilha C, forecasting) — chute
+// informado, não calibrado por dados históricos ainda (não há volume
+// suficiente de deals fechados na base pra regressão). Única fonte de
+// verdade: usada tanto no cálculo do pipeline ponderado abaixo quanto pela
+// AI tool `get_sales_forecast` (`apps/api/src/modules/ai/tools`), que
+// importa esta mesma constante — nunca duplicar o mapa em SQL bruto.
+export const DEAL_STAGE_PROBABILITY: Record<DealStage, number> = {
+  QUALIFICATION: 0.1,
+  PROPOSAL: 0.3,
+  NEGOTIATION: 0.6,
+  CONTRACT_SENT: 0.85,
+  WON: 1,
+  LOST: 0,
+};
+const WON_REVENUE_TREND_MONTHS = 6;
+
 export interface LeadsByCityBucket {
   city: string | null;
   state: string | null;
@@ -108,6 +124,33 @@ interface AvgSalesCycleRow {
   avgDays: number | null;
 }
 
+export interface ForecastMonthBucket {
+  month: string; // 'YYYY-MM', mês de `expectedCloseDate`
+  openValue: number;
+  weightedValue: number;
+  dealCount: number;
+}
+
+export interface WonRevenueMonthPoint {
+  month: string; // 'YYYY-MM', mês de `actualCloseDate`
+  wonValue: number;
+  wonCount: number;
+}
+
+export interface SalesForecast {
+  // Soma de `value * DEAL_STAGE_PROBABILITY[stage]` de todo deal aberto
+  // (WON/LOST fora) — a "previsão realista" de receita, em vez do valor
+  // bruto do pipeline (que superestima: nem toda negociação em QUALIFICATION
+  // fecha).
+  weightedPipelineValue: number;
+  // Valor bruto dos deals abertos sem `expectedCloseDate` — não entra em
+  // `forecastByMonth` (não tem em qual mês bucketizar), mas precisa aparecer
+  // em algum lugar pra não sumir silenciosamente do pipeline ponderado.
+  unscheduledValue: number;
+  forecastByMonth: ForecastMonthBucket[];
+  wonRevenueByMonth: WonRevenueMonthPoint[];
+}
+
 interface LeadsByCityRow {
   city: string | null;
   state: string | null;
@@ -131,6 +174,22 @@ export interface DashboardOverview {
     byStatus: Record<TaskStatus, number>;
   };
   recentActivity: ActivityLog[];
+}
+
+function monthKey(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+// Meses `count` a partir de `from`, incluindo-o, mais antigo primeiro —
+// usado pra pré-preencher `wonRevenueByMonth` com zero (mesmo racional de
+// `toCountMap`: um mês sem nenhum deal ganho não pode simplesmente sumir do
+// array e quebrar a série temporal no gráfico do front).
+function trailingMonthKeys(count: number, from: Date): string[] {
+  const keys: string[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    keys.push(monthKey(new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() - i, 1))));
+  }
+  return keys;
 }
 
 function toCountMap<T extends string>(
@@ -368,6 +427,79 @@ export class DashboardService {
       dealsClosingSoon,
       signatureFunnel,
       recentlyWonDeals,
+    };
+  }
+
+  /**
+   * Trilha C (forecasting, plano pensando-como-empresa-com-agile-beaver.md):
+   * pipeline ponderado por probabilidade de estágio + tendência histórica de
+   * receita fechada. Aditivo, rota própria (`GET .../dashboard/forecast`).
+   *
+   * Busca os deals abertos/ganhos inteiros (não agregados no banco) porque a
+   * ponderação por `DEAL_STAGE_PROBABILITY` e o bucket por mês truncado
+   * precisam rodar em cima da mesma constante TS usada pela AI tool — duas
+   * fontes de verdade (SQL bruto + TS) divergiriam com o tempo. Volume por
+   * organização (deals abertos + ganhos em 6 meses) é pequeno o bastante pra
+   * não justificar agregação no Postgres.
+   */
+  async getSalesForecast(organizationId: string): Promise<SalesForecast> {
+    const wonRevenueWindowStart = new Date();
+    wonRevenueWindowStart.setUTCMonth(wonRevenueWindowStart.getUTCMonth() - (WON_REVENUE_TREND_MONTHS - 1));
+    wonRevenueWindowStart.setUTCDate(1);
+    wonRevenueWindowStart.setUTCHours(0, 0, 0, 0);
+
+    const [openDeals, wonDeals] = await Promise.all([
+      this.prisma.deal.findMany({
+        where: { organizationId, deletedAt: null, stage: { notIn: CLOSED_DEAL_STAGES } },
+        select: { stage: true, value: true, expectedCloseDate: true },
+      }),
+      this.prisma.deal.findMany({
+        where: { organizationId, deletedAt: null, stage: 'WON', actualCloseDate: { gte: wonRevenueWindowStart } },
+        select: { value: true, actualCloseDate: true },
+      }),
+    ]);
+
+    let weightedPipelineValue = 0;
+    let unscheduledValue = 0;
+    const monthBuckets = new Map<string, ForecastMonthBucket>();
+    for (const deal of openDeals) {
+      const value = Number(deal.value);
+      const weightedValue = value * DEAL_STAGE_PROBABILITY[deal.stage];
+      weightedPipelineValue += weightedValue;
+
+      if (deal.expectedCloseDate === null) {
+        unscheduledValue += value;
+        continue;
+      }
+      const key = monthKey(deal.expectedCloseDate);
+      const bucket = monthBuckets.get(key) ?? { month: key, openValue: 0, weightedValue: 0, dealCount: 0 };
+      bucket.openValue += value;
+      bucket.weightedValue += weightedValue;
+      bucket.dealCount += 1;
+      monthBuckets.set(key, bucket);
+    }
+    const forecastByMonth = [...monthBuckets.values()].sort((a, b) => a.month.localeCompare(b.month));
+
+    const wonRevenueMap = new Map<string, WonRevenueMonthPoint>(
+      trailingMonthKeys(WON_REVENUE_TREND_MONTHS, new Date()).map((month) => [
+        month,
+        { month, wonValue: 0, wonCount: 0 },
+      ]),
+    );
+    for (const deal of wonDeals) {
+      if (deal.actualCloseDate === null) continue;
+      const key = monthKey(deal.actualCloseDate);
+      const point = wonRevenueMap.get(key);
+      if (!point) continue; // fora da janela de 6 meses por algum motivo de fuso — ignora, não quebra a série
+      point.wonValue += Number(deal.value);
+      point.wonCount += 1;
+    }
+
+    return {
+      weightedPipelineValue,
+      unscheduledValue,
+      forecastByMonth,
+      wonRevenueByMonth: [...wonRevenueMap.values()],
     };
   }
 }

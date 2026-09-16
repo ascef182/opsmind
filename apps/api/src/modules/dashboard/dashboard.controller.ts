@@ -4,6 +4,7 @@ import {
   type DashboardOverview,
   type DealPipelineOverview,
   type LeadPipelineOverview,
+  type SalesForecast,
 } from './dashboard.service';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 
@@ -28,5 +29,11 @@ export class DashboardController {
   @Get('deals')
   dealPipelineOverview(@Param('organizationId') organizationId: string): Promise<DealPipelineOverview> {
     return this.dashboardService.getDealPipelineOverview(organizationId);
+  }
+
+  // Leitura, sem `@Roles(...WRITE_ROLES)` — mesmo padrão das rotas acima.
+  @Get('forecast')
+  salesForecast(@Param('organizationId') organizationId: string): Promise<SalesForecast> {
+    return this.dashboardService.getSalesForecast(organizationId);
   }
 }

@@ -7,10 +7,12 @@ import {
   useDashboard,
   useDealPipelineOverview,
   useLeadPipelineOverview,
+  useSalesForecast,
   type DealPipelineOverview,
   type LeadPipelineOverview,
   type LeadsByDayPoint,
   type LeadStatus,
+  type SalesForecast,
 } from '@/lib/dashboard/use-dashboard';
 import { useAiUsage } from '@/lib/ai/use-ai-chat';
 import { DEAL_STAGES, DEAL_STAGE_LABELS, formatCurrency } from '@/lib/deals/types';
@@ -468,6 +470,63 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
   );
 }
 
+function formatMonthLabel(month: string): string {
+  const [yearPart, monthPart] = month.split('-');
+  const year = Number(yearPart);
+  const monthIndex = Number(monthPart) - 1;
+  return new Date(Date.UTC(year, monthIndex, 1)).toLocaleDateString('pt-BR', {
+    month: 'short',
+    year: '2-digit',
+    timeZone: 'UTC',
+  });
+}
+
+// Trilha C (forecasting, plano pensando-como-empresa-com-agile-beaver.md) —
+// pipeline ponderado por probabilidade de estágio (`DEAL_STAGE_PROBABILITY`
+// no backend) + tendência de receita fechada. Seção própria, mesma
+// disciplina aditiva de `DealPipelineSection`.
+function SalesForecastSection({ data }: { data: SalesForecast }) {
+  const forecastChartData = data.forecastByMonth.map((bucket) => ({
+    month: formatMonthLabel(bucket.month),
+    weightedValue: Math.round(bucket.weightedValue),
+  }));
+  const revenueChartData = data.wonRevenueByMonth.map((point) => ({
+    month: formatMonthLabel(point.month),
+    wonValue: Math.round(point.wonValue),
+  }));
+
+  return (
+    <section className="flex flex-col gap-6 border-t border-border pt-8">
+      <h2 className="text-sm font-medium text-muted-foreground">Previsão de fechamento</h2>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <StatCardDark
+          label="Pipeline ponderado"
+          value={formatCurrency(data.weightedPipelineValue)}
+          hint="valor em aberto ajustado pela probabilidade de cada estágio"
+        />
+        <StatCardDark
+          label="Sem previsão de fechamento"
+          value={formatCurrency(data.unscheduledValue)}
+          hint="negócios abertos sem data esperada"
+        />
+      </div>
+
+      <DarkCard title="Previsão por mês (valor ponderado)">
+        {forecastChartData.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nenhum negócio aberto com data de fechamento esperada.</p>
+        ) : (
+          <BarChartHighlighted data={forecastChartData} dataKey="weightedValue" nameKey="month" />
+        )}
+      </DarkCard>
+
+      <DarkCard title="Receita fechada (últimos 6 meses)">
+        <LineChartWithTooltip data={revenueChartData} dataKey="wonValue" xKey="month" highlightLast />
+      </DarkCard>
+    </section>
+  );
+}
+
 function StatCardDark({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -483,6 +542,7 @@ export default function OrganizationDashboardPage() {
   const dashboard = useDashboard(organizationId);
   const leadPipeline = useLeadPipelineOverview(organizationId);
   const dealPipeline = useDealPipelineOverview(organizationId);
+  const salesForecast = useSalesForecast(organizationId);
 
   return (
     <div className="flex flex-col gap-8">
@@ -502,6 +562,12 @@ export default function OrganizationDashboardPage() {
           <p className="text-negative-500">Não foi possível carregar o pipeline de negociação desta organização.</p>
         )}
         {dealPipeline.isSuccess && <DealPipelineSection data={dealPipeline.data} organizationId={organizationId} />}
+
+        {salesForecast.isLoading && <p className="text-muted-foreground">Carregando previsão de fechamento…</p>}
+        {salesForecast.isError && (
+          <p className="text-negative-500">Não foi possível carregar a previsão de fechamento desta organização.</p>
+        )}
+        {salesForecast.isSuccess && <SalesForecastSection data={salesForecast.data} />}
 
         <section className="flex flex-col gap-6 border-t border-border pt-8">
           <h2 className="text-sm font-medium text-muted-foreground">Clientes e tarefas</h2>
