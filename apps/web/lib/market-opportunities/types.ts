@@ -50,12 +50,20 @@ export interface UpdateMarketOpportunityStatusInput {
 // menções novas no Reddit sobre `query`/`subreddit` e alimentar o
 // clustering — mesmo papel de `ProspectingTarget` só que pro pipeline de
 // Reddit em vez de scraping de negócio local.
+export type RedditWatchTopicScanStatus = 'OK' | 'ERROR' | 'SKIPPED_BUDGET';
+
 export interface RedditWatchTopic {
   id: string;
   organizationId: string;
   query: string;
   subreddit: string | null;
   isActive: boolean;
+  // Histórico da última tentativa de scan — ver
+  // `apps/worker/src/reddit-mining-scan.ts`. `null` quando o sweep ainda
+  // não tentou (ex.: tópico criado agora mesmo).
+  lastScannedAt: string | null;
+  lastScanStatus: RedditWatchTopicScanStatus | null;
+  lastScanError: string | null;
   createdAt: string;
   updatedAt: string;
 }

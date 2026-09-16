@@ -1055,6 +1055,17 @@ model RedditWatchTopic {
   query          String
   subreddit      String?
   isActive       Boolean  @default(true) @map("is_active")
+  // Histórico da última tentativa de scan (`scanRedditMiningTopics`,
+  // apps/worker/src/reddit-mining-scan.ts) — sem isso o monitoramento parecia
+  // "não funcionar" silenciosamente sempre que o Camofox estivesse
+  // indisponível/mal configurado ou o orçamento de scraping estourado: nada
+  // no banco/UI distinguia "nunca rodou", "rodou e não achou nada" e "rodou
+  // e falhou". `lastScanStatus` é 'OK' | 'ERROR' | 'SKIPPED_BUDGET' (não é
+  // enum Prisma — mesmo padrão de texto livre curto que outros status
+  // "internos" deste schema, evita migration extra pra adicionar um valor).
+  lastScannedAt  DateTime? @map("last_scanned_at")
+  lastScanStatus String?  @map("last_scan_status")
+  lastScanError  String?  @map("last_scan_error")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 

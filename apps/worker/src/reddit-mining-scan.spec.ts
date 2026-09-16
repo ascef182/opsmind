@@ -14,7 +14,7 @@ describe('scanRedditMiningTopics', () => {
 
   function buildPrisma() {
     return {
-      redditWatchTopic: { findMany: jest.fn() },
+      redditWatchTopic: { findMany: jest.fn(), update: jest.fn().mockResolvedValue(undefined) },
     };
   }
 
@@ -213,6 +213,81 @@ describe('scanRedditMiningTopics', () => {
 
     expect(enqueue).not.toHaveBeenCalled();
     expect(count).toBe(0);
+  });
+
+  describe('histórico de scan (lastScannedAt/lastScanStatus/lastScanError)', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-16T15:00:00Z'));
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('grava status OK após um scan bem-sucedido com resultado', async () => {
+      const prisma = buildPrisma();
+      const camofox = buildCamofox();
+      prisma.redditWatchTopic.findMany.mockResolvedValue([buildTopic()]);
+      camofox.search.mockResolvedValue([
+        { title: 'Post', url: 'https://reddit.com/r/x/1', textContent: null, raw: {} },
+      ]);
+
+      await scanRedditMiningTopics(prisma as never, camofox as never, buildRedis() as never, jest.fn());
+
+      expect(prisma.redditWatchTopic.update).toHaveBeenCalledWith({
+        where: { id: 'topic-1' },
+        data: { lastScannedAt: new Date('2026-09-16T15:00:00Z'), lastScanStatus: 'OK', lastScanError: null },
+      });
+    });
+
+    it('grava status OK quando a busca volta vazia (não é erro)', async () => {
+      const prisma = buildPrisma();
+      const camofox = buildCamofox();
+      prisma.redditWatchTopic.findMany.mockResolvedValue([buildTopic()]);
+      camofox.search.mockResolvedValue([]);
+
+      await scanRedditMiningTopics(prisma as never, camofox as never, buildRedis() as never, jest.fn());
+
+      expect(prisma.redditWatchTopic.update).toHaveBeenCalledWith({
+        where: { id: 'topic-1' },
+        data: { lastScannedAt: new Date('2026-09-16T15:00:00Z'), lastScanStatus: 'OK', lastScanError: null },
+      });
+    });
+
+    it('grava status ERROR com a mensagem quando o Camoufox falha', async () => {
+      const prisma = buildPrisma();
+      const camofox = buildCamofox();
+      prisma.redditWatchTopic.findMany.mockResolvedValue([buildTopic()]);
+      camofox.search.mockRejectedValue(new Error('camofox indisponível'));
+
+      await scanRedditMiningTopics(prisma as never, camofox as never, buildRedis() as never, jest.fn());
+
+      expect(prisma.redditWatchTopic.update).toHaveBeenCalledWith({
+        where: { id: 'topic-1' },
+        data: {
+          lastScannedAt: new Date('2026-09-16T15:00:00Z'),
+          lastScanStatus: 'ERROR',
+          lastScanError: 'camofox indisponível',
+        },
+      });
+    });
+
+    it('grava status SKIPPED_BUDGET quando o orçamento estourado pula o tópico', async () => {
+      const prisma = buildPrisma();
+      const camofox = buildCamofox();
+      prisma.redditWatchTopic.findMany.mockResolvedValue([
+        buildTopic({ organization: { scrapingMonthlyBudget: 10 } }),
+      ]);
+      const redis = buildRedis('12');
+
+      await scanRedditMiningTopics(prisma as never, camofox as never, redis as never, jest.fn());
+
+      expect(prisma.redditWatchTopic.update).toHaveBeenCalledWith({
+        where: { id: 'topic-1' },
+        data: { lastScannedAt: new Date('2026-09-16T15:00:00Z'), lastScanStatus: 'SKIPPED_BUDGET', lastScanError: null },
+      });
+    });
   });
 
   it('nunca considera RedditWatchTopics com isActive: false (filtrado na própria query)', async () => {

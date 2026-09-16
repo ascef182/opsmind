@@ -10,7 +10,12 @@ import {
   useRedditWatchTopics,
   useUpdateRedditWatchTopic,
 } from '@/lib/market-opportunities/use-reddit-watch-topics';
-import { WRITE_ROLES, type MarketOpportunity, type MarketOpportunityStatus } from '@/lib/market-opportunities/types';
+import {
+  WRITE_ROLES,
+  type MarketOpportunity,
+  type MarketOpportunityStatus,
+  type RedditWatchTopic,
+} from '@/lib/market-opportunities/types';
 import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -154,6 +159,22 @@ function OpportunityCard({
   );
 }
 
+// Sem isso, o monitoramento "não funcionar" (Camoufox mal configurado,
+// orçamento estourado) era invisível — nada na UI distinguia "nunca rodou"
+// de "rodou e falhou" (ver `lastScannedAt`/`lastScanStatus`/`lastScanError`,
+// gravados por `apps/worker/src/reddit-mining-scan.ts`).
+function scanStatusLabel(topic: RedditWatchTopic): string {
+  if (!topic.lastScannedAt) return 'Ainda não verificado — aguardando o próximo scan.';
+  const when = new Date(topic.lastScannedAt).toLocaleString('pt-BR');
+  if (topic.lastScanStatus === 'ERROR') {
+    return `Última verificação: ${when} — falhou${topic.lastScanError ? `: ${topic.lastScanError}` : ''}.`;
+  }
+  if (topic.lastScanStatus === 'SKIPPED_BUDGET') {
+    return `Última verificação: ${when} — pulada (orçamento de scraping excedido).`;
+  }
+  return `Última verificação: ${when} — ok.`;
+}
+
 // Painel colapsável de gestão de RedditWatchTopic — mesmo padrão de
 // expand/collapse de `ScrapeJobsPanel` (leads/page.tsx), mas essa entidade é
 // pequena o bastante pra caber list+criar+ativar/desativar aqui mesmo, sem
@@ -238,6 +259,11 @@ function RedditWatchTopicsPanel({ organizationId, canWrite }: { organizationId: 
                   </span>
                   <span className="text-xs text-muted-foreground">
                     Criado em {new Date(topic.createdAt).toLocaleString('pt-BR')}
+                  </span>
+                  <span
+                    className={`text-xs ${topic.lastScanStatus === 'ERROR' ? 'text-negative-500' : 'text-muted-foreground'}`}
+                  >
+                    {scanStatusLabel(topic)}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">

@@ -22,6 +22,32 @@ const REDDIT_MINING_SEARCH_LIMIT = 25;
  */
 const CAMOFOX_SEARCH_COST_USD = 0.001;
 
+type RedditScanStatus = 'OK' | 'ERROR' | 'SKIPPED_BUDGET';
+
+/**
+ * Registra o resultado da tentativa (sucesso, erro, ou pulado por
+ * orçamento) em `RedditWatchTopic.lastScannedAt/lastScanStatus/lastScanError`
+ * — sem isso o monitoramento "não funcionar" (Camoufox mal configurado,
+ * orçamento estourado) era invisível: nada no banco/UI distinguia "nunca
+ * rodou" de "rodou e falhou". Best-effort: uma falha ao GRAVAR o status não
+ * pode derrubar o resto do scan dos outros tópicos.
+ */
+async function recordScanAttempt(
+  prisma: PrismaClient,
+  topicId: string,
+  status: RedditScanStatus,
+  errorMessage: string | null,
+): Promise<void> {
+  try {
+    await prisma.redditWatchTopic.update({
+      where: { id: topicId },
+      data: { lastScannedAt: new Date(), lastScanStatus: status, lastScanError: errorMessage },
+    });
+  } catch (error) {
+    Sentry.captureException(error, { extra: { redditWatchTopicId: topicId, context: 'recordScanAttempt' } });
+  }
+}
+
 /**
  * Trigger (Task 13, mineração de oportunidades de mercado no Reddit) — roda
  * periodicamente (ver main.ts), espelhando `scanProspectingTargets`
@@ -75,6 +101,7 @@ export async function scanRedditMiningTopics(
           ? Number(topic.organization.scrapingMonthlyBudget)
           : null;
       if (await isOverBudget(redis, topic.organizationId, monthlyBudget)) {
+        await recordScanAttempt(prisma, topic.id, 'SKIPPED_BUDGET', null);
         continue;
       }
 
@@ -107,6 +134,7 @@ export async function scanRedditMiningTopics(
         console.debug(
           `[reddit-mining-scan] busca sem resultados utilizáveis para o tópico ${topic.id} (org ${topic.organizationId}) — pulando.`,
         );
+        await recordScanAttempt(prisma, topic.id, 'OK', null);
         continue;
       }
 
@@ -121,6 +149,7 @@ export async function scanRedditMiningTopics(
         })),
       });
 
+      await recordScanAttempt(prisma, topic.id, 'OK', null);
       enqueuedCount += 1;
     } catch (error) {
       Sentry.captureException(error, {
@@ -131,6 +160,7 @@ export async function scanRedditMiningTopics(
         `[reddit-mining-scan] falha ao buscar/enfileirar posts candidatos do tópico ${topic.id} (org ${topic.organizationId}):`,
         error,
       );
+      await recordScanAttempt(prisma, topic.id, 'ERROR', error instanceof Error ? error.message : String(error));
     }
   }
 
