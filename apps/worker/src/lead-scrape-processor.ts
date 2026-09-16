@@ -4,6 +4,8 @@ import {
   scoreLead,
   isSafeHttpUrl,
   QUALIFICATION_THRESHOLD,
+  ROLE_HIERARCHY,
+  pickRoundRobinAssignee,
   type LeadScoringInput,
   type ServiceOfferingIcp,
   type SocialLink,
@@ -23,6 +25,13 @@ import type Redis from 'ioredis';
 import * as Sentry from '@sentry/node';
 import { withTenantContext } from './tenant-context';
 import { isOverBudget, recordSpend } from './budget';
+
+// Duplicada de apps/api/src/shared/constants/roles.constant.ts de propósito
+// (worker não pode importar de apps/api) — mesma regra: todo papel exceto
+// VIEWER pode ser dono de um lead. Derivada de `ROLE_HIERARCHY`
+// (@opsmind/shared-types), não hardcoded, pra nunca divergir da ordem
+// canônica de papéis.
+const WRITE_ROLES = ROLE_HIERARCHY.filter((role) => role !== 'VIEWER');
 
 export interface LeadScrapeGateways {
   apify: ApifyGateway;
@@ -1220,10 +1229,55 @@ export async function processLeadScrapeJob(
         });
         const offeringsIcp = offerings.map(toOfferingIcp);
 
+        // Roteamento (Trilha B, plano pensando-como-empresa-com-agile-beaver.md)
+        // — mesmo racional de round-robin por carga de `LeadsService.autoAssign`
+        // (apps/api), resolvido aqui manualmente porque o worker não pode
+        // importar de apps/api. Candidatos + contagem inicial buscados UMA VEZ
+        // por job (não por lead) — a contagem é incrementada em memória
+        // conforme cada lead do PRÓPRIO lote é atribuído, pra distribuir de
+        // verdade dentro de um lote grande sem martelar o banco a cada
+        // iteração nem sempre cair no mesmo membro por empate persistente.
+        const eligibleMembers = await tx.membership.findMany({
+          where: { organizationId: data.organizationId, role: { in: [...WRITE_ROLES] } },
+          orderBy: { createdAt: 'asc' },
+          select: { userId: true },
+        });
+        const openLeadCounts = new Map<string, number>();
+        if (eligibleMembers.length > 0) {
+          const counts = await tx.lead.groupBy({
+            by: ['assignedUserId'],
+            where: {
+              organizationId: data.organizationId,
+              assignedUserId: { in: eligibleMembers.map((m) => m.userId) },
+              status: { notIn: ['CONVERTED', 'LOST'] },
+            },
+            _count: { _all: true },
+          });
+          for (const row of counts as Array<{ assignedUserId: string | null; _count: { _all: number } }>) {
+            if (row.assignedUserId) {
+              openLeadCounts.set(row.assignedUserId, row._count._all);
+            }
+          }
+        }
+
         let count = 0;
         const autodraftJobs: OutreachAutodraftJobData[] = [];
         for (const { candidate, firmographics, enrichmentRaw, contactEnrichment } of enriched) {
-          const lead = await upsertLead(tx, data, scrapeJob.sourceType, candidate, firmographics, offeringsIcp);
+          let lead = await upsertLead(tx, data, scrapeJob.sourceType, candidate, firmographics, offeringsIcp);
+
+          // Só atribui quem ainda não tem dono — nunca sobrescreve uma
+          // atribuição já existente (manual ou de uma passada anterior),
+          // mesma regra de `LeadsService.autoAssign`.
+          if (!lead.assignedUserId && eligibleMembers.length > 0) {
+            const assigneeId = pickRoundRobinAssignee(
+              eligibleMembers.map((m) => ({ userId: m.userId, openLeadCount: openLeadCounts.get(m.userId) ?? 0 })),
+            );
+            if (assigneeId) {
+              lead = await tx.lead.update({ where: { id: lead.id }, data: { assignedUserId: assigneeId } });
+              openLeadCounts.set(assigneeId, (openLeadCounts.get(assigneeId) ?? 0) + 1);
+            }
+          }
+
           if (enrichmentRaw) {
             await tx.leadEnrichment.create({
               data: {

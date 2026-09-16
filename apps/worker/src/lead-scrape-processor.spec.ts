@@ -85,7 +85,12 @@ describe('processLeadScrapeJob', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
         update: jest.fn(),
+        groupBy: jest.fn().mockResolvedValue([]),
       },
+      // Roteamento (Trilha B) — default "nenhum membro elegível", testes que
+      // não são sobre atribuição não precisam mockar isto (auto-assign
+      // simplesmente não faz nada quando a lista vem vazia).
+      membership: { findMany: jest.fn().mockResolvedValue([]) },
       leadEnrichment: { create: jest.fn() },
       // Usado só pelo gatilho automático de outreach (B4/Task 11, ver
       // `resolveAutodraftChannel`/trecho no meio do loop do Passo 3) — default
@@ -1128,6 +1133,137 @@ describe('processLeadScrapeJob', () => {
       expect(tx.lead.upsert).toHaveBeenCalledTimes(11); // todos os 11 leads são persistidos normalmente
       expect(enqueueAutodraft).toHaveBeenCalledTimes(10); // só os 10 primeiros geram rascunho automático
       expect(result.status).toBe('COMPLETED');
+    });
+  });
+
+  describe('roteamento automático (round-robin, Trilha B)', () => {
+    function apifyBusiness(overrides: { name: string; placeId: string }) {
+      return {
+        name: overrides.name,
+        address: null,
+        city: 'Campinas',
+        state: 'SP',
+        phone: null,
+        website: null,
+        googleCategory: 'Padaria',
+        rating: 4.5,
+        reviewCount: 20,
+        placeId: overrides.placeId,
+        raw: {},
+      };
+    }
+
+    it('atribui o lead recém-criado ao membro com menos leads em aberto', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', assignedUserId: null, ...args.create }),
+      );
+      tx.membership.findMany.mockResolvedValue([{ userId: 'user-a' }, { userId: 'user-b' }]);
+      tx.lead.groupBy.mockResolvedValue([
+        { assignedUserId: 'user-a', _count: { _all: 5 } },
+        { assignedUserId: 'user-b', _count: { _all: 1 } },
+      ]);
+      tx.lead.update.mockResolvedValue({ id: 'lead-1', assignedUserId: 'user-b' });
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyBusiness({ name: 'Padaria Sem Site', placeId: 'place-1' })]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(tx.membership.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org-1', role: { in: ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'] } },
+        }),
+      );
+      expect(tx.lead.update).toHaveBeenCalledWith({ where: { id: 'lead-1' }, data: { assignedUserId: 'user-b' } });
+    });
+
+    it('nunca reatribui um lead que já tem dono (re-scan de lead existente)', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', assignedUserId: 'user-ja-dono', ...args.create }),
+      );
+      tx.membership.findMany.mockResolvedValue([{ userId: 'user-a' }]);
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyBusiness({ name: 'Padaria Sem Site', placeId: 'place-1' })]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(tx.lead.update).not.toHaveBeenCalled();
+    });
+
+    it('sem nenhum membro elegível, não chama lead.groupBy nem lead.update (nunca lança erro)', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', assignedUserId: null, ...args.create }),
+      );
+      tx.membership.findMany.mockResolvedValue([]);
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([apifyBusiness({ name: 'Padaria Sem Site', placeId: 'place-1' })]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(tx.lead.groupBy).not.toHaveBeenCalled();
+      expect(tx.lead.update).not.toHaveBeenCalled();
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('distribui leads novos do mesmo lote entre os membros elegíveis (contagem em memória, não só no banco)', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      let created = 0;
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) => {
+        created += 1;
+        return Promise.resolve({ id: `lead-${created}`, assignedUserId: null, ...args.create });
+      });
+      tx.membership.findMany.mockResolvedValue([{ userId: 'user-a' }, { userId: 'user-b' }]);
+      tx.lead.groupBy.mockResolvedValue([]); // os dois começam com 0 em aberto
+      tx.lead.update.mockImplementation(
+        (args: { where: { id: string }; data: { assignedUserId: string } }) =>
+          Promise.resolve({ id: args.where.id, assignedUserId: args.data.assignedUserId }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        apifyBusiness({ name: 'Padaria A', placeId: 'place-1' }),
+        apifyBusiness({ name: 'Padaria B', placeId: 'place-2' }),
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      // Empate no início (0 e 0): user-a vence a 1ª vez (primeiro da lista);
+      // com a contagem incrementada em memória (não reconsultando o banco a
+      // cada lead), user-b vence a 2ª — sem isso, todo o lote inteiro cairia
+      // sempre no mesmo membro.
+      const assignedTo = (tx.lead.update as jest.Mock).mock.calls.map(
+        (call) => (call[0] as { data: { assignedUserId: string } }).data.assignedUserId,
+      );
+      expect(assignedTo).toEqual(['user-a', 'user-b']);
     });
   });
 });
