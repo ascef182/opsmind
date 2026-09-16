@@ -215,8 +215,15 @@ export interface OutreachMessage {
   rejectedReason: string | null;
   sentAt: string | null;
   repliedAt: string | null;
+  // Leitura COMPARTILHADA de equipe (Trilha B, inbox compartilhada) — nunca
+  // por usuário, ver comentário de `OutreachMessage.readAt` no schema.
+  readAt: string | null;
+  readByUserId: string | null;
   createdAt: string;
   updatedAt: string;
+  // Só presente em `GET .../outreach-messages` (a inbox compartilhada) —
+  // ausente em `listForLead`/`findByIdOrThrow`, que não fazem esse join.
+  lead?: { name: string; assignedUserId: string | null };
 }
 
 export interface GenerateOutreachInput {
@@ -237,6 +244,8 @@ export interface EditOutreachInput {
 
 export interface ListOutreachMessagesFilter {
   status?: OutreachStatus;
+  unread?: boolean;
+  mine?: boolean;
 }
 
 export interface Lead {

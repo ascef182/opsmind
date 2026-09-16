@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import type { OutreachMessage } from '@opsmind/database';
-import { OutreachService } from './outreach.service';
+import { OutreachService, type OutreachMessageWithLead } from './outreach.service';
 import { GenerateOutreachDto } from './dto/generate-outreach.dto';
 import { RejectOutreachDto } from './dto/reject-outreach.dto';
 import { EditOutreachDto } from './dto/edit-outreach.dto';
@@ -43,14 +43,37 @@ export class OutreachMessagesController {
     return this.outreachService.listForLead(organizationId, leadId);
   }
 
-  // Fila de revisão global — ?status=DRAFT lista tudo que ainda precisa de
-  // decisão humana, independente do lead.
+  // Inbox compartilhada de outreach (Trilha B) — ?status=DRAFT continua
+  // servindo a fila de aprovação de sempre; ?status=SENT/REPLIED (ou sem
+  // status) mais ?unread=true/?mine=true cobrem a visão de equipe.
+  // `mine` sempre resolve pro próprio usuário autenticado (`user.id`),
+  // nunca um valor arbitrário — ver comentário do DTO.
   @Get('outreach-messages')
   list(
     @Param('organizationId') organizationId: string,
+    @CurrentUser() user: { id: string },
     @Query() query: ListOutreachMessagesQueryDto,
-  ): Promise<OutreachMessage[]> {
-    return this.outreachService.list(organizationId, query.status);
+  ): Promise<OutreachMessageWithLead[]> {
+    return this.outreachService.list(organizationId, {
+      status: query.status,
+      unreadOnly: query.unread,
+      assignedToUserId: query.mine ? user.id : undefined,
+    });
+  }
+
+  // Leitura COMPARTILHADA de equipe, não uma transição de status — mesmo
+  // racional de `edit` (PATCH) não ser um dos POST .../<verbo> de transição
+  // reais abaixo. `@Roles` pelo mesmo motivo de toda outra mutação deste
+  // controller: consistência, não porque marcar como lida seja arriscado.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post('outreach-messages/:messageId/mark-read')
+  markRead(
+    @Param('organizationId') organizationId: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<OutreachMessage> {
+    return this.outreachService.markRead(organizationId, messageId, user.id);
   }
 
   @Get('outreach-messages/:messageId')

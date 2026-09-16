@@ -8,6 +8,7 @@ function buildDeps() {
       create: jest.fn(),
       findFirst: jest.fn(),
       findMany: jest.fn(),
+      update: jest.fn(),
       updateMany: jest.fn(),
     },
     lead: { update: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
@@ -799,6 +800,97 @@ describe('OutreachService', () => {
         where: { id: 'msg-1', organizationId: 'org-1', status: 'DRAFT' },
         data: { body: 'editado pela primeira' },
       });
+    });
+  });
+
+  describe('list (inbox compartilhada, Trilha B)', () => {
+    it('sem filtro nenhum, lista tudo da organização com nome/dono do lead incluído', async () => {
+      const { service, prisma } = buildDeps();
+      const messages = [{ id: 'msg-1', lead: { name: 'Padaria Central', assignedUserId: 'user-a' } }];
+      prisma.outreachMessage.findMany.mockResolvedValue(messages);
+
+      const result = await service.list('org-1');
+
+      expect(prisma.outreachMessage.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1' },
+        include: { lead: { select: { name: true, assignedUserId: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result).toBe(messages);
+    });
+
+    it('filtra por status quando informado', async () => {
+      const { service, prisma } = buildDeps();
+      prisma.outreachMessage.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { status: 'REPLIED' });
+
+      expect(prisma.outreachMessage.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: 'org-1', status: 'REPLIED' } }),
+      );
+    });
+
+    it('unreadOnly filtra readAt: null', async () => {
+      const { service, prisma } = buildDeps();
+      prisma.outreachMessage.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { unreadOnly: true });
+
+      expect(prisma.outreachMessage.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: 'org-1', readAt: null } }),
+      );
+    });
+
+    it('assignedToUserId filtra pelo dono do Lead (visão "minhas")', async () => {
+      const { service, prisma } = buildDeps();
+      prisma.outreachMessage.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { assignedToUserId: 'user-a' });
+
+      expect(prisma.outreachMessage.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: 'org-1', lead: { assignedUserId: 'user-a' } } }),
+      );
+    });
+
+    it('combina todos os filtros ao mesmo tempo', async () => {
+      const { service, prisma } = buildDeps();
+      prisma.outreachMessage.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { status: 'SENT', unreadOnly: true, assignedToUserId: 'user-a' });
+
+      expect(prisma.outreachMessage.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org-1', status: 'SENT', readAt: null, lead: { assignedUserId: 'user-a' } },
+        }),
+      );
+    });
+  });
+
+  describe('markRead (inbox compartilhada, Trilha B)', () => {
+    it('marca como lida (compartilhado — não por usuário) na primeira vez', async () => {
+      const { service, prisma } = buildDeps();
+      prisma.outreachMessage.findFirst.mockResolvedValue({ id: 'msg-1', readAt: null });
+      const updated = { id: 'msg-1', readAt: new Date(), readByUserId: 'user-a' };
+      prisma.outreachMessage.update.mockResolvedValue(updated);
+
+      const result = await service.markRead('org-1', 'msg-1', 'user-a');
+
+      expect(prisma.outreachMessage.update).toHaveBeenCalledWith({
+        where: { id: 'msg-1' },
+        data: { readAt: expect.any(Date), readByUserId: 'user-a' },
+      });
+      expect(result).toBe(updated);
+    });
+
+    it('idempotente: já lida por alguém, uma segunda chamada não sobrescreve quem leu primeiro', async () => {
+      const { service, prisma } = buildDeps();
+      const alreadyRead = { id: 'msg-1', readAt: new Date('2026-09-16T10:00:00Z'), readByUserId: 'user-a' };
+      prisma.outreachMessage.findFirst.mockResolvedValue(alreadyRead);
+
+      const result = await service.markRead('org-1', 'msg-1', 'user-b');
+
+      expect(prisma.outreachMessage.update).not.toHaveBeenCalled();
+      expect(result).toBe(alreadyRead);
     });
   });
 });

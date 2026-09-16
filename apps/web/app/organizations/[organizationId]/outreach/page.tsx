@@ -3,10 +3,11 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { useCurrentMembership } from '@/lib/memberships/use-memberships';
+import { useCurrentMembership, useMembers } from '@/lib/memberships/use-memberships';
 import {
   useApproveOutreach,
   useEditOutreach,
+  useMarkOutreachRead,
   useOutreachMessages,
   useRejectOutreach,
 } from '@/lib/leads/use-outreach-messages';
@@ -49,27 +50,64 @@ function QueueCard({
   message,
   organizationId,
   canWrite,
+  assigneeName,
 }: {
   message: OutreachMessage;
   organizationId: string;
   canWrite: boolean;
+  assigneeName: string | null;
 }) {
   const approve = useApproveOutreach(organizationId, message.leadId);
   const reject = useRejectOutreach(organizationId, message.leadId);
   const edit = useEditOutreach(organizationId, message.leadId);
+  const markRead = useMarkOutreachRead(organizationId);
   const [showRejectReason, setShowRejectReason] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editBody, setEditBody] = useState(message.body);
 
+  // "Não lida" só faz sentido pra mensagens que já saíram do fluxo de
+  // aprovação (SENT/REPLIED) — um DRAFT/APPROVED/REJECTED já é acompanhado
+  // pelo próprio status da fila, sem precisar de um segundo indicador.
+  const showsReadState = message.status === 'SENT' || message.status === 'REPLIED';
+  const isUnread = showsReadState && !message.readAt;
+
   return (
-    <li className="rounded-lg border border-border bg-card p-4">
+    <li
+      className={`rounded-lg border p-4 ${isUnread ? 'border-accent-500/50 bg-accent-500/5' : 'border-border bg-card'}`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {isUnread && <span className="size-2 rounded-full bg-accent-500" title="Não lida" />}
           <Badge value={message.status} />
           <span className="text-xs text-muted-foreground">{CHANNEL_LABELS[message.channel]}</span>
+          {message.lead && (
+            <Link
+              href={`/organizations/${organizationId}/leads/${message.leadId}`}
+              className="text-xs font-medium text-accent-400 hover:underline"
+            >
+              {message.lead.name}
+            </Link>
+          )}
+          {assigneeName && <span className="text-xs text-muted-foreground">· {assigneeName}</span>}
         </div>
-        <span className="text-xs text-muted-foreground">{new Date(message.createdAt).toLocaleString('pt-BR')}</span>
+        <div className="flex items-center gap-2">
+          {showsReadState && (
+            <span className="text-xs text-muted-foreground">
+              {message.readAt ? 'Lida' : (
+                <button
+                  type="button"
+                  className="text-accent-400 hover:underline"
+                  disabled={markRead.isPending}
+                  onClick={() => markRead.mutate(message.id)}
+                >
+                  Marcar como lida
+                </button>
+              )}
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground">{new Date(message.createdAt).toLocaleString('pt-BR')}</span>
+        </div>
       </div>
 
       {message.subject && <p className="mt-2 text-sm font-medium text-foreground">{message.subject}</p>}
@@ -187,38 +225,70 @@ export default function OutreachQueuePage() {
   const { organizationId } = useParams<{ organizationId: string }>();
   const { membership } = useCurrentMembership(organizationId);
   const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
+  const members = useMembers(organizationId);
 
   // Default DRAFT (fila de aprovação) — mesmo default do brief/controller
   // (`GET outreach-messages?status=DRAFT`).
   const [status, setStatus] = useState<OutreachStatus | ''>('DRAFT');
-  const messages = useOutreachMessages(organizationId, { status: status || undefined });
+  // "Minhas" (Trilha B) — filtra por Lead.assignedUserId === eu mesmo,
+  // reaproveitando o roteamento da B1; default "Todas" (visão de equipe).
+  const [mineOnly, setMineOnly] = useState(false);
+  const messages = useOutreachMessages(organizationId, { status: status || undefined, mine: mineOnly });
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold text-foreground">Aprovações de outreach</h1>
-        <Select
-          value={status}
-          onChange={(e) => setStatus(e.target.value as OutreachStatus | '')}
-          className="max-w-[280px]"
-        >
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </Select>
+        <h1 className="text-lg font-semibold text-foreground">Outreach (inbox compartilhada)</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex overflow-hidden rounded-md border border-border">
+            <button
+              type="button"
+              className={`px-3 py-1.5 text-xs font-medium ${!mineOnly ? 'bg-accent-500/15 text-accent-400' : 'text-muted-foreground hover:text-foreground'}`}
+              onClick={() => setMineOnly(false)}
+            >
+              Todas
+            </button>
+            <button
+              type="button"
+              className={`border-l border-border px-3 py-1.5 text-xs font-medium ${mineOnly ? 'bg-accent-500/15 text-accent-400' : 'text-muted-foreground hover:text-foreground'}`}
+              onClick={() => setMineOnly(true)}
+            >
+              Minhas
+            </button>
+          </div>
+          <Select
+            value={status}
+            onChange={(e) => setStatus(e.target.value as OutreachStatus | '')}
+            className="max-w-[280px]"
+          >
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </div>
       </div>
 
       {messages.isLoading && <p className="text-muted-foreground">Carregando mensagens…</p>}
       {messages.isSuccess && messages.data.length === 0 && (
-        <p className="text-muted-foreground">Nenhuma mensagem de outreach nesse status.</p>
+        <p className="text-muted-foreground">Nenhuma mensagem de outreach nesse filtro.</p>
       )}
 
       {messages.isSuccess && messages.data.length > 0 && (
         <ul className="flex flex-col gap-3">
           {messages.data.map((message) => (
-            <QueueCard key={message.id} message={message} organizationId={organizationId} canWrite={canWrite} />
+            <QueueCard
+              key={message.id}
+              message={message}
+              organizationId={organizationId}
+              canWrite={canWrite}
+              assigneeName={
+                message.lead?.assignedUserId
+                  ? (members.data?.find((m) => m.userId === message.lead?.assignedUserId)?.user.name ?? null)
+                  : null
+              }
+            />
           ))}
         </ul>
       )}

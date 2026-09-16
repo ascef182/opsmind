@@ -228,6 +228,7 @@ model User {
   aiRequests               AIRequest[]
   uploadedDocuments        Document[]
   approvedOutreachMessages OutreachMessage[]        @relation("OutreachApprovedBy")
+  readOutreachMessages     OutreachMessage[]        @relation("OutreachReadBy")
   dealsOwned               Deal[]                   @relation("DealOwner")
   assignedLeads            Lead[]                   @relation("LeadAssignee")
 
@@ -958,6 +959,15 @@ model OutreachMessage {
   // Dedup do scan de follow-up do worker (`outreach-followup-scan.ts`) —
   // nunca notifica duas vezes a mesma mensagem sem resposta.
   followUpNotifiedAt DateTime?       @map("follow_up_notified_at")
+  // Leitura COMPARTILHADA de equipe (plano
+  // pensando-como-empresa-com-agile-beaver.md, trilha B — inbox
+  // compartilhada), não por usuário: uma vez que alguém do time marca como
+  // lida, fica lida pra todo mundo — mesmo espírito de uma caixa de entrada
+  // compartilhada de verdade, deliberadamente diferente de
+  // `Notification.readAt` (que é por usuário). `readByUserId` só registra
+  // quem foi.
+  readAt             DateTime?       @map("read_at")
+  readByUserId       String?         @map("read_by_user_id")
   actorType          AuditActorType  @map("actor_type")
   actorId            String?         @map("actor_id")
   createdAt          DateTime        @default(now()) @map("created_at")
@@ -967,10 +977,12 @@ model OutreachMessage {
   lead            Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
   serviceOffering ServiceOffering? @relation(fields: [serviceOfferingId], references: [id], onDelete: SetNull)
   approvedBy      User?            @relation("OutreachApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  readBy          User?            @relation("OutreachReadBy", fields: [readByUserId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, status])
   @@index([leadId])
   @@index([status, sentAt])
+  @@index([organizationId, status, readAt])
   @@map("outreach_messages")
 }
 

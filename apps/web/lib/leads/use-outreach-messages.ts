@@ -13,6 +13,8 @@ import type {
 function queryString(filter: ListOutreachMessagesFilter): string {
   const params = new URLSearchParams();
   if (filter.status) params.set('status', filter.status);
+  if (filter.unread) params.set('unread', 'true');
+  if (filter.mine) params.set('mine', 'true');
   const query = params.toString();
   return query ? `?${query}` : '';
 }
@@ -35,6 +37,22 @@ export function useOutreachMessages(organizationId: string, filter: ListOutreach
     queryFn: () =>
       apiFetch<OutreachMessage[]>(`/organizations/${organizationId}/outreach-messages${queryString(filter)}`),
     enabled: Boolean(organizationId),
+  });
+}
+
+// Leitura compartilhada (Trilha B) — sem `leadId` porque quem chama é a
+// inbox global (lista de mensagens de leads variados), não a thread de um
+// lead específico; invalida só a lista, mesma query key de
+// `useOutreachMessages` acima.
+export function useMarkOutreachRead(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (messageId: string) =>
+      apiFetch<OutreachMessage>(`/organizations/${organizationId}/outreach-messages/${messageId}/mark-read`, {
+        method: 'POST',
+      }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'outreach-messages'] }),
   });
 }
 

@@ -73,6 +73,16 @@ const OUTREACH_SYSTEM_PROMPT_LINES = [
 // sempre um `userId` de verdade, nunca `SYSTEM`.
 export type OutreachDraftActor = { type: 'USER'; userId: string } | { type: 'SYSTEM' };
 
+export interface ListOutreachMessagesFilter {
+  status?: OutreachStatus;
+  unreadOnly?: boolean;
+  assignedToUserId?: string;
+}
+
+export type OutreachMessageWithLead = OutreachMessage & {
+  lead: { name: string; assignedUserId: string | null };
+};
+
 /**
  * Máquina de estado de aprovação humana de `OutreachMessage`:
  * `DRAFT --approve--> APPROVED --markSent--> SENT --markReplied--> REPLIED`,
@@ -244,10 +254,42 @@ export class OutreachService {
     });
   }
 
-  list(organizationId: string, status?: OutreachStatus): Promise<OutreachMessage[]> {
+  /**
+   * Inbox compartilhada de outreach (Trilha B, plano
+   * pensando-como-empresa-com-agile-beaver.md) — mesmo endpoint que já
+   * servia a fila de aprovação (`status=DRAFT`), agora com o nome/dono do
+   * Lead incluído (pra renderizar a lista sem um clique extra) e três
+   * filtros adicionais, combináveis entre si: `status`, `unreadOnly`
+   * (readAt compartilhado, ver comentário do campo no schema) e
+   * `assignedToUserId` (visão "minhas" — Lead.assignedUserId, Trilha B/B1).
+   */
+  list(organizationId: string, filter: ListOutreachMessagesFilter = {}): Promise<OutreachMessageWithLead[]> {
     return this.prisma.outreachMessage.findMany({
-      where: { organizationId, ...(status ? { status } : {}) },
+      where: {
+        organizationId,
+        ...(filter.status ? { status: filter.status } : {}),
+        ...(filter.unreadOnly ? { readAt: null } : {}),
+        ...(filter.assignedToUserId ? { lead: { assignedUserId: filter.assignedToUserId } } : {}),
+      },
+      include: { lead: { select: { name: true, assignedUserId: true } } },
       orderBy: { createdAt: 'desc' },
+    }) as unknown as Promise<OutreachMessageWithLead[]>;
+  }
+
+  /**
+   * Leitura COMPARTILHADA (nunca por usuário, ver comentário de
+   * `OutreachMessage.readAt` no schema) — idempotente: a primeira pessoa do
+   * time que marca como lida "vence"; chamadas seguintes não sobrescrevem
+   * quem leu primeiro.
+   */
+  async markRead(organizationId: string, messageId: string, userId: string): Promise<OutreachMessage> {
+    const message = await this.findByIdOrThrow(organizationId, messageId);
+    if (message.readAt) {
+      return message;
+    }
+    return this.prisma.outreachMessage.update({
+      where: { id: messageId },
+      data: { readAt: new Date(), readByUserId: userId },
     });
   }
 
