@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -64,6 +64,7 @@ const DEFAULT_VALUES: TargetFormValues = {
 
 export default function ProspectingTargetsPage() {
   const { organizationId } = useParams<{ organizationId: string }>();
+  const router = useRouter();
   const { membership } = useCurrentMembership(organizationId);
   const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
 
@@ -133,11 +134,16 @@ export default function ProspectingTargetsPage() {
   function handleRunNow(target: ProspectingTarget) {
     runNow.mutate(target.id, {
       onSuccess: (job) => {
-        toast.success(
-          job
-            ? 'Busca iniciada agora — acompanhe em Leads.'
-            : 'Não foi possível iniciar a busca agora. O sweep diário ainda vai tentar.',
-        );
+        if (job) {
+          // Leva direto pro filtro dessa busca em /leads (E3) — antes só um
+          // toast genérico dizia "acompanhe em Leads" sem levar a lugar
+          // nenhum específico, obrigando a achar a busca certa manualmente
+          // no painel "Buscas recentes".
+          toast.success('Busca iniciada — carregando em Leads…');
+          router.push(`/organizations/${organizationId}/leads?scrapeJobId=${job.id}`);
+          return;
+        }
+        toast.success('Não foi possível iniciar a busca agora. O sweep diário ainda vai tentar.');
       },
       onError: () => toast.error('Não foi possível iniciar a busca agora.'),
     });
