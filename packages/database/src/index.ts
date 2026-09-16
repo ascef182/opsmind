@@ -21,6 +21,7 @@ export type {
   Meeting,
   DealSignatureRequest,
   SignatureRequestStatus,
+  InternalNote,
   AIRequest,
   AIRequestToolCall,
   AIRequestStatus,

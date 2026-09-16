@@ -4,6 +4,7 @@ import { QueueModule } from '../../infrastructure/queue/queue.module';
 import { EmailModule } from '../../infrastructure/email/email.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { DealsModule } from '../deals/deals.module';
+import { InternalNotesModule } from '../internal-notes/internal-notes.module';
 import { ServiceOfferingsService } from './service-offerings.service';
 import { ServiceOfferingsController } from './service-offerings.controller';
 import { ScrapeJobsService } from './scrape-jobs.service';
@@ -40,7 +41,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
  * são `@Global()`.
  */
 @Module({
-  imports: [ScrapingModule, QueueModule, EmailModule, OrganizationsModule, DealsModule],
+  imports: [ScrapingModule, QueueModule, EmailModule, OrganizationsModule, DealsModule, InternalNotesModule],
   controllers: [
     ServiceOfferingsController,
     ScrapeJobsController,

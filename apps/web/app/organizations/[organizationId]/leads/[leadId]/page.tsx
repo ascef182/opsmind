@@ -22,6 +22,8 @@ import {
   useSendOutreach,
 } from '@/lib/leads/use-outreach-messages';
 import { OUTREACH_CHANNELS, WRITE_ROLES, type LeadEnrichment as LeadEnrichmentDto, type OutreachMessage } from '@/lib/leads/types';
+import { useCreateLeadNote, useLeadNotes } from '@/lib/collaboration/use-internal-notes';
+import { InternalNotesCard } from '@/components/collaboration/internal-notes-card';
 import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -380,6 +382,8 @@ export default function LeadDetailPage() {
   const analyzeLead = useAnalyzeLeadPotential(organizationId, leadId);
   const convertLead = useConvertLead(organizationId, leadId);
   const generateDraft = useGenerateOutreachDraft(organizationId, leadId);
+  const leadNotes = useLeadNotes(organizationId, leadId);
+  const createLeadNote = useCreateLeadNote(organizationId, leadId);
 
   const [showGenerateForm, setShowGenerateForm] = useState(false);
   const [convertDialogOpen, setConvertDialogOpen] = useState(false);
@@ -585,6 +589,16 @@ export default function LeadDetailPage() {
               </ul>
             )}
           </section>
+
+          <InternalNotesCard
+            organizationId={organizationId}
+            notes={leadNotes.data}
+            isLoading={leadNotes.isLoading}
+            canWrite={canWrite}
+            onCreate={(input) => createLeadNote.mutate(input)}
+            isCreating={createLeadNote.isPending}
+            createError={createLeadNote.isError ? createLeadNote.error : null}
+          />
         </div>
 
         <LeadIntelligencePanel

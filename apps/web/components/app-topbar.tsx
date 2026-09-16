@@ -49,6 +49,8 @@ function describeNotification(notification: Notification): string {
       return `Reunião em breve${typeof payload.title === 'string' ? `: ${payload.title}` : ''}`;
     case 'deal.signed':
       return `Contrato assinado${typeof payload.dealTitle === 'string' ? `: ${payload.dealTitle}` : ''} — mova para Ganho`;
+    case 'note.mention':
+      return 'Você foi mencionado em uma nota interna';
     default:
       return notification.type;
   }

@@ -28,6 +28,8 @@ import {
   downloadMeetingIcs,
 } from '@/lib/meetings/use-meetings';
 import { buildGoogleCalendarUrl } from '@/lib/meetings/types';
+import { useCreateDealNote, useDealNotes } from '@/lib/collaboration/use-internal-notes';
+import { InternalNotesCard } from '@/components/collaboration/internal-notes-card';
 import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -51,6 +53,8 @@ export default function DealDetailPage() {
   const meetings = useMeetings(organizationId, dealId);
   const createMeeting = useCreateMeeting(organizationId, dealId);
   const cancelMeeting = useCancelMeeting(organizationId, dealId);
+  const dealNotes = useDealNotes(organizationId, dealId);
+  const createDealNote = useCreateDealNote(organizationId, dealId);
   const [icsError, setIcsError] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
@@ -409,6 +413,16 @@ export default function DealDetailPage() {
           ))}
         </ul>
       </Card>
+
+      <InternalNotesCard
+        organizationId={organizationId}
+        notes={dealNotes.data}
+        isLoading={dealNotes.isLoading}
+        canWrite={canWrite}
+        onCreate={(input) => createDealNote.mutate(input)}
+        isCreating={createDealNote.isPending}
+        createError={createDealNote.isError ? createDealNote.error : null}
+      />
     </div>
   );
 }

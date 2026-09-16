@@ -14,10 +14,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { Deal, DealSignatureRequest } from '@opsmind/database';
+import type { Deal, DealSignatureRequest, InternalNote } from '@opsmind/database';
 import { DealsService } from './deals.service';
 import { DealProposalService } from './deal-proposal.service';
 import { DealSignatureService } from './deal-signature.service';
+import { InternalNotesService } from '../internal-notes/internal-notes.service';
+import { CreateNoteDto } from '../internal-notes/dto/create-note.dto';
 import { CreateDealDto } from './dto/create-deal.dto';
 import { UpdateDealDto } from './dto/update-deal.dto';
 import { MoveDealStageDto } from './dto/move-deal-stage.dto';
@@ -35,6 +37,7 @@ export class DealsController {
     private readonly dealsService: DealsService,
     private readonly dealProposalService: DealProposalService,
     private readonly dealSignatureService: DealSignatureService,
+    private readonly internalNotesService: InternalNotesService,
   ) {}
 
   @Roles(...WRITE_ROLES)
@@ -135,6 +138,28 @@ export class DealsController {
     @Body() dto: MoveDealStageDto,
   ): Promise<Deal> {
     return this.dealsService.moveStage(organizationId, dealId, dto, user.id);
+  }
+
+  // Colaboração de equipe (Trilha B) — notas internas, nunca vistas pelo
+  // cliente, nunca uma AI tool.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post(':dealId/notes')
+  addNote(
+    @Param('organizationId') organizationId: string,
+    @Param('dealId') dealId: string,
+    @CurrentUser() user: { id: string },
+    @Body() dto: CreateNoteDto,
+  ): Promise<InternalNote> {
+    return this.internalNotesService.createForDeal(organizationId, dealId, dto, user.id);
+  }
+
+  @Get(':dealId/notes')
+  listNotes(
+    @Param('organizationId') organizationId: string,
+    @Param('dealId') dealId: string,
+  ): Promise<InternalNote[]> {
+    return this.internalNotesService.listForDeal(organizationId, dealId);
   }
 
   @Roles(...WRITE_ROLES)

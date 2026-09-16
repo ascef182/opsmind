@@ -1,7 +1,9 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import type { Customer, Lead, LeadEnrichment } from '@opsmind/database';
+import type { Customer, InternalNote, Lead, LeadEnrichment } from '@opsmind/database';
 import { LeadsService } from './leads.service';
 import { LeadAnalysisService } from './lead-analysis.service';
+import { InternalNotesService } from '../internal-notes/internal-notes.service';
+import { CreateNoteDto } from '../internal-notes/dto/create-note.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
@@ -19,6 +21,7 @@ export class LeadsController {
   constructor(
     private readonly leadsService: LeadsService,
     private readonly leadAnalysisService: LeadAnalysisService,
+    private readonly internalNotesService: InternalNotesService,
   ) {}
 
   @Roles(...WRITE_ROLES)
@@ -103,6 +106,28 @@ export class LeadsController {
     @Body() dto: AssignLeadDto,
   ): Promise<Lead> {
     return this.leadsService.assign(organizationId, leadId, dto.userId, user.id);
+  }
+
+  // Colaboração de equipe (Trilha B) — notas internas, nunca vistas por
+  // outreach nem por uma AI tool.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post(':leadId/notes')
+  addNote(
+    @Param('organizationId') organizationId: string,
+    @Param('leadId') leadId: string,
+    @CurrentUser() user: { id: string },
+    @Body() dto: CreateNoteDto,
+  ): Promise<InternalNote> {
+    return this.internalNotesService.createForLead(organizationId, leadId, dto, user.id);
+  }
+
+  @Get(':leadId/notes')
+  listNotes(
+    @Param('organizationId') organizationId: string,
+    @Param('leadId') leadId: string,
+  ): Promise<InternalNote[]> {
+    return this.internalNotesService.listForLead(organizationId, leadId);
   }
 
   @Roles(...WRITE_ROLES)

@@ -205,6 +205,7 @@ model Organization {
   deals                 Deal[]
   meetings              Meeting[]
   dealSignatureRequests DealSignatureRequest[]
+  internalNotes         InternalNote[]
 
   @@map("organizations")
 }
@@ -229,6 +230,7 @@ model User {
   uploadedDocuments        Document[]
   approvedOutreachMessages OutreachMessage[]        @relation("OutreachApprovedBy")
   readOutreachMessages     OutreachMessage[]        @relation("OutreachReadBy")
+  authoredInternalNotes    InternalNote[]           @relation("InternalNoteAuthor")
   dealsOwned               Deal[]                   @relation("DealOwner")
   assignedLeads            Lead[]                   @relation("LeadAssignee")
 
@@ -495,12 +497,45 @@ model Deal {
   owner             User?                  @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   meetings          Meeting[]
   signatureRequests DealSignatureRequest[]
+  internalNotes     InternalNote[]
 
   @@index([organizationId, stage])
   @@index([organizationId, customerId])
   @@index([organizationId, expectedCloseDate])
   @@index([ownerUserId])
   @@map("deals")
+}
+
+// Colaboração de equipe (plano pensando-como-empresa-com-agile-beaver.md,
+// trilha B — "parar de depender de Slack/WhatsApp pra time discutir um
+// negócio"). Sempre vinculada a EXATAMENTE um Deal OU um Lead, nunca os
+// dois nem nenhum — validado no service (`InternalNotesService`), não aqui
+// (Prisma não expressa XOR entre colunas nullable sem um `@@check` cru, e o
+// resto do schema já resolve esse mesmo tipo de regra condicional no
+// service — ver `Deal.lostReason`).
+model InternalNote {
+  id               String   @id @default(uuid())
+  organizationId   String   @map("organization_id")
+  dealId           String?  @map("deal_id")
+  leadId           String?  @map("lead_id")
+  body             String   @db.Text
+  // Menção por seleção explícita (não parsing de "@nome" em texto livre —
+  // nomes reais têm espaço/acento/homônimos, tornar a menção uma decisão
+  // explícita do autor é mais confiável do que tentar adivinhar). Dispara
+  // uma Notification (`note.mention`) pra cada um, exceto o próprio autor.
+  mentionedUserIds String[] @map("mentioned_user_ids")
+  authorUserId     String   @map("author_user_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deal         Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  author       User         @relation("InternalNoteAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, dealId])
+  @@index([organizationId, leadId])
+  @@map("internal_notes")
 }
 
 enum SignatureRequestStatus {
@@ -905,6 +940,7 @@ model Lead {
   enrichments       LeadEnrichment[]
   outreachMessages  OutreachMessage[]
   deals             Deal[]
+  internalNotes     InternalNote[]
 
   @@unique([organizationId, placeId])
   @@index([organizationId, status])
