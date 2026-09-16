@@ -13,6 +13,7 @@ describe('ProspectingTargetsService', () => {
     };
   };
   let auditService: { log: jest.Mock };
+  let scrapeJobsService: { create: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -25,7 +26,8 @@ describe('ProspectingTargetsService', () => {
       },
     };
     auditService = { log: jest.fn() };
-    service = new ProspectingTargetsService(prisma as never, auditService as never);
+    scrapeJobsService = { create: jest.fn().mockResolvedValue({ id: 'job-1' }) };
+    service = new ProspectingTargetsService(prisma as never, auditService as never, scrapeJobsService as never);
   });
 
   describe('create', () => {
@@ -110,6 +112,82 @@ describe('ProspectingTargetsService', () => {
         service.create('org-1', { city: 'São Paulo', state: 'SP', businessType: 'padaria' }, 'user-1'),
       ).rejects.toThrow(ConflictException);
     });
+
+    it('dispara um scan imediato (ScrapeJobsService.create) quando o alvo criado está ativo', async () => {
+      prisma.prospectingTarget.create.mockResolvedValue({
+        id: 'target-1',
+        city: 'São Paulo',
+        state: 'SP',
+        businessType: 'Barbearias',
+        sourceType: 'APIFY_GOOGLE_MAPS',
+        onlyWithoutWebsite: true,
+        limit: 50,
+        isActive: true,
+      });
+
+      await service.create(
+        'org-1',
+        { city: 'São Paulo', state: 'SP', businessType: 'Barbearias' },
+        'user-1',
+      );
+
+      expect(scrapeJobsService.create).toHaveBeenCalledWith(
+        'org-1',
+        {
+          sourceType: 'APIFY_GOOGLE_MAPS',
+          city: 'São Paulo',
+          state: 'SP',
+          businessType: 'Barbearias',
+          onlyWithoutWebsite: true,
+          limit: 50,
+        },
+        'user-1',
+      );
+    });
+
+    it('não dispara scan quando o alvo criado já nasce inativo', async () => {
+      prisma.prospectingTarget.create.mockResolvedValue({
+        id: 'target-1',
+        city: 'São Paulo',
+        state: 'SP',
+        businessType: 'Barbearias',
+        sourceType: 'APIFY_GOOGLE_MAPS',
+        onlyWithoutWebsite: true,
+        limit: null,
+        isActive: false,
+      });
+
+      await service.create(
+        'org-1',
+        { city: 'São Paulo', state: 'SP', businessType: 'Barbearias', isActive: false },
+        'user-1',
+      );
+
+      expect(scrapeJobsService.create).not.toHaveBeenCalled();
+    });
+
+    it('não deixa uma falha ao disparar o scan imediato derrubar a criação do alvo', async () => {
+      const created = {
+        id: 'target-1',
+        city: 'São Paulo',
+        state: 'SP',
+        businessType: 'Barbearias',
+        sourceType: 'APIFY_GOOGLE_MAPS',
+        onlyWithoutWebsite: true,
+        limit: null,
+        isActive: true,
+      };
+      prisma.prospectingTarget.create.mockResolvedValue(created);
+      scrapeJobsService.create.mockRejectedValue(new Error('fila indisponível'));
+
+      const result = await service.create(
+        'org-1',
+        { city: 'São Paulo', state: 'SP', businessType: 'Barbearias' },
+        'user-1',
+      );
+
+      expect(result).toBe(created);
+    });
   });
 
   describe('findByIdOrThrow', () => {
@@ -192,6 +270,55 @@ describe('ProspectingTargetsService', () => {
       await expect(
         service.update('org-1', 'target-1', { city: 'Rio' }, 'user-1'),
       ).rejects.toThrow(ConflictException);
+    });
+
+    const baseTarget = {
+      id: 'target-1',
+      organizationId: 'org-1',
+      city: 'São Paulo',
+      state: 'SP',
+      businessType: 'Barbearias',
+      sourceType: 'APIFY_GOOGLE_MAPS',
+      onlyWithoutWebsite: true,
+      limit: 50,
+    };
+
+    it('dispara um scan imediato quando isActive transiciona de false para true (reativação)', async () => {
+      prisma.prospectingTarget.findFirst.mockResolvedValue({ ...baseTarget, isActive: false });
+      prisma.prospectingTarget.update.mockResolvedValue({ ...baseTarget, isActive: true });
+
+      await service.update('org-1', 'target-1', { isActive: true }, 'user-1');
+
+      expect(scrapeJobsService.create).toHaveBeenCalledWith(
+        'org-1',
+        {
+          sourceType: 'APIFY_GOOGLE_MAPS',
+          city: 'São Paulo',
+          state: 'SP',
+          businessType: 'Barbearias',
+          onlyWithoutWebsite: true,
+          limit: 50,
+        },
+        'user-1',
+      );
+    });
+
+    it('não dispara scan quando isActive já era true e continua true', async () => {
+      prisma.prospectingTarget.findFirst.mockResolvedValue({ ...baseTarget, isActive: true });
+      prisma.prospectingTarget.update.mockResolvedValue({ ...baseTarget, city: 'Rio', isActive: true });
+
+      await service.update('org-1', 'target-1', { city: 'Rio' }, 'user-1');
+
+      expect(scrapeJobsService.create).not.toHaveBeenCalled();
+    });
+
+    it('não dispara scan quando isActive transiciona de true para false', async () => {
+      prisma.prospectingTarget.findFirst.mockResolvedValue({ ...baseTarget, isActive: true });
+      prisma.prospectingTarget.update.mockResolvedValue({ ...baseTarget, isActive: false });
+
+      await service.update('org-1', 'target-1', { isActive: false }, 'user-1');
+
+      expect(scrapeJobsService.create).not.toHaveBeenCalled();
     });
   });
 

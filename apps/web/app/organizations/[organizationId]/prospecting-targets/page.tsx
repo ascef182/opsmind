@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { toast } from 'sonner';
 import { MoreHorizontalIcon } from 'lucide-react';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import {
@@ -114,7 +115,17 @@ export default function ProspectingTargetsPage() {
       );
       return;
     }
-    createTarget.mutate(values, { onSuccess: () => setDialogOpen(false) });
+    createTarget.mutate(values, {
+      onSuccess: () => {
+        setDialogOpen(false);
+        // `ProspectingTargetsService.create` (backend) dispara um ScrapeJob
+        // imediato quando o alvo nasce ativo — não é mais "vai rodar algum
+        // dia no sweep diário", já está rodando.
+        toast.success(
+          values.isActive === false ? 'Alvo criado (inativo — sem busca automática).' : 'Busca iniciada — acompanhe em Leads.',
+        );
+      },
+    });
   });
 
   function confirmRemove() {

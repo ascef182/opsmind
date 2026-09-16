@@ -1,7 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { ProspectingTarget } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ScrapeJobsService } from './scrape-jobs.service';
 import { CreateProspectingTargetDto } from './dto/create-prospecting-target.dto';
 import { UpdateProspectingTargetDto } from './dto/update-prospecting-target.dto';
 
@@ -10,11 +11,13 @@ export interface ListProspectingTargetsFilter {
 }
 
 /**
- * CRUD simples de config recorrente, mesmo espírito de
+ * CRUD de config recorrente, mesmo espírito de
  * `ServiceOfferingsService`/`ScrapeJobsService` — sem repository layer,
- * `PrismaService` direto. Diferente de `ScrapeJobsService`, não enfileira
- * nada aqui: quem lê `ProspectingTarget.isActive`/`cooldownDays` e dispara
- * `ScrapeJob`s é o scan do worker (Task 7), fora do escopo desta task.
+ * `PrismaService` direto. O sweep diário do worker
+ * (`apps/worker/src/prospecting-scan.ts`) continua sendo quem varre TODOS os
+ * alvos ativos por cooldown — mas criar/reativar um alvo aqui também dispara
+ * um `ScrapeJob` imediato (`triggerScan` abaixo), pra não deixar o usuário
+ * esperando até 24h pelo próximo sweep só pra ver o primeiro resultado.
  *
  * `@@unique([organizationId, city, state, businessType, sourceType])` no
  * schema (Task 2) — mesmo tratamento de conflito de nome duplicado que
@@ -22,9 +25,12 @@ export interface ListProspectingTargetsFilter {
  */
 @Injectable()
 export class ProspectingTargetsService {
+  private readonly logger = new Logger(ProspectingTargetsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly scrapeJobsService: ScrapeJobsService,
   ) {}
 
   async create(
@@ -60,6 +66,10 @@ export class ProspectingTargetsService {
           sourceType: target.sourceType,
         },
       });
+
+      if (target.isActive) {
+        await this.triggerScan(organizationId, target, actorUserId);
+      }
 
       return target;
     } catch (error) {
@@ -101,7 +111,7 @@ export class ProspectingTargetsService {
     dto: UpdateProspectingTargetDto,
     actorUserId: string,
   ): Promise<ProspectingTarget> {
-    await this.findByIdOrThrow(organizationId, id);
+    const existing = await this.findByIdOrThrow(organizationId, id);
 
     try {
       const updated = await this.prisma.prospectingTarget.update({ where: { id }, data: dto });
@@ -114,6 +124,14 @@ export class ProspectingTargetsService {
         resource: `ProspectingTarget:${id}`,
         metadata: { ...dto },
       });
+
+      // Reativação (false -> true) = "quero buscar de novo agora" — mesmo
+      // gatilho de `create()`. Sem trigger quando já estava ativo (evita
+      // duplicar scan a cada edição de campo não relacionado) ou quando está
+      // sendo desativado.
+      if (!existing.isActive && updated.isActive) {
+        await this.triggerScan(organizationId, updated, actorUserId);
+      }
 
       return updated;
     } catch (error) {
@@ -137,6 +155,35 @@ export class ProspectingTargetsService {
       action: 'prospecting_target.removed',
       resource: `ProspectingTarget:${id}`,
     });
+  }
+
+  // Best-effort: um `ScrapeJob` disparado por aqui é um acelerador, não a
+  // única forma do alvo ser escaneado — o sweep diário do worker continua
+  // como rede de segurança. Por isso uma falha aqui (fila/Redis indisponível)
+  // nunca deve derrubar `create()`/`update()`, só fica registrada no log.
+  private async triggerScan(
+    organizationId: string,
+    target: ProspectingTarget,
+    actorUserId: string,
+  ): Promise<void> {
+    try {
+      await this.scrapeJobsService.create(
+        organizationId,
+        {
+          sourceType: target.sourceType,
+          city: target.city,
+          state: target.state,
+          businessType: target.businessType,
+          onlyWithoutWebsite: target.onlyWithoutWebsite,
+          ...(target.limit !== null ? { limit: target.limit } : {}),
+        },
+        actorUserId,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao disparar scan imediato pro alvo ${target.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   // Duck-typing em vez de `instanceof Prisma.PrismaClientKnownRequestError`
