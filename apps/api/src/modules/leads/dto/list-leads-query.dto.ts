@@ -1,5 +1,5 @@
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 import type { LeadStatus, ScrapeSourceType } from '@opsmind/database';
 
 const LEAD_STATUSES: LeadStatus[] = [
@@ -68,4 +68,9 @@ export class ListLeadsQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  // "Uma lista pra cada busca" — filtra pelo `ScrapeJob` de origem.
+  @IsOptional()
+  @IsUUID()
+  scrapeJobId?: string;
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -84,8 +84,16 @@ function WebsiteBadge({ website }: { website: string | null }) {
   );
 }
 
-function ScrapeJobsPanel({ organizationId }: { organizationId: string }) {
-  const [expanded, setExpanded] = useState(false);
+function ScrapeJobsPanel({
+  organizationId,
+  activeScrapeJobId,
+  onSelectScrapeJob,
+}: {
+  organizationId: string;
+  activeScrapeJobId?: string;
+  onSelectScrapeJob: (jobId: string | null) => void;
+}) {
+  const [expanded, setExpanded] = useState(Boolean(activeScrapeJobId));
   const scrapeJobs = useScrapeJobs(organizationId);
 
   return (
@@ -106,24 +114,32 @@ function ScrapeJobsPanel({ organizationId }: { organizationId: string }) {
             <p className="text-sm text-muted-foreground">Nenhuma busca disparada ainda.</p>
           )}
           <ul className="flex flex-col gap-2">
-            {scrapeJobs.data?.map((job) => (
-              <li
-                key={job.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
-              >
-                <div className="flex flex-col">
-                  <span className="text-foreground">
-                    {SCRAPE_SOURCE_LABELS[job.sourceType]} — {job.businessType} em {job.city}/{job.state}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {job.leadsFound} lead{job.leadsFound === 1 ? '' : 's'} encontrado
-                    {job.leadsFound === 1 ? '' : 's'} · {new Date(job.createdAt).toLocaleString('pt-BR')}
-                    {job.errorMessage ? ` · ${job.errorMessage}` : ''}
-                  </span>
-                </div>
-                <Badge value={job.status} />
-              </li>
-            ))}
+            {scrapeJobs.data?.map((job) => {
+              const isActive = job.id === activeScrapeJobId;
+              return (
+                <li key={job.id}>
+                  <button
+                    type="button"
+                    onClick={() => onSelectScrapeJob(isActive ? null : job.id)}
+                    className={`flex w-full flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm hover:border-accent-500/40 ${
+                      isActive ? 'border-accent-500/60 bg-accent-500/5' : 'border-border bg-background'
+                    }`}
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-foreground">
+                        {SCRAPE_SOURCE_LABELS[job.sourceType]} — {job.businessType} em {job.city}/{job.state}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {job.leadsFound} lead{job.leadsFound === 1 ? '' : 's'} encontrado
+                        {job.leadsFound === 1 ? '' : 's'} · {new Date(job.createdAt).toLocaleString('pt-BR')}
+                        {job.errorMessage ? ` · ${job.errorMessage}` : ''}
+                      </span>
+                    </div>
+                    <Badge value={job.status} />
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -136,6 +152,9 @@ export default function LeadsPage() {
   const { membership } = useCurrentMembership(organizationId);
   const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
   const members = useMembers(organizationId);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
@@ -145,6 +164,24 @@ export default function LeadsPage() {
   const [hasContactMethod, setHasContactMethod] = useState<'' | 'true' | 'false'>('');
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  // "Uma lista pra cada busca" — vive na URL (`?scrapeJobId=`) pra ser
+  // compartilhável/voltar com o botão do navegador, setado ao clicar numa
+  // busca no `ScrapeJobsPanel` abaixo.
+  const scrapeJobId = searchParams.get('scrapeJobId') ?? undefined;
+  function setScrapeJobFilter(jobId: string | null) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (jobId) {
+      params.set('scrapeJobId', jobId);
+    } else {
+      params.delete('scrapeJobId');
+    }
+    const query = params.toString();
+    router.push(query ? `${pathname}?${query}` : pathname);
+  }
+
+  const scrapeJobs = useScrapeJobs(organizationId);
+  const activeScrapeJob = scrapeJobs.data?.find((job) => job.id === scrapeJobId);
+
   const leads = useLeads(organizationId, {
     city: city || undefined,
     state: state || undefined,
@@ -152,6 +189,7 @@ export default function LeadsPage() {
     status: status || undefined,
     hasWebsite: hasWebsite === '' ? undefined : hasWebsite === 'true',
     hasContactMethod: hasContactMethod === '' ? undefined : hasContactMethod === 'true',
+    scrapeJobId,
   });
   const createScrapeJob = useCreateScrapeJob(organizationId);
 
@@ -278,6 +316,24 @@ export default function LeadsPage() {
         </Select>
       </div>
 
+      {scrapeJobId && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-500/40 bg-accent-500/5 px-3 py-2 text-sm">
+          <span className="text-foreground">
+            Mostrando resultados de:{' '}
+            {activeScrapeJob
+              ? `${SCRAPE_SOURCE_LABELS[activeScrapeJob.sourceType]} — ${activeScrapeJob.businessType} em ${activeScrapeJob.city}/${activeScrapeJob.state}`
+              : 'uma busca específica'}
+          </span>
+          <button
+            type="button"
+            className="text-xs font-medium text-accent-400 hover:underline"
+            onClick={() => setScrapeJobFilter(null)}
+          >
+            Limpar filtro
+          </button>
+        </div>
+      )}
+
       {leads.isLoading && <p className="text-muted-foreground">Carregando leads…</p>}
       {leads.isSuccess && leads.data.length === 0 && <p className="text-muted-foreground">Nenhum lead encontrado.</p>}
 
@@ -347,7 +403,11 @@ export default function LeadsPage() {
         </div>
       )}
 
-      <ScrapeJobsPanel organizationId={organizationId} />
+      <ScrapeJobsPanel
+        organizationId={organizationId}
+        activeScrapeJobId={scrapeJobId}
+        onSelectScrapeJob={setScrapeJobFilter}
+      />
     </div>
   );
 }

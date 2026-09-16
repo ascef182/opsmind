@@ -249,6 +249,17 @@ describe('LeadsService', () => {
       });
     });
 
+    it('filtra por scrapeJobId quando informado (lista de leads de uma busca específica)', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { scrapeJobId: 'job-1' });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', scrapeJobId: 'job-1' },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
     it('hasContactMethod: true gera OR de phone/email/whatsapp/socialLinks quando sozinho', async () => {
       prisma.lead.findMany.mockResolvedValue([]);
 

@@ -14,6 +14,7 @@ function queryString(filter: ListLeadsFilter): string {
   if (filter.hasWebsite !== undefined) params.set('hasWebsite', String(filter.hasWebsite));
   if (filter.hasContactMethod !== undefined) params.set('hasContactMethod', String(filter.hasContactMethod));
   if (filter.search) params.set('search', filter.search);
+  if (filter.scrapeJobId) params.set('scrapeJobId', filter.scrapeJobId);
   const query = params.toString();
   return query ? `?${query}` : '';
 }

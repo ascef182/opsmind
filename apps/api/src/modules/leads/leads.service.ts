@@ -32,6 +32,9 @@ export interface ListLeadsFilter {
   hasWebsite?: boolean;
   hasContactMethod?: boolean;
   search?: string;
+  // "Uma lista pra cada busca" — filtra pelo `ScrapeJob` de origem (ver
+  // `ScrapeJobsPanel` em `apps/web/.../leads/page.tsx`).
+  scrapeJobId?: string;
 }
 
 // Mesmo racional de `PRE_OUTREACH_DRAFTED_STATUSES` em `outreach.service.ts`:
@@ -283,6 +286,7 @@ export class LeadsService {
         ...(filter.minScore !== undefined ? { score: { gte: filter.minScore } } : {}),
         ...(filter.city ? { city: { equals: filter.city, mode: 'insensitive' as const } } : {}),
         ...(filter.state ? { state: { equals: filter.state, mode: 'insensitive' as const } } : {}),
+        ...(filter.scrapeJobId ? { scrapeJobId: filter.scrapeJobId } : {}),
         ...(filter.hasWebsite === true ? { website: { not: null } } : {}),
         ...(filter.hasWebsite === false ? { website: null } : {}),
         ...noContactFilter,

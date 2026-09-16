@@ -328,6 +328,9 @@ export interface ListLeadsFilter {
   // canal de contato utilizável (phone/email/whatsapp/socialLinks).
   hasContactMethod?: boolean;
   search?: string;
+  // "Uma lista pra cada busca" — filtra pelo ScrapeJob de origem (painel
+  // "Buscas recentes" em app/.../leads/page.tsx).
+  scrapeJobId?: string;
 }
 
 // Espelha `Customer` de lib/customers/types.ts — só o suficiente para
