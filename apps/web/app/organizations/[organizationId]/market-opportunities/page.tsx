@@ -2,12 +2,14 @@
 
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
+import { toast } from 'sonner';
 import { isSafeHttpUrl } from '@opsmind/shared-types';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useMarketOpportunities, useUpdateMarketOpportunityStatus } from '@/lib/market-opportunities/use-market-opportunities';
 import {
   useCreateRedditWatchTopic,
   useRedditWatchTopics,
+  useRunRedditWatchTopicNow,
   useUpdateRedditWatchTopic,
 } from '@/lib/market-opportunities/use-reddit-watch-topics';
 import {
@@ -184,6 +186,7 @@ function RedditWatchTopicsPanel({ organizationId, canWrite }: { organizationId: 
   const topics = useRedditWatchTopics(organizationId);
   const createTopic = useCreateRedditWatchTopic(organizationId);
   const updateTopic = useUpdateRedditWatchTopic(organizationId);
+  const runNow = useRunRedditWatchTopicNow(organizationId);
 
   const [query, setQuery] = useState('');
   const [subreddit, setSubreddit] = useState('');
@@ -199,6 +202,13 @@ function RedditWatchTopicsPanel({ organizationId, canWrite }: { organizationId: 
 
   function toggleActive(topicId: string, isActive: boolean) {
     updateTopic.mutate({ topicId, input: { isActive: !isActive } });
+  }
+
+  function handleRunNow(topicId: string) {
+    runNow.mutate(topicId, {
+      onSuccess: () => toast.success('Verificação iniciada — o resultado aparece aqui em instantes.'),
+      onError: () => toast.error('Não foi possível iniciar a verificação agora.'),
+    });
   }
 
   return (
@@ -268,6 +278,16 @@ function RedditWatchTopicsPanel({ organizationId, canWrite }: { organizationId: 
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge value={topic.isActive ? 'ACTIVE' : 'INACTIVE'} />
+                  {canWrite && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={runNow.isPending && runNow.variables === topic.id}
+                      onClick={() => handleRunNow(topic.id)}
+                    >
+                      {runNow.isPending && runNow.variables === topic.id ? 'Verificando…' : 'Verificar agora'}
+                    </Button>
+                  )}
                   {canWrite && (
                     <Button
                       size="sm"

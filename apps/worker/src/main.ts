@@ -18,9 +18,11 @@ import { createAutomationQueue, createAutomationWorker, createRedisConnection } 
 import { createLeadScrapeQueue, createLeadScrapeWorker } from './lead-scrape-queue';
 import { createOutreachAutodraftQueue } from './outreach-autodraft-queue';
 import { createRedditClusteringQueue } from './reddit-clustering-queue';
+import { createRedditTopicScanWorker } from './reddit-topic-scan-queue';
 import { scanCustomerInactiveAutomations } from './automation-scan';
 import { scanProspectingTargets } from './prospecting-scan';
 import { scanRedditMiningTopics } from './reddit-mining-scan';
+import { processRedditTopicScanJob } from './reddit-topic-scan-processor';
 import { scanOutreachFollowups } from './outreach-followup-scan';
 import { scanTaskDueReminders } from './task-due-reminder-scan';
 import { scanMeetingReminders } from './meeting-reminder-scan';
@@ -174,6 +176,25 @@ async function main(): Promise<void> {
   // (abaixo) enfileira nela quando `scanRedditMiningTopics` encontra posts
   // candidatos para um `RedditWatchTopic` ativo.
   const redditClusteringQueue = createRedditClusteringQueue(connection);
+  // Fila `reddit-topic-scan` (E5, "Verificar agora" da UI): só consumidora
+  // aqui — quem produz é `apps/api` (`POST .../reddit-watch-topics/:id/scan-now`
+  // e `RedditWatchTopicsService.create()`). Reaproveita `gateways.camofox` e
+  // `redditClusteringQueue` já instanciados nesta função, mesma lógica de
+  // `runRedditMiningScan` abaixo (via `scanOneRedditWatchTopic`).
+  const redditTopicScanWorker = createRedditTopicScanWorker(connection, (job) =>
+    processRedditTopicScanJob(prisma, gateways.camofox, connection, job.data, (data) =>
+      redditClusteringQueue.add('cluster', data),
+    ),
+  );
+
+  redditTopicScanWorker.on('failed', (job, error) => {
+    logger.error(
+      { jobId: job?.id, topicId: job?.data.topicId, err: error },
+      'job de scan sob demanda do Reddit falhou',
+    );
+    Sentry.captureException(error, { extra: { jobId: job?.id, topicId: job?.data.topicId } });
+  });
+
   const leadScrapeWorker = createLeadScrapeWorker(connection, (job) =>
     processLeadScrapeJob(prisma, gateways, connection, job.data, (data) =>
       outreachAutodraftQueue.add('autodraft', data),
@@ -304,7 +325,7 @@ async function main(): Promise<void> {
   setInterval(runOutreachFollowupScan, OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS);
 
   logger.info(
-    `OpsMind worker rodando — filas "${queue.name}" (scan a cada ${SCAN_INTERVAL_MS}ms) e "${leadScrapeQueue.name}"`,
+    `OpsMind worker rodando — filas "${queue.name}" (scan a cada ${SCAN_INTERVAL_MS}ms), "${leadScrapeQueue.name}" e "${redditTopicScanWorker.name}"`,
   );
   logger.info(`Scan de prospecção autônoma a cada ${PROSPECTING_SCAN_INTERVAL_MS}ms`);
   logger.info(`Scan de mineração no Reddit a cada ${REDDIT_MINING_SCAN_INTERVAL_MS}ms`);

@@ -52,6 +52,23 @@ export function useUpdateRedditWatchTopic(organizationId: string) {
   });
 }
 
+// Dispara um scan manual "agora" (ignora isActive) — endpoint
+// `POST .../reddit-watch-topics/:id/scan-now`, `RedditWatchTopicsService.runNow`.
+// Invalida a query de tópicos: o resultado (lastScannedAt/lastScanStatus)
+// só aparece depois que o worker processar, mas o botão precisa refletir o
+// estado mais recente quando o usuário voltar a olhar a lista.
+export function useRunRedditWatchTopicNow(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (topicId: string) =>
+      apiFetch<unknown>(`/organizations/${organizationId}/reddit-watch-topics/${topicId}/scan-now`, {
+        method: 'POST',
+      }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'reddit-watch-topics'] }),
+  });
+}
+
 export function useRemoveRedditWatchTopic(organizationId: string) {
   const queryClient = useQueryClient();
   return useMutation({

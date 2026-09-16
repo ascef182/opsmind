@@ -34,6 +34,7 @@
 // são `@Global()`.
 import { Module } from '@nestjs/common';
 import { OrganizationsModule } from '../organizations/organizations.module';
+import { QueueModule } from '../../infrastructure/queue/queue.module';
 import { RedditWatchTopicsService } from './reddit-watch-topics.service';
 import { RedditWatchTopicsController } from './reddit-watch-topics.controller';
 import { MarketOpportunitiesService } from './market-opportunities.service';
@@ -46,7 +47,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 
 @Module({
-  imports: [OrganizationsModule],
+  imports: [OrganizationsModule, QueueModule],
   controllers: [RedditWatchTopicsController, MarketOpportunitiesController],
   providers: [
     RedditWatchTopicsService,

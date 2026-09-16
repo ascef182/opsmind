@@ -66,6 +66,19 @@ export class RedditWatchTopicsController {
     return this.redditWatchTopicsService.update(organizationId, topicId, dto, user.id);
   }
 
+  // Dispara um scan imediato pro tópico (E5), ignorando isActive — mesmo
+  // padrão de `ProspectingTargetsController.scanNow`.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post(':topicId/scan-now')
+  scanNow(
+    @Param('organizationId') organizationId: string,
+    @Param('topicId') topicId: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<unknown> {
+    return this.redditWatchTopicsService.runNow(organizationId, topicId, user.id);
+  }
+
   @Roles(...WRITE_ROLES)
   @UseGuards(RolesGuard)
   @HttpCode(204)

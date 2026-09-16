@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { RedditWatchTopic } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { RedditTopicScanQueueService } from '../../infrastructure/queue/reddit-topic-scan-queue.service';
 import { CreateRedditWatchTopicDto } from './dto/create-reddit-watch-topic.dto';
 import { UpdateRedditWatchTopicDto } from './dto/update-reddit-watch-topic.dto';
 
@@ -10,18 +11,23 @@ export interface ListRedditWatchTopicsFilter {
 }
 
 /**
- * CRUD simples de `RedditWatchTopic` — adaptado quase verbatim de
- * `ServiceOfferingsService` (`apps/api/src/modules/leads/service-offerings.
- * service.ts`): sem repository layer, `PrismaService` direto, audit log em
- * toda mutação. `apps/worker` é quem lê os tópicos ativos periodicamente
- * para buscar menções no Reddit e enfileirar clustering — este service só
- * cuida do CRUD que o humano opera.
+ * CRUD de `RedditWatchTopic` — adaptado quase verbatim de
+ * `ServiceOfferingsService`: sem repository layer, `PrismaService` direto,
+ * audit log em toda mutação. O sweep diário do worker
+ * (`apps/worker/src/reddit-mining-scan.ts`) continua varrendo TODOS os
+ * tópicos ativos — mas criar/reativar um tópico aqui também enfileira um
+ * scan imediato (`triggerScan` abaixo, fila `reddit-topic-scan`), mesmo
+ * padrão de `ProspectingTargetsService` (Trilha "monitoramento não
+ * funciona", plano pensando-como-empresa-com-agile-beaver.md).
  */
 @Injectable()
 export class RedditWatchTopicsService {
+  private readonly logger = new Logger(RedditWatchTopicsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly scanQueueService: RedditTopicScanQueueService,
   ) {}
 
   async create(
@@ -40,6 +46,10 @@ export class RedditWatchTopicsService {
       action: 'reddit_watch_topic.created',
       resource: `RedditWatchTopic:${topic.id}`,
     });
+
+    if (topic.isActive) {
+      await this.triggerScan(organizationId, topic.id);
+    }
 
     return topic;
   }
@@ -73,7 +83,7 @@ export class RedditWatchTopicsService {
     dto: UpdateRedditWatchTopicDto,
     actorUserId: string,
   ): Promise<RedditWatchTopic> {
-    await this.findByIdOrThrow(organizationId, id);
+    const existing = await this.findByIdOrThrow(organizationId, id);
 
     const updated = await this.prisma.redditWatchTopic.update({ where: { id }, data: dto });
 
@@ -86,7 +96,47 @@ export class RedditWatchTopicsService {
       metadata: { ...dto },
     });
 
+    // Reativação (false -> true) = "quero verificar de novo agora" — mesmo
+    // gatilho de `create()`.
+    if (!existing.isActive && updated.isActive) {
+      await this.triggerScan(organizationId, id);
+    }
+
     return updated;
+  }
+
+  /**
+   * Dispara um scan manual "agora" pro tópico, ignorando `isActive` (ação
+   * explícita do usuário) — retorna `null` (não lança) quando enfileirar
+   * falha, mesmo padrão de `ProspectingTargetsService.runNow`.
+   */
+  async runNow(organizationId: string, id: string, actorUserId: string): Promise<unknown> {
+    await this.findByIdOrThrow(organizationId, id);
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: actorUserId,
+      organizationId,
+      action: 'reddit_watch_topic.scan_requested',
+      resource: `RedditWatchTopic:${id}`,
+    });
+
+    return this.triggerScan(organizationId, id);
+  }
+
+  // Best-effort: um scan disparado por aqui é um acelerador, não a única
+  // forma do tópico ser verificado — o sweep diário do worker continua como
+  // rede de segurança. Falha aqui (fila/Redis indisponível) nunca derruba
+  // `create()`/`update()`/`runNow()`.
+  private async triggerScan(organizationId: string, topicId: string): Promise<unknown> {
+    try {
+      return await this.scanQueueService.enqueue({ organizationId, topicId });
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao disparar scan imediato pro tópico ${topicId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
   }
 
   async remove(organizationId: string, id: string, actorUserId: string): Promise<void> {

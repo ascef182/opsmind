@@ -1,9 +1,11 @@
-import type { PrismaClient } from '@opsmind/database';
+import type { PrismaClient, Prisma } from '@opsmind/database';
 import type { CamofoxGateway } from '@opsmind/integrations';
 import { isSafeHttpUrl, type RedditClusteringJobData } from '@opsmind/shared-types';
 import type Redis from 'ioredis';
 import * as Sentry from '@sentry/node';
 import { isOverBudget, recordSpend } from './budget';
+
+export type RedditWatchTopicForScan = Prisma.RedditWatchTopicGetPayload<{ include: { organization: true } }>;
 
 /**
  * Quantos posts candidatos buscar por `RedditWatchTopic` a cada tick do scan
@@ -89,80 +91,97 @@ export async function scanRedditMiningTopics(
   });
 
   let enqueuedCount = 0;
-
   for (const topic of topics) {
-    try {
-      // Orçamento ANTES da chamada que gasta (Global Constraint do plano) —
-      // mesmo `scrapingMonthlyBudget` que `prospecting-scan.ts`/
-      // `lead-scrape-processor.ts` consultam. Estourado: o tópico é pulado
-      // sem nenhuma chamada ao Camoufox e sem contar pro retorno.
-      const monthlyBudget =
-        topic.organization.scrapingMonthlyBudget !== null
-          ? Number(topic.organization.scrapingMonthlyBudget)
-          : null;
-      if (await isOverBudget(redis, topic.organizationId, monthlyBudget)) {
-        await recordScanAttempt(prisma, topic.id, 'SKIPPED_BUDGET', null);
-        continue;
-      }
-
-      const query = topic.subreddit ? `subreddit:${topic.subreddit} ${topic.query}` : topic.query;
-
-      const results = await camofox.search({
-        macro: '@reddit_search',
-        query,
-        limit: REDDIT_MINING_SEARCH_LIMIT,
-      });
-
-      // A chamada aconteceu (custou tempo de computação/proxy) independente
-      // de ter voltado vazia — registra o gasto aqui, antes de qualquer
-      // `continue`, nunca só no caminho feliz.
-      await recordSpend(redis, topic.organizationId, CAMOFOX_SEARCH_COST_USD);
-
-      // Corte de esquema na INGESTÃO: a URL de cada post raspado é ecoada
-      // pela IA do clustering para `MarketOpportunity.sourceUrls`, que vira
-      // `href` no frontend — nada que não seja http/https pode entrar no
-      // pipeline (mesma regra de `Lead.socialLinks`, ver `isSafeHttpUrl`).
-      const safeResults = results.filter((result) => isSafeHttpUrl(result.url));
-
-      if (safeResults.length === 0) {
-        // Resultado vazio é esperado (não é erro): `@reddit_search` via
-        // Camoufox é uma fonte não verificada (ver ressalvas no comentário
-        // de topo de `CamofoxGatewayService`) — um tópico sem posts
-        // candidatos neste tick simplesmente não gera job, e o scan segue
-        // pros próximos tópicos.
-        // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado
-        console.debug(
-          `[reddit-mining-scan] busca sem resultados utilizáveis para o tópico ${topic.id} (org ${topic.organizationId}) — pulando.`,
-        );
-        await recordScanAttempt(prisma, topic.id, 'OK', null);
-        continue;
-      }
-
-      await enqueueClusteringJob({
-        organizationId: topic.organizationId,
-        topicId: topic.id,
-        topicQuery: topic.query,
-        candidatePosts: safeResults.map((result) => ({
-          url: result.url,
-          title: result.title,
-          textContent: result.textContent,
-        })),
-      });
-
-      await recordScanAttempt(prisma, topic.id, 'OK', null);
-      enqueuedCount += 1;
-    } catch (error) {
-      Sentry.captureException(error, {
-        extra: { redditWatchTopicId: topic.id, organizationId: topic.organizationId },
-      });
-      // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
-      console.error(
-        `[reddit-mining-scan] falha ao buscar/enfileirar posts candidatos do tópico ${topic.id} (org ${topic.organizationId}):`,
-        error,
-      );
-      await recordScanAttempt(prisma, topic.id, 'ERROR', error instanceof Error ? error.message : String(error));
-    }
+    const enqueued = await scanOneRedditWatchTopic(prisma, topic, camofox, redis, enqueueClusteringJob);
+    if (enqueued) enqueuedCount += 1;
   }
 
   return enqueuedCount;
+}
+
+/**
+ * Um único tópico — extraído de `scanRedditMiningTopics` (sweep periódico,
+ * `main.ts`) pra ser reaproveitado também pelo caminho on-demand
+ * (`reddit-topic-scan-processor.ts`, consumer do "Verificar agora" da UI) —
+ * mesmo orçamento/busca/enfileiramento/registro de status nos dois casos,
+ * sem duplicar a lógica.
+ */
+export async function scanOneRedditWatchTopic(
+  prisma: PrismaClient,
+  topic: RedditWatchTopicForScan,
+  camofox: CamofoxGateway,
+  redis: Redis,
+  enqueueClusteringJob: (data: RedditClusteringJobData) => Promise<unknown>,
+): Promise<boolean> {
+  try {
+    // Orçamento ANTES da chamada que gasta (Global Constraint do plano) —
+    // mesmo `scrapingMonthlyBudget` que `prospecting-scan.ts`/
+    // `lead-scrape-processor.ts` consultam. Estourado: o tópico é pulado
+    // sem nenhuma chamada ao Camoufox e sem contar pro retorno.
+    const monthlyBudget =
+      topic.organization.scrapingMonthlyBudget !== null
+        ? Number(topic.organization.scrapingMonthlyBudget)
+        : null;
+    if (await isOverBudget(redis, topic.organizationId, monthlyBudget)) {
+      await recordScanAttempt(prisma, topic.id, 'SKIPPED_BUDGET', null);
+      return false;
+    }
+
+    const query = topic.subreddit ? `subreddit:${topic.subreddit} ${topic.query}` : topic.query;
+
+    const results = await camofox.search({
+      macro: '@reddit_search',
+      query,
+      limit: REDDIT_MINING_SEARCH_LIMIT,
+    });
+
+    // A chamada aconteceu (custou tempo de computação/proxy) independente
+    // de ter voltado vazia — registra o gasto aqui, antes de qualquer
+    // `return`, nunca só no caminho feliz.
+    await recordSpend(redis, topic.organizationId, CAMOFOX_SEARCH_COST_USD);
+
+    // Corte de esquema na INGESTÃO: a URL de cada post raspado é ecoada
+    // pela IA do clustering para `MarketOpportunity.sourceUrls`, que vira
+    // `href` no frontend — nada que não seja http/https pode entrar no
+    // pipeline (mesma regra de `Lead.socialLinks`, ver `isSafeHttpUrl`).
+    const safeResults = results.filter((result) => isSafeHttpUrl(result.url));
+
+    if (safeResults.length === 0) {
+      // Resultado vazio é esperado (não é erro): `@reddit_search` via
+      // Camoufox é uma fonte não verificada (ver ressalvas no comentário
+      // de topo de `CamofoxGatewayService`) — um tópico sem posts
+      // candidatos neste tick simplesmente não gera job.
+      // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado
+      console.debug(
+        `[reddit-mining-scan] busca sem resultados utilizáveis para o tópico ${topic.id} (org ${topic.organizationId}) — pulando.`,
+      );
+      await recordScanAttempt(prisma, topic.id, 'OK', null);
+      return false;
+    }
+
+    await enqueueClusteringJob({
+      organizationId: topic.organizationId,
+      topicId: topic.id,
+      topicQuery: topic.query,
+      candidatePosts: safeResults.map((result) => ({
+        url: result.url,
+        title: result.title,
+        textContent: result.textContent,
+      })),
+    });
+
+    await recordScanAttempt(prisma, topic.id, 'OK', null);
+    return true;
+  } catch (error) {
+    Sentry.captureException(error, {
+      extra: { redditWatchTopicId: topic.id, organizationId: topic.organizationId },
+    });
+    // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
+    console.error(
+      `[reddit-mining-scan] falha ao buscar/enfileirar posts candidatos do tópico ${topic.id} (org ${topic.organizationId}):`,
+      error,
+    );
+    await recordScanAttempt(prisma, topic.id, 'ERROR', error instanceof Error ? error.message : String(error));
+    return false;
+  }
 }

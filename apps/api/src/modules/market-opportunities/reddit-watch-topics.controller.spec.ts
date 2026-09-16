@@ -7,6 +7,7 @@ describe('RedditWatchTopicsController', () => {
     list: jest.Mock;
     findByIdOrThrow: jest.Mock;
     update: jest.Mock;
+    runNow: jest.Mock;
     remove: jest.Mock;
   };
 
@@ -16,6 +17,7 @@ describe('RedditWatchTopicsController', () => {
       list: jest.fn(),
       findByIdOrThrow: jest.fn(),
       update: jest.fn(),
+      runNow: jest.fn(),
       remove: jest.fn(),
     };
     controller = new RedditWatchTopicsController(service as never);
@@ -61,6 +63,15 @@ describe('RedditWatchTopicsController', () => {
     await controller.update('org-1', 'topic-1', { id: 'user-1' }, { isActive: false });
 
     expect(service.update).toHaveBeenCalledWith('org-1', 'topic-1', { isActive: false }, 'user-1');
+  });
+
+  it('scanNow delega ao service com o userId do chamador', async () => {
+    service.runNow.mockResolvedValue({ id: 'job-1' });
+
+    const result = await controller.scanNow('org-1', 'topic-1', { id: 'user-1' });
+
+    expect(service.runNow).toHaveBeenCalledWith('org-1', 'topic-1', 'user-1');
+    expect(result).toEqual({ id: 'job-1' });
   });
 
   it('remove delega ao service com o userId do chamador', async () => {

@@ -22,3 +22,15 @@ export interface RedditClusteringJobData {
     textContent: string | null;
   }>;
 }
+
+// Fila "escaneie este tópico agora" — direção oposta de REDDIT_CLUSTERING_QUEUE:
+// produtor em apps/api (POST .../reddit-watch-topics/:id/scan-now e
+// RedditWatchTopicsService.create()), consumidor em apps/worker
+// (reddit-topic-scan-processor.ts, reaproveita scanOneRedditWatchTopic de
+// reddit-mining-scan.ts). Mesmo padrão de LEAD_SCRAPE_QUEUE.
+export const REDDIT_TOPIC_SCAN_QUEUE = 'reddit-topic-scan';
+
+export interface RedditTopicScanJobData {
+  organizationId: string;
+  topicId: string;
+}
