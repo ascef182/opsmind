@@ -108,3 +108,35 @@ describe('DealProposalService.generate', () => {
     expect(prisma.deal.update).not.toHaveBeenCalled();
   });
 });
+
+describe('DealProposalService.downloadPdf', () => {
+  it('renderiza a proposalDraft já gerada como PDF (bytes começam com %PDF)', async () => {
+    const { service, dealsService, prisma } = buildDeps();
+    dealsService.findByIdOrThrow.mockResolvedValue({
+      ...baseDeal,
+      proposalDraft: 'Minuta de proposta...',
+      proposalGeneratedAt: new Date('2026-09-20T10:00:00Z'),
+    });
+    prisma.customer.findFirst.mockResolvedValue(baseCustomer);
+
+    const buffer = await service.downloadPdf('org-1', 'deal-1');
+
+    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+  });
+
+  it('rejeita quando nenhuma proposta foi gerada ainda (proposalDraft null)', async () => {
+    const { service, dealsService, prisma } = buildDeps();
+    dealsService.findByIdOrThrow.mockResolvedValue({ ...baseDeal, proposalDraft: null });
+    prisma.customer.findFirst.mockResolvedValue(baseCustomer);
+
+    await expect(service.downloadPdf('org-1', 'deal-1')).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejeita quando o cliente vinculado não é encontrado', async () => {
+    const { service, dealsService, prisma } = buildDeps();
+    dealsService.findByIdOrThrow.mockResolvedValue({ ...baseDeal, proposalDraft: 'Minuta...' });
+    prisma.customer.findFirst.mockResolvedValue(null);
+
+    await expect(service.downloadPdf('org-1', 'deal-1')).rejects.toThrow(BadRequestException);
+  });
+});

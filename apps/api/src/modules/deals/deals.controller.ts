@@ -1,4 +1,19 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Header,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
+import type { Response } from 'express';
 import type { Deal } from '@opsmind/database';
 import { DealsService } from './deals.service';
 import { DealProposalService } from './deal-proposal.service';
@@ -68,6 +83,24 @@ export class DealsController {
     @CurrentUser() user: { id: string },
   ): Promise<Deal> {
     return this.dealProposalService.generate(organizationId, dealId, user.id);
+  }
+
+  // Sem `@Roles` — leitura, mesmo padrão de `findOne`/`list` acima e de
+  // `MeetingsController.downloadIcs`. `StreamableFile`, não um `Buffer` cru
+  // — um `Buffer` devolvido direto do controller é tratado como objeto
+  // JSON pelo Nest (`res.json({ type: 'Buffer', data: [...] })`), corrompendo
+  // o PDF; `StreamableFile` é o jeito idiomático do Nest de sinalizar
+  // "resposta binária", envia os bytes crus.
+  @Get(':dealId/proposal.pdf')
+  @Header('Content-Type', 'application/pdf')
+  async downloadProposalPdf(
+    @Param('organizationId') organizationId: string,
+    @Param('dealId') dealId: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const pdf = await this.dealProposalService.downloadPdf(organizationId, dealId);
+    res.setHeader('Content-Disposition', `attachment; filename="proposta-${dealId}.pdf"`);
+    return new StreamableFile(pdf);
   }
 
   @Roles(...WRITE_ROLES)

@@ -7,6 +7,7 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { BudgetService } from '../ai/services/budget.service';
 import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
 import { DealsService } from './deals.service';
+import { buildProposalPdf } from './utils/build-proposal-pdf';
 
 // Mesma tabela de preço/modelo duplicada em `OutreachService` — mesmo motivo
 // documentado lá: `DealsModule` não pode importar `AiModule` (ciclo, já que
@@ -50,13 +51,7 @@ export class DealProposalService {
 
   async generate(organizationId: string, dealId: string, userId: string): Promise<Deal> {
     const deal = await this.dealsService.findByIdOrThrow(organizationId, dealId);
-
-    const customer = await this.prisma.customer.findFirst({
-      where: { id: deal.customerId, organizationId, deletedAt: null },
-    });
-    if (!customer) {
-      throw new BadRequestException('Cliente vinculado ao negócio não encontrado.');
-    }
+    const customer = await this.findCustomerOrThrow(organizationId, deal.customerId);
 
     const organization = await this.organizationsService.findById(organizationId);
     const monthlyBudget = organization?.aiMonthlyBudget ? Number(organization.aiMonthlyBudget) : null;
@@ -108,6 +103,44 @@ export class DealProposalService {
     });
 
     return updated;
+  }
+
+  /**
+   * `GET .../deals/:dealId/proposal.pdf` — renderiza a `proposalDraft` já
+   * gerada (texto, revisável) como PDF pra download. Não gera nada novo:
+   * 400 se `generate()` nunca rodou pra este Deal, mesma lógica de
+   * `MeetingsController.downloadIcs` exigir o registro já existir.
+   */
+  async downloadPdf(organizationId: string, dealId: string): Promise<Buffer> {
+    const deal = await this.dealsService.findByIdOrThrow(organizationId, dealId);
+    if (!deal.proposalDraft) {
+      throw new BadRequestException('Nenhuma proposta gerada ainda para este negócio.');
+    }
+    const customer = await this.findCustomerOrThrow(organizationId, deal.customerId);
+
+    return buildProposalPdf({
+      dealTitle: deal.title,
+      customerName: customer.name,
+      customerCompany: customer.company,
+      value: deal.value.toString(),
+      currency: deal.currency,
+      expectedCloseDate: deal.expectedCloseDate,
+      proposalDraft: deal.proposalDraft,
+      generatedAt: deal.proposalGeneratedAt,
+    });
+  }
+
+  private async findCustomerOrThrow(
+    organizationId: string,
+    customerId: string,
+  ): Promise<{ name: string; company: string | null }> {
+    const customer = await this.prisma.customer.findFirst({
+      where: { id: customerId, organizationId, deletedAt: null },
+    });
+    if (!customer) {
+      throw new BadRequestException('Cliente vinculado ao negócio não encontrado.');
+    }
+    return customer;
   }
 
   private buildPrompt(deal: Deal, customer: { name: string; company: string | null }): string {

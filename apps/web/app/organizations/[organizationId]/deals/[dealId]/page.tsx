@@ -5,8 +5,20 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useCustomer } from '@/lib/customers/use-customers';
-import { useDeal, useGenerateDealProposal, useMoveDealStage, useUpdateDeal } from '@/lib/deals/use-deals';
-import { DEAL_STAGE_LABELS, DEAL_STAGE_TRANSITIONS, WRITE_ROLES, formatCurrency, type DealStage } from '@/lib/deals/types';
+import {
+  downloadDealProposalPdf,
+  useDeal,
+  useGenerateDealProposal,
+  useMoveDealStage,
+  useUpdateDeal,
+} from '@/lib/deals/use-deals';
+import {
+  DEAL_STAGE_LABELS,
+  DEAL_STAGE_TRANSITIONS,
+  WRITE_ROLES,
+  formatCurrency,
+  type DealStage,
+} from '@/lib/deals/types';
 import {
   useCancelMeeting,
   useCreateMeeting,
@@ -36,6 +48,7 @@ export default function DealDetailPage() {
   const createMeeting = useCreateMeeting(organizationId, dealId);
   const cancelMeeting = useCancelMeeting(organizationId, dealId);
   const [icsError, setIcsError] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   if (deal.isLoading) {
     return <p className="text-muted-foreground">Carregando negócio…</p>;
@@ -167,17 +180,34 @@ export default function DealDetailPage() {
         <Card>
           <div className="flex items-center justify-between">
             <h2 className="font-medium text-foreground">Proposta</h2>
-            <Button size="sm" disabled={generateProposal.isPending} onClick={() => generateProposal.mutate()}>
-              {generateProposal.isPending
-                ? 'Gerando…'
-                : deal.data.proposalDraft
-                  ? 'Gerar novamente'
-                  : 'Gerar proposta'}
-            </Button>
+            <div className="flex items-center gap-2">
+              {deal.data.proposalDraft && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setPdfError(null);
+                    downloadDealProposalPdf(organizationId, dealId, `proposta-${dealId}.pdf`).catch(() =>
+                      setPdfError('Não foi possível baixar o PDF da proposta'),
+                    );
+                  }}
+                >
+                  Baixar PDF
+                </Button>
+              )}
+              <Button size="sm" disabled={generateProposal.isPending} onClick={() => generateProposal.mutate()}>
+                {generateProposal.isPending
+                  ? 'Gerando…'
+                  : deal.data.proposalDraft
+                    ? 'Gerar novamente'
+                    : 'Gerar proposta'}
+              </Button>
+            </div>
           </div>
           <FormError
             message={generateProposal.isError ? (generateProposal.error as ApiError).message : null}
           />
+          <FormError message={pdfError} />
           {deal.data.proposalDraft ? (
             <form
               key={deal.data.proposalGeneratedAt ?? deal.data.proposalDraft}

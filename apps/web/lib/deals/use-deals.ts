@@ -1,7 +1,9 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from '../api-client';
+import { apiFetch, ApiError } from '../api-client';
+import { getStoredTokens } from '../auth/token-storage';
+import { env } from '../env';
 import type { CreateDealInput, Deal, ListDealsFilter, MoveDealStageInput, UpdateDealInput } from './types';
 
 function queryString(filter: ListDealsFilter): string {
@@ -84,6 +86,28 @@ export function useGenerateDealProposal(organizationId: string, dealId: string) 
       apiFetch<Deal>(`/organizations/${organizationId}/deals/${dealId}/generate-proposal`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'deals'] }),
   });
+}
+
+// `apiFetch` sempre faz `response.json()` — não serve pra baixar o PDF
+// (`application/pdf`). Fetch dedicado com o mesmo access token, convertido
+// em Blob pra disparar o download do navegador — mesmo padrão de
+// `downloadMeetingIcs` em lib/meetings/use-meetings.ts.
+export async function downloadDealProposalPdf(organizationId: string, dealId: string, filename: string): Promise<void> {
+  const tokens = getStoredTokens();
+  const response = await fetch(
+    `${env.NEXT_PUBLIC_API_URL}/organizations/${organizationId}/deals/${dealId}/proposal.pdf`,
+    { headers: tokens ? { Authorization: `Bearer ${tokens.accessToken}` } : {} },
+  );
+  if (!response.ok) {
+    throw new ApiError('Não foi possível baixar o PDF da proposta', response.status);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 export function useDeleteDeal(organizationId: string) {
