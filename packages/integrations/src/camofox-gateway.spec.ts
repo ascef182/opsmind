@@ -16,6 +16,71 @@ describe('CamofoxGatewayService', () => {
     } as unknown as Response;
   }
 
+  // Os 3 testes abaixo foram todos confirmados ao vivo contra uma instância
+  // real do camofox-browser (v1.16.0, rodando nativo fora do Docker) — o
+  // contrato documentado em `camofox-gateway.ts` (Ressalva no topo do
+  // arquivo: "não testado contra uma instância real") estava desatualizado
+  // em 3 pontos independentes.
+  describe('requisições ao camofox — corpo/query corretos pra API atual', () => {
+    it('createTab: não envia o campo "url" no corpo (about:blank agora é rejeitado com 400 pelo servidor)', async () => {
+      let tabsRequestBody: string | undefined;
+      global.fetch = jest.fn(async (input: string, init?: { body?: string }) => {
+        const url = String(input);
+        if (url.endsWith('/tabs')) {
+          tabsRequestBody = init?.body;
+          return jsonResponse({ id: 'tab-1' });
+        }
+        if (url.includes('/navigate')) return jsonResponse({ ok: true });
+        if (url.includes('/snapshot')) return jsonResponse({ snapshot: '' });
+        return jsonResponse(null, { status: 204 });
+      }) as unknown as typeof fetch;
+
+      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
+
+      expect(tabsRequestBody).toBeDefined();
+      const parsed = JSON.parse(tabsRequestBody as string);
+      expect(parsed).not.toHaveProperty('url');
+      expect(parsed).toMatchObject({ userId: expect.any(String), sessionKey: expect.any(String) });
+    });
+
+    it('getSnapshot: manda userId como query param (obrigatório — servidor responde 400 sem ele)', async () => {
+      const calledUrls: string[] = [];
+      global.fetch = jest.fn(async (input: string) => {
+        const url = String(input);
+        calledUrls.push(url);
+        if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
+        if (url.includes('/navigate')) return jsonResponse({ ok: true });
+        if (url.includes('/snapshot')) return jsonResponse({ snapshot: '' });
+        return jsonResponse(null, { status: 204 });
+      }) as unknown as typeof fetch;
+
+      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
+
+      const snapshotUrl = calledUrls.find((u) => u.includes('/snapshot'));
+      expect(snapshotUrl).toMatch(/[?&]userId=/);
+    });
+
+    it('closeTabSafely: manda userId como query param no DELETE (obrigatório — servidor responde 400 sem ele)', async () => {
+      const calledUrls: string[] = [];
+      global.fetch = jest.fn(async (input: string, init?: { method?: string }) => {
+        const url = String(input);
+        calledUrls.push(url);
+        if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
+        if (url.includes('/navigate')) return jsonResponse({ ok: true });
+        if (url.includes('/snapshot')) return jsonResponse({ snapshot: '' });
+        return jsonResponse(null, { status: 204 });
+      }) as unknown as typeof fetch;
+
+      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
+
+      const deleteUrl = calledUrls.find((u) => /\/tabs\/[^/?]+(\?|$)/.test(u) && !u.endsWith('/tabs'));
+      expect(deleteUrl).toMatch(/[?&]userId=/);
+    });
+  });
+
   describe('parseAccessibilityTreeLinks (via search) — Finding 1: never fabricates url', () => {
     it('descarta entradas da árvore de acessibilidade sem URL reconhecível no texto (não fabrica url vazia)', async () => {
       const calls: string[] = [];

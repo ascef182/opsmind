@@ -186,10 +186,15 @@ export class CamofoxGatewayService implements CamofoxGateway {
   }
 
   private async createTab(): Promise<string> {
+    // `url` é opcional no schema real de `POST /tabs` (cria a tab em
+    // about:blank de qualquer forma quando omitido) — NUNCA mandar
+    // `url: 'about:blank'` explicitamente: confirmado ao vivo contra uma
+    // instância real do camofox-browser (v1.16.0) que o servidor rejeita
+    // com 400 ("Blocked URL scheme: about: — only http/https allowed") um
+    // valor de `url` que não seja http/https, mesmo sendo "about:blank".
     const body = (await this.request('POST', '/tabs', {
       userId: DEFAULT_USER_ID,
       sessionKey: randomUUID(),
-      url: 'about:blank',
     })) as { id?: string; tabId?: string } | null;
     const tabId = body?.id ?? body?.tabId;
     if (!tabId) {
@@ -206,13 +211,20 @@ export class CamofoxGatewayService implements CamofoxGateway {
     });
   }
 
+  // `userId` é query param obrigatório em GET .../snapshot — confirmado ao
+  // vivo (400 sem ele).
   private async getSnapshot(tabId: string): Promise<unknown> {
-    return this.request('GET', `/tabs/${tabId}/snapshot`);
+    return this.request('GET', `/tabs/${tabId}/snapshot?userId=${encodeURIComponent(DEFAULT_USER_ID)}`);
   }
 
   private async closeTabSafely(tabId: string): Promise<void> {
     try {
-      await this.request('DELETE', `/tabs/${tabId}`);
+      // `userId` é query param obrigatório em DELETE .../tabs/:id também —
+      // confirmado ao vivo (400 sem ele). Antes desse fix o DELETE sempre
+      // falhava silenciosamente (try/catch abaixo) e nenhuma tab era
+      // realmente fechada — só expirava sozinha pelo idle-timeout do
+      // camofox.
+      await this.request('DELETE', `/tabs/${tabId}?userId=${encodeURIComponent(DEFAULT_USER_ID)}`);
     } catch {
       // Nunca deixa falha ao fechar a tab mascarar o resultado (ou erro)
       // real da busca — o camofox eventualmente expira tabs órfãs sozinho.
