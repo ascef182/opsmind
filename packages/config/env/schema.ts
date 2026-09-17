@@ -58,6 +58,17 @@ export const envSchema = z.object({
   // qualquer evento (fail-closed — nunca aceita um evento não verificado),
   // mas o boot da API não trava.
   RESEND_WEBHOOK_SECRET: z.string().optional(),
+  // Data (YYYY-MM-DD) em que o domínio de envio começou a ser aquecido no
+  // Resend — usada por `EmailWarmupService` pra calcular o teto de e-mails de
+  // outreach permitido HOJE, seguindo o cronograma de aquecimento de domínio
+  // novo do Resend (resend:email-best-practices skill: dia 1 até 150, dia 7
+  // até 2.000). Ausente = sem teto de aquecimento (domínio já aquecido, ou
+  // `EMAIL_PROVIDER=console`/testes) — setar só depois que o domínio for
+  // verificado e o primeiro envio real estiver prestes a acontecer.
+  RESEND_DOMAIN_WARMUP_STARTED_AT: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'RESEND_DOMAIN_WARMUP_STARTED_AT deve ser YYYY-MM-DD')
+    .optional(),
   // Lembrete de follow-up (worker) — depois de quantos dias sem resposta uma
   // `OutreachMessage` SENT gera uma notificação pro usuário que aprovou o
   // envio. Configurável por ambiente pelo mesmo motivo de

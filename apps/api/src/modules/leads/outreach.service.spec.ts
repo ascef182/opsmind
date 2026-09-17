@@ -31,7 +31,11 @@ function buildDeps() {
   };
 
   const organizationsService = {
-    findById: jest.fn().mockResolvedValue({ id: 'org-1', aiMonthlyBudget: null }),
+    findById: jest.fn().mockResolvedValue({
+      id: 'org-1',
+      aiMonthlyBudget: null,
+      outreachPhysicalAddress: 'Rua Exemplo, 123 - São Paulo, SP, 01000-000',
+    }),
   };
 
   const auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -39,6 +43,10 @@ function buildDeps() {
   const leadsService = { findByIdOrThrow: jest.fn() };
   const serviceOfferingsService = { findByIdOrThrow: jest.fn() };
   const emailService = { sendEmail: jest.fn().mockResolvedValue({ id: null }) };
+  const emailWarmupService = {
+    checkCanSend: jest.fn().mockResolvedValue({ blocked: false }),
+    recordSent: jest.fn().mockResolvedValue(undefined),
+  };
 
   const service = new OutreachService(
     prisma as never,
@@ -50,6 +58,7 @@ function buildDeps() {
     leadsService as never,
     serviceOfferingsService as never,
     emailService as never,
+    emailWarmupService as never,
   );
 
   return {
@@ -62,6 +71,7 @@ function buildDeps() {
     leadsService,
     serviceOfferingsService,
     emailService,
+    emailWarmupService,
   };
 }
 
@@ -673,6 +683,103 @@ describe('OutreachService', () => {
 
       await expect(service.send('org-1', 'msg-1', 'user-1')).rejects.toThrow(BadRequestException);
       expect(emailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('rejeita quando o lead já pediu para não receber mais mensagens (unsubscribedAt setado)', async () => {
+      const { service, prisma, leadsService, emailService } = buildDeps();
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'EMAIL',
+        status: 'APPROVED',
+      });
+      leadsService.findByIdOrThrow.mockResolvedValue({
+        ...baseLead,
+        email: 'lead@example.com',
+        unsubscribedAt: new Date('2026-09-01'),
+      });
+
+      await expect(service.send('org-1', 'msg-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('rejeita quando a organização não configurou o endereço físico de outreach (exigido por lei)', async () => {
+      const { service, prisma, leadsService, organizationsService, emailService } = buildDeps();
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'EMAIL',
+        status: 'APPROVED',
+      });
+      leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, email: 'lead@example.com' });
+      organizationsService.findById.mockResolvedValue({
+        id: 'org-1',
+        aiMonthlyBudget: null,
+        outreachPhysicalAddress: null,
+      });
+
+      await expect(service.send('org-1', 'msg-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('rejeita e não envia quando EmailWarmupService bloqueia (teto de aquecimento ou taxa de bounce/reclamação)', async () => {
+      const { service, prisma, leadsService, emailService, emailWarmupService } = buildDeps();
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'EMAIL',
+        status: 'APPROVED',
+      });
+      leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, email: 'lead@example.com' });
+      emailWarmupService.checkCanSend.mockResolvedValue({ blocked: true, reason: 'teto atingido' });
+
+      await expect(service.send('org-1', 'msg-1', 'user-1')).rejects.toThrow('teto atingido');
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('registra o envio no EmailWarmupService depois de um envio bem-sucedido', async () => {
+      const { service, prisma, leadsService, emailService, emailWarmupService } = buildDeps();
+      const approved = {
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'EMAIL',
+        subject: 'Assunto',
+        body: 'Corpo',
+        status: 'APPROVED',
+      };
+      prisma.outreachMessage.findFirst
+        .mockResolvedValueOnce(approved)
+        .mockResolvedValueOnce({ ...approved, status: 'SENT' });
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 1 });
+      leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, email: 'lead@example.com' });
+      emailService.sendEmail.mockResolvedValueOnce({ id: 'resend-email-1' });
+
+      await service.send('org-1', 'msg-1', 'user-1');
+
+      expect(emailWarmupService.recordSent).toHaveBeenCalledTimes(1);
+    });
+
+    it('o HTML enviado inclui o endereço físico da organização e a instrução de opt-out por resposta', async () => {
+      const { service, prisma, leadsService, emailService } = buildDeps();
+      prisma.outreachMessage.findFirst
+        .mockResolvedValueOnce({
+          id: 'msg-1',
+          leadId: 'lead-1',
+          channel: 'EMAIL',
+          subject: 'Assunto',
+          body: 'Corpo',
+          status: 'APPROVED',
+        })
+        .mockResolvedValueOnce({ status: 'SENT' });
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 1 });
+      leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, email: 'lead@example.com' });
+      emailService.sendEmail.mockResolvedValueOnce({ id: 'resend-email-1' });
+
+      await service.send('org-1', 'msg-1', 'user-1');
+
+      const htmlSent = emailService.sendEmail.mock.calls[0]?.[0]?.html as string;
+      expect(htmlSent).toContain('Rua Exemplo, 123');
+      expect(htmlSent).toContain('responder este e-mail pedindo para parar');
     });
   });
 

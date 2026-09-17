@@ -23,8 +23,17 @@ function configService(overrides: Record<string, string | undefined> = {}) {
 function buildDeps(overrides: Record<string, string | undefined> = {}) {
   const prisma = { outreachMessage: { findFirst: jest.fn() } };
   const outreachService = { markRepliedFromWebhook: jest.fn().mockResolvedValue(undefined) };
-  const service = new ResendWebhookService(configService(overrides), prisma as never, outreachService as never);
-  return { service, prisma, outreachService };
+  const emailWarmupService = {
+    recordBounced: jest.fn().mockResolvedValue(undefined),
+    recordComplained: jest.fn().mockResolvedValue(undefined),
+  };
+  const service = new ResendWebhookService(
+    configService(overrides),
+    prisma as never,
+    outreachService as never,
+    emailWarmupService as never,
+  );
+  return { service, prisma, outreachService, emailWarmupService };
 }
 
 const rawBody = Buffer.from('{"type":"email.received"}');
@@ -61,13 +70,37 @@ describe('ResendWebhookService', () => {
     await expect(service.handleEvent(rawBody, headers)).rejects.toThrow(BadRequestException);
   });
 
-  it('ignora eventos que não são email.received', async () => {
+  it('ignora eventos que não são email.received/bounced/complained', async () => {
     const { service } = buildDeps();
     verifyMock.mockReturnValue({ type: 'email.sent', data: {} });
 
     await service.handleEvent(rawBody, headers);
 
     expect(receivingGetMock).not.toHaveBeenCalled();
+  });
+
+  it('email.bounced: registra no EmailWarmupService e não toca em OutreachMessage', async () => {
+    const { service, prisma, emailWarmupService } = buildDeps();
+    verifyMock.mockReturnValue({ type: 'email.bounced', data: { email_id: 'email-1' } });
+
+    await service.handleEvent(rawBody, headers);
+
+    expect(emailWarmupService.recordBounced).toHaveBeenCalledTimes(1);
+    expect(emailWarmupService.recordComplained).not.toHaveBeenCalled();
+    expect(receivingGetMock).not.toHaveBeenCalled();
+    expect(prisma.outreachMessage.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('email.complained: registra no EmailWarmupService e não toca em OutreachMessage', async () => {
+    const { service, prisma, emailWarmupService } = buildDeps();
+    verifyMock.mockReturnValue({ type: 'email.complained', data: { email_id: 'email-1' } });
+
+    await service.handleEvent(rawBody, headers);
+
+    expect(emailWarmupService.recordComplained).toHaveBeenCalledTimes(1);
+    expect(emailWarmupService.recordBounced).not.toHaveBeenCalled();
+    expect(receivingGetMock).not.toHaveBeenCalled();
+    expect(prisma.outreachMessage.findFirst).not.toHaveBeenCalled();
   });
 
   it('busca o email completo e ignora quando não há In-Reply-To', async () => {

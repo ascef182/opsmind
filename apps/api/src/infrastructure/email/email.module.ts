@@ -4,6 +4,7 @@ import type { Env } from '@opsmind/config/env/schema';
 import { EMAIL_SERVICE, type EmailService } from './email.service';
 import { ConsoleEmailProvider } from './console-email.provider';
 import { ResendEmailProvider } from './resend-email.provider';
+import { EmailWarmupService } from './email-warmup.service';
 
 @Module({
   providers: [
@@ -24,7 +25,8 @@ import { ResendEmailProvider } from './resend-email.provider';
       },
       inject: [ConfigService],
     },
+    EmailWarmupService,
   ],
-  exports: [EMAIL_SERVICE],
+  exports: [EMAIL_SERVICE, EmailWarmupService],
 })
 export class EmailModule {}

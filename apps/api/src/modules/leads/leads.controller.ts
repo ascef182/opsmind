@@ -76,6 +76,17 @@ export class LeadsController {
 
   @Roles(...WRITE_ROLES)
   @UseGuards(RolesGuard)
+  @Post(':leadId/unsubscribe')
+  unsubscribe(
+    @Param('organizationId') organizationId: string,
+    @Param('leadId') leadId: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<Lead> {
+    return this.leadsService.unsubscribe(organizationId, leadId, user.id);
+  }
+
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
   @Post(':leadId/enrich')
   enrich(
     @Param('organizationId') organizationId: string,

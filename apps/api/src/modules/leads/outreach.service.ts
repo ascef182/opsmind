@@ -1,4 +1,11 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type Anthropic from '@anthropic-ai/sdk';
 import type {
   AIRequest,
@@ -15,6 +22,7 @@ import { PrismaOutOfBandService } from '../../infrastructure/database/prisma-out
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EMAIL_SERVICE, type EmailService } from '../../infrastructure/email/email.service';
+import { EmailWarmupService } from '../../infrastructure/email/email-warmup.service';
 import { BudgetService } from '../ai/services/budget.service';
 import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
 import { LeadsService } from './leads.service';
@@ -132,6 +140,7 @@ export class OutreachService {
     private readonly leadsService: LeadsService,
     private readonly serviceOfferingsService: ServiceOfferingsService,
     @Inject(EMAIL_SERVICE) private readonly emailService: EmailService,
+    private readonly emailWarmupService: EmailWarmupService,
   ) {}
 
   // `actor`: quem pediu a geração — `{ type: 'USER', userId }` (chamador
@@ -421,13 +430,38 @@ export class OutreachService {
     if (!lead.email) {
       throw new BadRequestException('Lead não tem e-mail cadastrado — não é possível enviar automaticamente.');
     }
+    // Opt-out (CAN-SPAM/LGPD) — nunca envia pra um lead que já pediu pra
+    // parar, pra sempre nesta organização (ver LeadsService.unsubscribe).
+    if (lead.unsubscribedAt) {
+      throw new BadRequestException(
+        'Este lead pediu para não receber mais mensagens (unsubscribedAt setado) — envio bloqueado.',
+      );
+    }
+
+    // Endereço físico é exigido por lei em todo e-mail de outreach
+    // (CAN-SPAM) — sem isso configurado pela organização, recusa enviar em
+    // vez de mandar um e-mail não-conforme.
+    const organization = await this.organizationsService.findById(organizationId);
+    if (!organization?.outreachPhysicalAddress) {
+      throw new BadRequestException(
+        'Configure o endereço físico de correspondência da organização (outreachPhysicalAddress) antes de enviar outreach por e-mail — exigido por lei (CAN-SPAM).',
+      );
+    }
+
+    // Aquecimento de domínio + pausa automática por reputação (bounce/
+    // reclamação) — ver EmailWarmupService.
+    const warmupStatus = await this.emailWarmupService.checkCanSend();
+    if (warmupStatus.blocked) {
+      throw new ServiceUnavailableException(warmupStatus.reason);
+    }
 
     const sendResult = await this.emailService.sendEmail({
       to: lead.email,
       subject: message.subject ?? `Contato — ${lead.name}`,
-      html: this.renderOutreachHtml(message.body),
+      html: this.renderOutreachHtml(message.body, organization.outreachPhysicalAddress),
       idempotencyKey: `outreach-message/${messageId}`,
     });
+    await this.emailWarmupService.recordSent();
 
     const updated = await this.applyTransition(
       organizationId,
@@ -454,13 +488,29 @@ export class OutreachService {
   // linha: o texto pode conter dados de terceiros (nome/categoria do lead,
   // scraping) e não deve virar HTML executável dentro do cliente de email do
   // destinatário.
-  private renderOutreachHtml(body: string): string {
+  //
+  // `physicalAddress` é sempre não-nulo aqui (garantido por `send()`, que
+  // recusa enviar sem isso configurado) — parâmetro obrigatório em vez de
+  // opcional pra deixar essa invariante visível na assinatura, não só num
+  // comentário. Rodapé de compliance (CAN-SPAM/LGPD): endereço físico +
+  // opt-out por resposta (ver `LeadsService.unsubscribe` pra como isso é
+  // honrado). Reply-based em vez de link de um clique — suficiente pro
+  // volume/estágio atual; se o volume crescer o bastante pra exigir cumprir
+  // as regras de "bulk sender" do Gmail/Yahoo, isso precisa virar um link
+  // com header `List-Unsubscribe`/`List-Unsubscribe-Post` de verdade.
+  private renderOutreachHtml(body: string, physicalAddress: string): string {
     const escape = (s: string) =>
       s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return body
+    const bodyHtml = body
       .split('\n')
       .map((line) => `<p>${escape(line)}</p>`)
       .join('');
+    const footerHtml = [
+      '<hr/>',
+      `<p style="font-size:12px;color:#666;">${escape(physicalAddress)}</p>`,
+      '<p style="font-size:12px;color:#666;">Se preferir não receber mais mensagens como esta, é só responder este e-mail pedindo para parar.</p>',
+    ].join('');
+    return bodyHtml + footerHtml;
   }
 
   async markSent(organizationId: string, messageId: string, userId: string): Promise<OutreachMessage> {

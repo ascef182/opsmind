@@ -463,6 +463,56 @@ describe('LeadsService', () => {
     });
   });
 
+  describe('unsubscribe', () => {
+    it('seta unsubscribedAt e audita quando o lead ainda não tinha optado por sair', async () => {
+      prisma.lead.findFirst.mockResolvedValue({ id: 'lead-1', organizationId: 'org-1', unsubscribedAt: null });
+      prisma.lead.update.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        unsubscribedAt: new Date('2026-09-17'),
+      });
+
+      const result = await service.unsubscribe('org-1', 'lead-1', 'user-1');
+
+      expect(prisma.lead.update).toHaveBeenCalledWith({
+        where: { id: 'lead-1' },
+        data: { unsubscribedAt: expect.any(Date) },
+      });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorType: 'USER',
+          actorId: 'user-1',
+          organizationId: 'org-1',
+          action: 'lead.unsubscribed',
+          resource: 'Lead:lead-1',
+        }),
+      );
+      expect(result.unsubscribedAt).toBeInstanceOf(Date);
+    });
+
+    it('idempotente: lead já unsubscribed não chama update de novo nem re-audita', async () => {
+      const alreadyUnsubscribed = {
+        id: 'lead-1',
+        organizationId: 'org-1',
+        unsubscribedAt: new Date('2026-09-01'),
+      };
+      prisma.lead.findFirst.mockResolvedValue(alreadyUnsubscribed);
+
+      const result = await service.unsubscribe('org-1', 'lead-1', 'user-1');
+
+      expect(prisma.lead.update).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalled();
+      expect(result).toBe(alreadyUnsubscribed);
+    });
+
+    it('lança NotFoundException quando o lead não existe nesta organização', async () => {
+      prisma.lead.findFirst.mockResolvedValue(null);
+
+      await expect(service.unsubscribe('org-1', 'lead-1', 'user-1')).rejects.toThrow(NotFoundException);
+      expect(prisma.lead.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('enrich', () => {
     it('grava LeadEnrichment quando a Explorium encontra um match e recalcula o score', async () => {
       const lead = {

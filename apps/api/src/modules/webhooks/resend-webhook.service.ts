@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 import type { Env } from '@opsmind/config/env/schema';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { EmailWarmupService } from '../../infrastructure/email/email-warmup.service';
 import { OutreachService } from '../leads/outreach.service';
 
 export interface ResendWebhookHeaders {
@@ -32,6 +33,7 @@ export class ResendWebhookService {
     private readonly configService: ConfigService<Env, true>,
     private readonly prisma: PrismaService,
     private readonly outreachService: OutreachService,
+    private readonly emailWarmupService: EmailWarmupService,
   ) {}
 
   async handleEvent(rawBody: Buffer, headers: ResendWebhookHeaders): Promise<void> {
@@ -63,6 +65,20 @@ export class ResendWebhookService {
       });
     } catch {
       throw new BadRequestException('Assinatura do webhook do Resend inválida.');
+    }
+
+    // Sinal de reputação pro aquecimento do domínio (EmailWarmupService) —
+    // registrado independente de qual OutreachMessage originou o evento
+    // (contagem agregada por dia, não por mensagem individual): o que importa
+    // pra decidir "pode continuar enviando hoje" é a taxa global do domínio,
+    // não de qual lead veio.
+    if (event.type === 'email.bounced') {
+      await this.emailWarmupService.recordBounced();
+      return;
+    }
+    if (event.type === 'email.complained') {
+      await this.emailWarmupService.recordComplained();
+      return;
     }
 
     if (event.type !== 'email.received') {

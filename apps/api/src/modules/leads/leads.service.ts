@@ -430,6 +430,38 @@ export class LeadsService {
   }
 
   /**
+   * `POST .../leads/:leadId/unsubscribe` — opt-out de outreach (CAN-SPAM/
+   * LGPD). Nenhum fluxo automático chama isto ainda: o opt-out do OpsMind
+   * hoje é baseado em RESPOSTA (o rodapé do e-mail de outreach pede pra
+   * responder pedindo pra parar, ver `OutreachService.renderOutreachHtml`) —
+   * um humano vê essa resposta chegar na inbox de Aprovações/outreach (a
+   * mesma que já rastreia `email.received` via webhook) e clica aqui pra
+   * registrar o opt-out de verdade. Checado por `OutreachService.send()`
+   * ANTES de todo envio real, pra sempre nesta organização — nunca reaberto.
+   */
+  async unsubscribe(organizationId: string, id: string, actorUserId: string): Promise<Lead> {
+    const lead = await this.findByIdOrThrow(organizationId, id);
+    if (lead.unsubscribedAt) {
+      return lead;
+    }
+
+    const updated = await this.prisma.lead.update({
+      where: { id },
+      data: { unsubscribedAt: new Date() },
+    });
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: actorUserId,
+      organizationId,
+      action: 'lead.unsubscribed',
+      resource: `Lead:${id}`,
+    });
+
+    return updated;
+  }
+
+  /**
    * `POST .../leads/:leadId/enrich` — enrichment sob demanda de UM lead
    * (fora do fluxo de scrape em massa, que já enriquece via
    * `NEEDS_MATCH_ENRICHMENT` no worker): chama `ExploriumGateway.matchBusiness`

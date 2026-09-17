@@ -178,6 +178,12 @@ model Organization {
   // few-shot no prompt de `generate_outreach_message` (Task 10) — sem isso, o
   // prompt usa a orientação de tom padrão já escrita em OUTREACH_SYSTEM_PROMPT.
   outreachVoiceGuide    String?  @map("outreach_voice_guide") @db.Text
+  // Endereço físico de correspondência exigido em TODO e-mail de outreach
+  // (CAN-SPAM/EUA: obrigatório por lei, multa até $53k/e-mail; boa prática
+  // mesmo fora dos EUA) — sem isso preenchido, `OutreachService.send()`
+  // recusa enviar (ver comentário em `renderOutreachHtml`). Null só é
+  // aceitável antes da organização configurar isso pela primeira vez.
+  outreachPhysicalAddress String? @map("outreach_physical_address") @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -926,6 +932,14 @@ model Lead {
   // continua flexível (JSON livre) porque a forma varia por fonte, "o que for
   // encontrado" — não uma lista fixa de colunas por rede.
   socialLinks         Json?            @map("social_links")
+  // Opt-out de outreach (CAN-SPAM/LGPD) — ortogonal a `status` (pipeline de
+  // venda): um lead pode pedir pra não ser mais contatado em qualquer etapa.
+  // Setado manualmente por um humano (`LeadsController POST :leadId/unsubscribe`)
+  // depois de ver um pedido de descadastro (reply de e-mail, mensagem de
+  // WhatsApp) — nenhum fluxo automático seta isto ainda, ver comentário de
+  // `LeadsService.unsubscribe`. Checado por `OutreachService.send()` ANTES de
+  // todo envio real; nunca apagado depois de setado.
+  unsubscribedAt      DateTime?        @map("unsubscribed_at")
   actorType           AuditActorType   @map("actor_type")
   actorId             String?          @map("actor_id")
   discoveredAt        DateTime         @default(now()) @map("discovered_at")
