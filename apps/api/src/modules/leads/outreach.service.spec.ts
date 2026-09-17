@@ -169,6 +169,107 @@ describe('OutreachService', () => {
       expect(result).toEqual({ id: 'msg-1', status: 'DRAFT' });
     });
 
+    // Reescrita do prompt (2026-09-17): persona de SDR sênior + framework de
+    // 4 movimentos, pra sair do "apresentável mas genérico". Só checa que os
+    // trechos-chave sobrevivem, não o texto inteiro (evita um teste frágil
+    // que quebra a cada ajuste de redação).
+    it('system prompt inclui a persona de SDR e o framework de 4 movimentos (gancho/dor/oferta/CTA único)', async () => {
+      const { service, prisma, gateway, leadsService, serviceOfferingsService } = buildDeps();
+      leadsService.findByIdOrThrow.mockResolvedValue(baseLead);
+      serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
+      gateway.sendMessage.mockResolvedValue(mockGatewayResponse('rascunho'));
+      prisma.outreachMessage.create.mockResolvedValue({ id: 'msg-1' });
+
+      await service.generateDraft(
+        'org-1',
+        'lead-1',
+        { channel: 'EMAIL' },
+        { type: 'USER', userId: 'user-1' },
+      );
+
+      const systemPrompt = gateway.sendMessage.mock.calls[0]?.[0]?.system as string;
+      expect(systemPrompt).toContain('SDR (Sales Development Representative) sênior');
+      expect(systemPrompt).toContain('GANCHO');
+      expect(systemPrompt).toContain('DOR/CUSTO');
+      expect(systemPrompt).toContain('CTA ÚNICO');
+      expect(systemPrompt).toContain('nunca mais de um pedido/pergunta por mensagem');
+    });
+
+    // Antes desta task, `OutreachMessage.subject` nunca era preenchido pela
+    // IA (só via edição manual, `edit()`) — `send()` sempre caía no fallback
+    // genérico `Contato — ${lead.name}` mesmo quando fazia sentido ter um
+    // assunto específico ao negócio. O system prompt agora pede uma
+    // primeira linha `Assunto: ...` só pro canal EMAIL.
+    describe('extração de Assunto (canal EMAIL)', () => {
+      it('separa a linha "Assunto: ..." do corpo e grava em OutreachMessage.subject', async () => {
+        const { service, prisma, gateway, leadsService, serviceOfferingsService } = buildDeps();
+        leadsService.findByIdOrThrow.mockResolvedValue(baseLead);
+        serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
+        gateway.sendMessage.mockResolvedValue(
+          mockGatewayResponse(
+            'Assunto: Padaria Central sem site — vi algo que pode te interessar\n\nOlá! Vi que vocês não têm site...',
+          ),
+        );
+        prisma.outreachMessage.create.mockResolvedValue({ id: 'msg-1' });
+
+        await service.generateDraft(
+          'org-1',
+          'lead-1',
+          { channel: 'EMAIL' },
+          { type: 'USER', userId: 'user-1' },
+        );
+
+        expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            subject: 'Padaria Central sem site — vi algo que pode te interessar',
+            body: 'Olá! Vi que vocês não têm site...',
+          }),
+        });
+      });
+
+      it('sem uma linha "Assunto:" reconhecível, subject fica undefined e o body sai igual ao texto gerado', async () => {
+        const { service, prisma, gateway, leadsService, serviceOfferingsService } = buildDeps();
+        leadsService.findByIdOrThrow.mockResolvedValue(baseLead);
+        serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
+        gateway.sendMessage.mockResolvedValue(mockGatewayResponse('Olá! Vi que vocês não têm site...'));
+        prisma.outreachMessage.create.mockResolvedValue({ id: 'msg-1' });
+
+        await service.generateDraft(
+          'org-1',
+          'lead-1',
+          { channel: 'EMAIL' },
+          { type: 'USER', userId: 'user-1' },
+        );
+
+        expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            subject: undefined,
+            body: 'Olá! Vi que vocês não têm site...',
+          }),
+        });
+      });
+
+      it('canais fora de EMAIL nunca extraem assunto, mesmo se o texto começar com "Assunto:"', async () => {
+        const { service, prisma, gateway, leadsService, serviceOfferingsService } = buildDeps();
+        leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, whatsapp: '+5511999998888' });
+        serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
+        const rawText = 'Assunto: isso não deveria ser tratado como assunto\n\nOi, tudo bem?';
+        gateway.sendMessage.mockResolvedValue(mockGatewayResponse(rawText));
+        prisma.outreachMessage.create.mockResolvedValue({ id: 'msg-1' });
+
+        await service.generateDraft(
+          'org-1',
+          'lead-1',
+          { channel: 'WHATSAPP' },
+          { type: 'USER', userId: 'user-1' },
+        );
+
+        expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ subject: undefined, body: rawText }),
+        });
+      });
+    });
+
     // Task 10/pré-requisito da Task 11: quando o worker (não um humano) pede
     // a geração do rascunho, `AIRequest` não pode inventar um `userId` — e o
     // `OutreachMessage.actorType` continua `AI` de qualquer forma, porque
