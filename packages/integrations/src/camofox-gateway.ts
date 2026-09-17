@@ -32,12 +32,40 @@ export const CAMOFOX_GATEWAY = Symbol('CAMOFOX_GATEWAY');
 
 const DEFAULT_USER_ID = 'opsmind-leads';
 const DEFAULT_MIN_INTERVAL_MS = 2_000;
-// Mesmo valor default do `CamofoxScrapingClient` antigo
-// (`apps/api/src/infrastructure/scraping/camofox-scraping.client.ts`,
-// branch `feat/prospecting-outbound`) — uma chamada de rede a um processo
-// externo (o próprio camofox) nunca pode travar o worker indefinidamente se
-// o serviço parar de responder.
-const DEFAULT_TIMEOUT_MS = 30_000;
+// Originalmente 30_000 (mesmo valor default do `CamofoxScrapingClient`
+// antigo, branch `feat/prospecting-outbound`) — uma chamada de rede a um
+// processo externo (o próprio camofox) nunca pode travar o worker
+// indefinidamente se o serviço parar de responder. Subido pra 45_000:
+// confirmado ao vivo que `@google_search` sem cookies/histórico
+// consistentemente não retorna resultado orgânico do Google e cai no
+// fallback automático do camofox-browser pro DuckDuckGo — esse fallback
+// sozinho já leva ~31-32s (medido diretamente contra uma instância real),
+// estourando os 30s antigos e abortando a navegação bem antes do servidor
+// responder com sucesso.
+const DEFAULT_TIMEOUT_MS = 45_000;
+
+// Confirmado ao vivo: `POST .../navigate` retorna `navigationOk:true` assim
+// que o documento inicial carrega, mas o conteúdo de resultados de busca
+// (Google/DuckDuckGo) ainda está sendo renderizado nesse instante — ler
+// `GET .../links` imediatamente devolve só o "chrome" da página (nav/rodapé),
+// zero resultado. Esperando alguns segundos os resultados aparecem. Duas
+// tentativas (RENDER_WAIT_MS cada) em vez de uma esperada mais longa: se a
+// página genuinamente não tem resultado (ou já veio populada na primeira
+// tentativa), não faz sentido segurar o `search()` até o teto.
+const RENDER_WAIT_MS = 2_500;
+const RENDER_WAIT_MAX_ATTEMPTS = 2;
+
+// Hosts de motor de busca "genérico" cujo próprio domínio nunca é o destino
+// real de um resultado orgânico — confirmado ao vivo que `@google_search`
+// cai numa cadeia de fallback google → duckduckgo → bing (camofox-browser
+// v1.16.0), e a maior parte dos links de uma página de resultados desses
+// motores aponta de volta pro próprio motor (abas "Imagens"/"Notícias",
+// filtros, menu, rodapé) em vez de pro site do resultado. Deliberadamente
+// NÃO inclui `yelp.com`: pra `@yelp_search` o resultado de verdade (a página
+// do negócio) mora no próprio domínio Yelp, então excluir por host quebraria
+// esse macro — como isso nunca foi testado ao vivo, `@yelp_search` mantém
+// comportamento neutro (aceita qualquer link http(s) absoluto).
+const SEARCH_ENGINE_CHROME_HOSTS = new Set(['google.com', 'duckduckgo.com', 'bing.com']);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -99,57 +127,41 @@ class CallQueue {
  * (https://github.com/jo-inc/camofox-browser, servidor REST próprio, porta
  * padrão 9377).
  *
- * ENDPOINTS/PAYLOADS abaixo foram conferidos contra o README público do
- * projeto nesta sessão (2026-09-02) — NÃO contra uma instância real rodando
- * (nenhum Docker foi de fato executado aqui, então isto ainda não é uma
- * integração testada):
- *   - `POST {baseUrl}/tabs` com `{ userId, sessionKey, url }` → cria uma tab,
- *     resposta inclui `id`.
+ * ENDPOINTS/PAYLOADS abaixo, confirmados ao vivo contra uma instância real
+ * (v1.16.0, rodando nativo fora do Docker — ver `infra/docker/README.md`
+ * pro porquê):
+ *   - `POST {baseUrl}/tabs` com `{ userId, sessionKey }` (SEM `url` — ver
+ *     comentário em `createTab`) → cria uma tab, resposta inclui `tabId`.
  *   - `POST {baseUrl}/tabs/:id/navigate` com `{ userId, macro, query }` →
- *     navega/roda a macro de busca.
- *   - `GET {baseUrl}/tabs/:id/snapshot` → snapshot da página.
- *   - `DELETE {baseUrl}/tabs/:id` → fecha a tab, SEMPRE (inclusive em erro,
- *     via try/finally).
+ *     navega/roda a macro de busca. Pode cair num motor de busca diferente
+ *     do pedido (ex.: `@google_search` caindo pra DuckDuckGo — resposta traz
+ *     `searchEngine`/`fallbackFrom` quando isso acontece).
+ *   - `GET {baseUrl}/tabs/:id/links?userId=...` → lista `{ url, text }[]` já
+ *     com URLs absolutas resolvidas — usado pra extrair resultado de busca
+ *     (ver `getLinks`/`SEARCH_ENGINE_CHROME_HOSTS` abaixo). Muito mais
+ *     confiável que fazer parsing manual do texto do snapshot de
+ *     acessibilidade (abordagem antiga, nunca funcionava de verdade — ver
+ *     histórico do arquivo).
+ *   - `DELETE {baseUrl}/tabs/:id?userId=...` → fecha a tab, SEMPRE (inclusive
+ *     em erro, via try/finally).
  *   - `Authorization: Bearer {accessKey}` em todo request quando `accessKey`
  *     estiver setado (`CAMOFOX_ACCESS_KEY`).
  * Isto corrige a lógica de requisição do `CamofoxScrapingClient` do branch
  * antigo (que tinha suposições furadas sobre esse fluxo) — só o `CallQueue`
  * dele foi reaproveitado (ver acima).
  *
- * DUAS RESSALVAS AINDA NÃO VERIFICADAS CONTRA UMA INSTÂNCIA REAL (só contra
- * a documentação pública do projeto):
- *   1. O formato de resposta do `GET /snapshot` documentado é um blob de
- *      texto tipo árvore de acessibilidade (algo como
- *      `{ snapshot: "[link e2] Learn more ..." }`), NÃO uma lista
- *      estruturada de resultados com título/URL prontos. `parseCamofoxResults`
- *      abaixo tenta primeiro um formato estruturado (`results`/`items`/
- *      `posts` — array), e cai para um parser best-effort do texto da árvore
- *      quando não encontra nada estruturado. Nesse fallback, a árvore de
- *      acessibilidade só expõe o `ref` do elemento (não o href real) — como
- *      `CamofoxSearchResult.url` é tipado como `string` não-opcional
- *      (contrato: "isto é uma URL usável"), NUNCA fabricamos uma string
- *      vazia fingindo ser URL; entradas sem URL reconhecível no próprio
- *      texto do link são descartadas (ver `parseAccessibilityTreeLinks`).
- *      Na prática isso deve zerar (ou quase) os resultados de
- *      `@google_search`/`@yelp_search` até alguém plugar uma correlação real
- *      com `GET /tabs/:id/links` (endpoint que existe no serviço mas não é
- *      chamado aqui) para resolver `ref` → href de verdade.
- *      Este mesmo invariante ("nunca fabricar `url: ''`") vale também no
- *      path estruturado (`toStructuredResult`, usado por `extractItemsArray`
- *      → `results`/`items`/`posts`): itens sem `url`/`postUrl`/`permalink`
- *      reconhecível são descartados em vez de virar um resultado com URL
- *      vazia. `permalink` é resolvido contra `https://www.reddit.com` quando
- *      vem como path relativo (formato comum de APIs estilo Reddit) — ver
- *      `resolveStructuredUrl`.
- *   2. Pela documentação pública, macros de Reddit devolvem o resultado como
- *      JSON diretamente na resposta do próprio `POST .../navigate` (sem
- *      precisar do snapshot depois) — diferente de `@google_search`/
- *      `@yelp_search`. Esta implementação sempre chama o snapshot (conforme
- *      o fluxo acima), mas tenta primeiro extrair resultados estruturados da
- *      própria resposta do `navigate` antes de recorrer ao snapshot — o que
- *      deveria cobrir esse caso, mas isso não foi testado contra uma
- *      instância real do camofox rodando `@reddit_search`. Confirmar antes
- *      de habilitar essa fonte em produção.
+ * O invariante "nunca fabricar `url: ''`" (ver docstring de `toStructuredResult`)
+ * vale tanto no path estruturado (Reddit, via `extractItemsArray` a partir da
+ * própria resposta do `navigate`) quanto no path via `/links` (Google/Yelp):
+ * um item sem URL reconhecível é descartado, nunca vira um resultado com URL
+ * vazia — `CamofoxSearchResult.url` é `string` não-opcional porque quem
+ * consome isso (criação de lead, dedup por URL, links na UI) trata o campo
+ * como uma URL real e usável.
+ *
+ * RESSALVA AINDA NÃO VERIFICADA AO VIVO: macros de Reddit — o path
+ * estruturado (`extractItemsArray`/`toStructuredResult` a partir da resposta
+ * do `navigate`) nunca foi exercitado contra `@reddit_search` de verdade.
+ * Confirmar antes de habilitar essa fonte em produção.
  *
  * Classe simples `new`-ável, sem `@Injectable()`/`ConfigService` do Nest —
  * mesmo racional de `ApifyGatewayService`.
@@ -162,6 +174,7 @@ export class CamofoxGatewayService implements CamofoxGateway {
     private readonly accessKey?: string,
     minIntervalMs: number = DEFAULT_MIN_INTERVAL_MS,
     private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS,
+    private readonly renderWaitMs: number = RENDER_WAIT_MS,
   ) {
     this.rateLimiter = new CallQueue(minIntervalMs);
   }
@@ -178,11 +191,23 @@ export class CamofoxGatewayService implements CamofoxGateway {
       if (fromNavigate.length > 0) {
         return fromNavigate;
       }
-      const snapshot = await this.getSnapshot(tabId);
-      return parseCamofoxResults(snapshot, params.limit);
+      return await this.searchLinksWithRetry(tabId, params.limit);
     } finally {
       await this.closeTabSafely(tabId);
     }
+  }
+
+  private async searchLinksWithRetry(tabId: string, limit: number): Promise<CamofoxSearchResult[]> {
+    let results: CamofoxSearchResult[] = [];
+    for (let attempt = 0; attempt < RENDER_WAIT_MAX_ATTEMPTS; attempt++) {
+      await sleep(this.renderWaitMs);
+      const links = await this.getLinks(tabId);
+      results = toLinkResults(links, limit);
+      if (results.length > 0) {
+        break;
+      }
+    }
+    return results;
   }
 
   private async createTab(): Promise<string> {
@@ -211,10 +236,28 @@ export class CamofoxGatewayService implements CamofoxGateway {
     });
   }
 
-  // `userId` é query param obrigatório em GET .../snapshot — confirmado ao
-  // vivo (400 sem ele).
-  private async getSnapshot(tabId: string): Promise<unknown> {
-    return this.request('GET', `/tabs/${tabId}/snapshot?userId=${encodeURIComponent(DEFAULT_USER_ID)}`);
+  // `userId` é query param obrigatório em GET .../links — confirmado ao vivo
+  // (400 sem ele, mesmo padrão de `.../snapshot`/DELETE). A doc pública do
+  // OpenAPI do projeto nomeia o campo do href como `href`, mas a resposta
+  // real da instância usa `url` — confiamos no que foi observado ao vivo,
+  // não na doc (aceitamos os dois defensivamente por segurança).
+  private async getLinks(tabId: string): Promise<CamofoxLink[]> {
+    const body = (await this.request(
+      'GET',
+      `/tabs/${tabId}/links?userId=${encodeURIComponent(DEFAULT_USER_ID)}`,
+    )) as { links?: unknown } | null;
+    if (!Array.isArray(body?.links)) {
+      return [];
+    }
+    return (body.links as Record<string, unknown>[])
+      .map((item) => {
+        const url = item.url ?? item.href;
+        const text = item.text;
+        return typeof url === 'string' && url.length > 0
+          ? { url, text: typeof text === 'string' ? text : '' }
+          : null;
+      })
+      .filter((link): link is CamofoxLink => link !== null);
   }
 
   private async closeTabSafely(tabId: string): Promise<void> {
@@ -276,33 +319,28 @@ export class CamofoxGatewayService implements CamofoxGateway {
 }
 
 /**
- * Extrai `CamofoxSearchResult[]` de uma resposta bruta que pode vir tanto do
- * `POST .../navigate` (macros de Reddit — ver ressalva 2 no comentário da
- * classe) quanto do `GET .../snapshot` (demais macros — ver ressalva 1).
- * Isolada nesta função por ser o ponto mais provável de precisar ajuste
- * assim que alguém testar contra uma instância real do camofox-browser.
- * Nunca lança erro por formato inesperado — na pior hipótese devolve `[]`.
+ * Extrai `CamofoxSearchResult[]` de uma resposta estruturada (array direto,
+ * ou `{ results | items | posts: [...] }`) — formato usado por macros de
+ * Reddit na própria resposta do `POST .../navigate` (ver ressalva no
+ * comentário da classe). Nunca lança erro por formato inesperado — na pior
+ * hipótese devolve `[]`.
  */
 function parseCamofoxResults(raw: unknown, limit: number): CamofoxSearchResult[] {
   const items = extractItemsArray(raw);
-  if (items) {
-    const results: CamofoxSearchResult[] = [];
-    for (const item of items) {
-      if (results.length >= limit) {
-        break;
-      }
-      const result = toStructuredResult(item);
-      if (result) {
-        results.push(result);
-      }
-    }
-    return results;
-  }
-  const text = extractSnapshotText(raw);
-  if (!text) {
+  if (!items) {
     return [];
   }
-  return parseAccessibilityTreeLinks(text, limit);
+  const results: CamofoxSearchResult[] = [];
+  for (const item of items) {
+    if (results.length >= limit) {
+      break;
+    }
+    const result = toStructuredResult(item);
+    if (result) {
+      results.push(result);
+    }
+  }
+  return results;
 }
 
 function extractItemsArray(raw: unknown): Record<string, unknown>[] | null {
@@ -321,53 +359,46 @@ function extractItemsArray(raw: unknown): Record<string, unknown>[] | null {
   return null;
 }
 
-function extractSnapshotText(raw: unknown): string | null {
-  if (typeof raw === 'string') {
-    return raw;
-  }
-  if (raw && typeof raw === 'object') {
-    const snapshot = (raw as Record<string, unknown>).snapshot;
-    if (typeof snapshot === 'string') {
-      return snapshot;
-    }
-  }
-  return null;
+interface CamofoxLink {
+  url: string;
+  text: string;
 }
 
-// Reconhece uma URL http(s) dentro do texto visível de um link da árvore de
-// acessibilidade — às vezes o texto do link É a própria URL (comum em
-// resultados de busca que mostram o domínio/URL como label visível).
-const URL_IN_TEXT_PATTERN = /https?:\/\/[^\s)\]]+/;
+function isUsefulResultLink(link: CamofoxLink): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(link.url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return false;
+  }
+  const host = parsed.hostname.replace(/^www\./, '');
+  return !SEARCH_ENGINE_CHROME_HOSTS.has(host);
+}
 
 /**
- * Parser best-effort do formato de árvore de acessibilidade do camofox
- * (ex.: `[link e2] Learn more` ou `[link e3] https://exemplo.com/pagina`).
- *
- * A árvore só expõe o `ref` do elemento, não o href real por trás dele — só
- * produzimos um `CamofoxSearchResult` quando uma URL http(s) é reconhecível
- * no próprio texto do link. Entradas sem URL reconhecível são DESCARTADAS
- * (nunca fabricamos `url: ''`): `CamofoxSearchResult.url` é `string` não
- * opcional justamente porque quem consome isso (criação de lead, dedup por
- * URL, links na UI) trata o campo como uma URL real e usável — devolver um
- * objeto com `url` vazio fingiria ter resolvido algo que não foi. Ver
- * ressalva 1 no comentário da classe `CamofoxGatewayService`.
+ * Converte os links de `GET .../links` em `CamofoxSearchResult[]`, filtrando
+ * links de "chrome" do próprio motor de busca (ver `SEARCH_ENGINE_CHROME_HOSTS`).
+ * Mesma disciplina de `toStructuredResult`: nunca fabrica `url: ''` — os
+ * links já vêm com URL absoluta resolvida pelo próprio camofox-browser, então
+ * aqui só filtramos, não inventamos nada.
  */
-function parseAccessibilityTreeLinks(text: string, limit: number): CamofoxSearchResult[] {
-  const linkPattern = /\[link\s+(\S+?)\]\s*(.*)/g;
+function toLinkResults(links: CamofoxLink[], limit: number): CamofoxSearchResult[] {
   const results: CamofoxSearchResult[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = linkPattern.exec(text)) !== null && results.length < limit) {
-    const ref = match[1];
-    const rawText = match[2]?.trim() ?? '';
-    const urlMatch = rawText.match(URL_IN_TEXT_PATTERN);
-    if (!urlMatch) {
+  for (const link of links) {
+    if (results.length >= limit) {
+      break;
+    }
+    if (!isUsefulResultLink(link)) {
       continue;
     }
     results.push({
-      title: rawText || null,
-      url: urlMatch[0],
+      title: link.text || null,
+      url: link.url,
       textContent: null,
-      raw: { ref, text: rawText },
+      raw: { ...link },
     });
   }
   return results;

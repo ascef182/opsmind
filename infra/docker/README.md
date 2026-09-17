@@ -6,12 +6,14 @@
 ## Serviço `camofox`
 
 O serviço `camofox` builda a imagem direto do repositório oficial
-(`https://github.com/jo-inc/camofox-browser.git`) via `build.context` como URL git. Esse caminho **não foi
-testado nesta sessão** — nenhum build Docker de verdade rodou aqui — então se `docker compose up camofox`
-falhar (por exemplo, se o Dockerfile do projeto não estiver na raiz do repo, ou se o Compose usado não
-suportar builds a partir de URL git da forma esperada), use o fallback manual abaixo, e aponte
-`CAMOFOX_API_URL` (`.env`, `packages/config/env/schema.ts`) pra `http://localhost:9377` (ou onde o processo
-ficar escutando):
+(`https://github.com/jo-inc/camofox-browser.git`) via `build.context` como URL git. O build em si funciona
+(confirmado ao vivo em 2026-09-17), mas **em host Apple Silicon (Docker Desktop em Mac arm64) o container não
+funciona**: o binário `camoufox-bin` (fork do Firefox) baixado dentro da imagem é x86_64, e falha ao rodar via
+Rosetta num container Linux arm64 (`rosetta error: failed to open elf at /lib64/ld-linux-x86-64.so.2` — faltam
+libs x86_64 no rootfs arm64). Nesse caso (ou se `docker compose up camofox` falhar por qualquer outro motivo,
+como o Dockerfile do projeto não estar na raiz do repo), use o fallback manual abaixo — roda o processo nativo
+no host, sem esse problema de arquitetura — e aponte `CAMOFOX_API_URL` (`.env`,
+`packages/config/env/schema.ts`) pra `http://localhost:9377` (ou onde o processo ficar escutando):
 
 ```bash
 git clone https://github.com/jo-inc/camofox-browser

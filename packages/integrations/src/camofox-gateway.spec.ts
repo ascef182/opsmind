@@ -31,11 +31,11 @@ describe('CamofoxGatewayService', () => {
           return jsonResponse({ id: 'tab-1' });
         }
         if (url.includes('/navigate')) return jsonResponse({ ok: true });
-        if (url.includes('/snapshot')) return jsonResponse({ snapshot: '' });
+        if (url.includes('/links')) return jsonResponse({ links: [] });
         return jsonResponse(null, { status: 204 });
       }) as unknown as typeof fetch;
 
-      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      const gateway = new CamofoxGatewayService('http://localhost:9377', undefined, undefined, undefined, 0);
       await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
 
       expect(tabsRequestBody).toBeDefined();
@@ -44,22 +44,22 @@ describe('CamofoxGatewayService', () => {
       expect(parsed).toMatchObject({ userId: expect.any(String), sessionKey: expect.any(String) });
     });
 
-    it('getSnapshot: manda userId como query param (obrigatório — servidor responde 400 sem ele)', async () => {
+    it('getLinks: manda userId como query param (obrigatório — servidor responde 400 sem ele)', async () => {
       const calledUrls: string[] = [];
       global.fetch = jest.fn(async (input: string) => {
         const url = String(input);
         calledUrls.push(url);
         if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
         if (url.includes('/navigate')) return jsonResponse({ ok: true });
-        if (url.includes('/snapshot')) return jsonResponse({ snapshot: '' });
+        if (url.includes('/links')) return jsonResponse({ links: [] });
         return jsonResponse(null, { status: 204 });
       }) as unknown as typeof fetch;
 
-      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      const gateway = new CamofoxGatewayService('http://localhost:9377', undefined, undefined, undefined, 0);
       await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
 
-      const snapshotUrl = calledUrls.find((u) => u.includes('/snapshot'));
-      expect(snapshotUrl).toMatch(/[?&]userId=/);
+      const linksUrl = calledUrls.find((u) => u.includes('/links'));
+      expect(linksUrl).toMatch(/[?&]userId=/);
     });
 
     it('closeTabSafely: manda userId como query param no DELETE (obrigatório — servidor responde 400 sem ele)', async () => {
@@ -69,11 +69,11 @@ describe('CamofoxGatewayService', () => {
         calledUrls.push(url);
         if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
         if (url.includes('/navigate')) return jsonResponse({ ok: true });
-        if (url.includes('/snapshot')) return jsonResponse({ snapshot: '' });
+        if (url.includes('/links')) return jsonResponse({ links: [] });
         return jsonResponse(null, { status: 204 });
       }) as unknown as typeof fetch;
 
-      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      const gateway = new CamofoxGatewayService('http://localhost:9377', undefined, undefined, undefined, 0);
       await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
 
       const deleteUrl = calledUrls.find((u) => /\/tabs\/[^/?]+(\?|$)/.test(u) && !u.endsWith('/tabs'));
@@ -81,66 +81,109 @@ describe('CamofoxGatewayService', () => {
     });
   });
 
-  describe('parseAccessibilityTreeLinks (via search) — Finding 1: never fabricates url', () => {
-    it('descarta entradas da árvore de acessibilidade sem URL reconhecível no texto (não fabrica url vazia)', async () => {
-      const calls: string[] = [];
+  // Descoberto ao vivo (2026-09-17) contra uma instância real: `GET
+  // .../links` devolve URLs ABSOLUTAS já resolvidas pelo próprio
+  // camofox-browser (não um `ref` sem href, como a implementação antiga
+  // assumia) — mas a maioria dos links de uma página de resultados do
+  // Google/DuckDuckGo aponta de volta pro próprio motor de busca (abas,
+  // filtros, menu, rodapé), não pro site do resultado.
+  describe('toLinkResults (via search) — filtra chrome do motor de busca, nunca fabrica url', () => {
+    it('descarta links que apontam de volta pro próprio motor de busca (chrome/nav/filtros)', async () => {
       global.fetch = jest.fn(async (input: string) => {
         const url = String(input);
-        calls.push(url);
-        if (url.endsWith('/tabs')) {
-          return jsonResponse({ id: 'tab-1' });
-        }
-        if (url.includes('/navigate')) {
-          // navigate não devolve nada estruturado — força o fallback pro snapshot
-          return jsonResponse({ ok: true });
-        }
-        if (url.includes('/snapshot')) {
+        if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
+        if (url.includes('/navigate')) return jsonResponse({ ok: true, searchEngine: 'duckduckgo' });
+        if (url.includes('/links')) {
           return jsonResponse({
-            // Cada elemento numa linha própria — formato real da árvore de
-            // acessibilidade (um `.*` guloso sem isso engoliria a linha
-            // inteira até o fim do texto).
-            snapshot: [
-              '[link e2] Learn more',
-              '[link e3] https://exemplo.com/pagina-real',
-              '[link e4] Sobre nós',
-            ].join('\n'),
+            links: [
+              { url: 'https://duckduckgo.com/', text: 'DuckDuckGo' },
+              { url: 'https://duckduckgo.com/?q=padaria&ia=images', text: 'Images' },
+              {
+                url: 'https://www.listamais.com.br/categoria/padaria-em-presidente-prudente-sp',
+                text: 'https://www.listamais.com.br › categoria › padaria-em-presidente-prudente-sp',
+              },
+            ],
           });
         }
-        // DELETE /tabs/:id
         return jsonResponse(null, { status: 204 });
       }) as unknown as typeof fetch;
 
-      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      const gateway = new CamofoxGatewayService('http://localhost:9377', undefined, undefined, undefined, 0);
       const results = await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
 
-      // Só a entrada com URL reconhecível no texto sobrevive — "Learn more" e
-      // "Sobre nós" não viram resultado com url:'' fabricado.
       expect(results).toEqual([
         {
-          title: 'https://exemplo.com/pagina-real',
-          url: 'https://exemplo.com/pagina-real',
+          title: 'https://www.listamais.com.br › categoria › padaria-em-presidente-prudente-sp',
+          url: 'https://www.listamais.com.br/categoria/padaria-em-presidente-prudente-sp',
           textContent: null,
-          raw: { ref: 'e3', text: 'https://exemplo.com/pagina-real' },
+          raw: {
+            url: 'https://www.listamais.com.br/categoria/padaria-em-presidente-prudente-sp',
+            text: 'https://www.listamais.com.br › categoria › padaria-em-presidente-prudente-sp',
+          },
         },
       ]);
-      expect(results.every((r) => r.url.length > 0)).toBe(true);
     });
 
-    it('devolve lista vazia (nunca url fabricada) quando nenhum link da árvore tem URL reconhecível', async () => {
+    it('NÃO filtra por host em @yelp_search (resultado real mora no próprio domínio yelp.com)', async () => {
       global.fetch = jest.fn(async (input: string) => {
         const url = String(input);
         if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
         if (url.includes('/navigate')) return jsonResponse({ ok: true });
-        if (url.includes('/snapshot')) {
-          return jsonResponse({ snapshot: ['[link e2] Learn more', '[link e5] Sobre nós'].join('\n') });
+        if (url.includes('/links')) {
+          return jsonResponse({
+            links: [{ url: 'https://www.yelp.com/biz/padaria-exemplo', text: 'Padaria Exemplo' }],
+          });
         }
         return jsonResponse(null, { status: 204 });
       }) as unknown as typeof fetch;
 
-      const gateway = new CamofoxGatewayService('http://localhost:9377');
+      const gateway = new CamofoxGatewayService('http://localhost:9377', undefined, undefined, undefined, 0);
       const results = await gateway.search({ macro: '@yelp_search', query: 'padaria', limit: 10 });
 
+      expect(results.map((r) => r.url)).toEqual(['https://www.yelp.com/biz/padaria-exemplo']);
+    });
+
+    it('devolve lista vazia (nunca url fabricada) quando nenhum link sobrevive ao filtro, mesmo após retry', async () => {
+      global.fetch = jest.fn(async (input: string) => {
+        const url = String(input);
+        if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
+        if (url.includes('/navigate')) return jsonResponse({ ok: true });
+        if (url.includes('/links')) {
+          return jsonResponse({ links: [{ url: 'https://www.google.com/preferences', text: 'Settings' }] });
+        }
+        return jsonResponse(null, { status: 204 });
+      }) as unknown as typeof fetch;
+
+      const gateway = new CamofoxGatewayService('http://localhost:9377', undefined, undefined, undefined, 0);
+      const results = await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
+
       expect(results).toEqual([]);
+    });
+
+    it('tenta de novo (até RENDER_WAIT_MAX_ATTEMPTS) quando a primeira leitura de .../links vem vazia', async () => {
+      let linksCallCount = 0;
+      global.fetch = jest.fn(async (input: string) => {
+        const url = String(input);
+        if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
+        if (url.includes('/navigate')) return jsonResponse({ ok: true });
+        if (url.includes('/links')) {
+          linksCallCount += 1;
+          // Primeira leitura: página ainda renderizando, só o "chrome". Segunda: resultado real.
+          if (linksCallCount === 1) {
+            return jsonResponse({ links: [{ url: 'https://duckduckgo.com/', text: 'DuckDuckGo' }] });
+          }
+          return jsonResponse({
+            links: [{ url: 'https://exemplo.com/padaria', text: 'Padaria Exemplo' }],
+          });
+        }
+        return jsonResponse(null, { status: 204 });
+      }) as unknown as typeof fetch;
+
+      const gateway = new CamofoxGatewayService('http://localhost:9377', undefined, undefined, undefined, 0);
+      const results = await gateway.search({ macro: '@google_search', query: 'padaria', limit: 10 });
+
+      expect(linksCallCount).toBe(2);
+      expect(results.map((r) => r.url)).toEqual(['https://exemplo.com/padaria']);
     });
   });
 

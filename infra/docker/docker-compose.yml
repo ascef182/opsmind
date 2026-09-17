@@ -35,9 +35,14 @@ services:
 
   # Navegador stealth self-hosted usado pela fonte de scraping CAMOFOX (ver
   # packages/integrations/src/camofox-gateway.ts). Builda direto do
-  # repositório oficial via git URL — não testado nesta sessão (build de
-  # verdade não roda aqui); se o build a partir da URL falhar, ver o fallback
-  # manual documentado em infra/docker/README.md.
+  # repositório oficial via git URL — o build em si funciona (confirmado ao
+  # vivo em 2026-09-17, Docker Desktop em Mac arm64), mas o binário
+  # `camoufox-bin` (fork do Firefox) baixado dentro da imagem é x86_64 e falha
+  # ao rodar via Rosetta num container Linux arm64 (`rosetta error: failed to
+  # open elf at /lib64/ld-linux-x86-64.so.2` — faltam libs x86_64 no rootfs).
+  # Em host Apple Silicon, use o fallback manual documentado em
+  # infra/docker/README.md (roda nativo no host, sem esse problema de
+  # arquitetura) em vez deste serviço.
   camofox:
     build:
       context: https://github.com/jo-inc/camofox-browser.git
