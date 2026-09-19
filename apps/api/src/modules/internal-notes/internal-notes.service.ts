@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { InternalNote } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -63,6 +63,38 @@ export class InternalNotesService {
     input: CreateNoteInput,
     authorUserId: string,
   ): Promise<InternalNote> {
+    // Achado de segurança (security-review, 2026-09-18): sem isto, `dealId`/
+    // `leadId` vinha direto do `@Param()` do controller sem checar dono —
+    // RLS só valida `internal_notes.organization_id` (a linha nova em si),
+    // nunca a organização do Deal/Lead referenciado pela FK, então um
+    // usuário desta organização conseguia anexar uma nota a um deal/lead de
+    // OUTRA organização (oráculo de existência de UUID cross-tenant + FK
+    // apontando pra fora do tenant). Não usa `DealsService`/`LeadsService`
+    // (`findByIdOrThrow`) de propósito — criaria um ciclo de módulo
+    // (`DealsModule`/`LeadsModule` já importam `InternalNotesModule`) — uma
+    // checagem de existência direto no Prisma, escopada por
+    // `organizationId`, resolve sem precisar dessas dependências. Sempre
+    // 404 (nunca deixa vazar "existe mas é de outra org" via um erro
+    // diferente, ex. violação de FK) — mesmo tipo de erro que um id
+    // inexistente já produzia antes.
+    if (target.dealId) {
+      const deal = await this.prisma.deal.findFirst({
+        where: { id: target.dealId, organizationId },
+        select: { id: true },
+      });
+      if (!deal) {
+        throw new NotFoundException('Deal não encontrado');
+      }
+    } else {
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: target.leadId, organizationId },
+        select: { id: true },
+      });
+      if (!lead) {
+        throw new NotFoundException('Lead não encontrado');
+      }
+    }
+
     const mentionedUserIds = input.mentionedUserIds ?? [];
 
     if (mentionedUserIds.length > 0) {
