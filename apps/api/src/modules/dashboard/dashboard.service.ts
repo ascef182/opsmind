@@ -111,6 +111,12 @@ export interface DealPipelineOverview {
   // 0 quando não há nenhum deal WON nem LOST ainda (denominador zero) —
   // mesmo racional de `qualificationRate` acima.
   winRate: number;
+  // `won + lost` — exposto pra UI decidir quando `winRate`/`avgSalesCycleDays`
+  // têm amostra pequena demais pra apresentar como percentual/dia "confiável"
+  // sem qualificar (ex.: 100% de 2 negócios fechados não é o mesmo sinal que
+  // 100% de 200). Achado real (2026-09): a UI mostrava esses números sem
+  // nenhum contexto de tamanho de amostra.
+  closedDealCount: number;
   avgSalesCycleDays: number | null;
   dealsClosingSoon: Deal[];
   recentlyWonDeals: Deal[];
@@ -137,12 +143,29 @@ export interface WonRevenueMonthPoint {
   wonCount: number;
 }
 
+// Breakdown por estágio de como `weightedPipelineValue` foi composto —
+// achado real (2026-09): a UI mostrava só o número final ("Pipeline
+// ponderado: R$1.050,00") sem nenhuma forma de verificar a conta nem de
+// saber que os pesos (`DEAL_STAGE_PROBABILITY`) são um chute não-calibrado,
+// não uma estatística calculada sobre o histórico da própria organização.
+export interface WeightedPipelineStageBucket {
+  stage: DealStage;
+  dealCount: number;
+  openValue: number;
+  probability: number;
+  weightedValue: number;
+}
+
 export interface SalesForecast {
   // Soma de `value * DEAL_STAGE_PROBABILITY[stage]` de todo deal aberto
   // (WON/LOST fora) — a "previsão realista" de receita, em vez do valor
   // bruto do pipeline (que superestima: nem toda negociação em QUALIFICATION
   // fecha).
   weightedPipelineValue: number;
+  // Mesmo total de `weightedPipelineValue`, mas quebrado por estágio — só
+  // estágios com pelo menos 1 deal aberto entram (evita listar 4 estágios
+  // zerados de organizações com pipeline pequeno).
+  weightedPipelineByStage: WeightedPipelineStageBucket[];
   // Valor bruto dos deals abertos sem `expectedCloseDate` — não entra em
   // `forecastByMonth` (não tem em qual mês bucketizar), mas precisa aparecer
   // em algum lugar pra não sumir silenciosamente do pipeline ponderado.
@@ -423,6 +446,7 @@ export class DashboardService {
       openValue: Number(openValueAgg._sum.value ?? 0),
       dealsByStage,
       winRate,
+      closedDealCount: won + lost,
       avgSalesCycleDays: avgDays === null ? null : Number(avgDays),
       dealsClosingSoon,
       signatureFunnel,
@@ -462,10 +486,23 @@ export class DashboardService {
     let weightedPipelineValue = 0;
     let unscheduledValue = 0;
     const monthBuckets = new Map<string, ForecastMonthBucket>();
+    const stageBuckets = new Map<DealStage, WeightedPipelineStageBucket>();
     for (const deal of openDeals) {
       const value = Number(deal.value);
       const weightedValue = value * DEAL_STAGE_PROBABILITY[deal.stage];
       weightedPipelineValue += weightedValue;
+
+      const stageBucket = stageBuckets.get(deal.stage) ?? {
+        stage: deal.stage,
+        dealCount: 0,
+        openValue: 0,
+        probability: DEAL_STAGE_PROBABILITY[deal.stage],
+        weightedValue: 0,
+      };
+      stageBucket.dealCount += 1;
+      stageBucket.openValue += value;
+      stageBucket.weightedValue += weightedValue;
+      stageBuckets.set(deal.stage, stageBucket);
 
       if (deal.expectedCloseDate === null) {
         unscheduledValue += value;
@@ -479,6 +516,11 @@ export class DashboardService {
       monthBuckets.set(key, bucket);
     }
     const forecastByMonth = [...monthBuckets.values()].sort((a, b) => a.month.localeCompare(b.month));
+    // Ordem fixa do funil (QUALIFICATION → ... → CONTRACT_SENT), não a ordem
+    // de inserção do Map — mais previsível pra UI renderizar.
+    const weightedPipelineByStage = DEAL_STAGES.filter((stage) => stageBuckets.has(stage)).map(
+      (stage) => stageBuckets.get(stage) as WeightedPipelineStageBucket,
+    );
 
     const wonRevenueMap = new Map<string, WonRevenueMonthPoint>(
       trailingMonthKeys(WON_REVENUE_TREND_MONTHS, new Date()).map((month) => [
@@ -497,6 +539,7 @@ export class DashboardService {
 
     return {
       weightedPipelineValue,
+      weightedPipelineByStage,
       unscheduledValue,
       forecastByMonth,
       wonRevenueByMonth: [...wonRevenueMap.values()],

@@ -18,6 +18,7 @@ import { useAiUsage } from '@/lib/ai/use-ai-chat';
 import { DEAL_STAGES, DEAL_STAGE_LABELS, formatCurrency } from '@/lib/deals/types';
 import { Badge } from '@/components/ui/badge';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
+import { ForecastBreakdown } from '@/components/dashboard/forecast-breakdown';
 import { BudgetBar } from '@/components/ai/budget-bar';
 import { BarChartHighlighted, DonutChart, LineChartWithTooltip, SparklineChart } from '@/components/ui/chart-card';
 
@@ -380,8 +381,16 @@ function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverv
 // pensando-como-empresa-com-agile-beaver.md) — aditivo, seção própria abaixo
 // do pipeline de leads, mesma disciplina de não alterar as seções
 // existentes que `getDealPipelineOverview` já segue no backend.
+// Abaixo disso, um percentual/dia isolado é mais ruído estatístico do que
+// sinal (ex.: 100% de 2 negócios fechados não é o mesmo tipo de informação
+// que 100% de 200) — achado real (2026-09): a UI mostrava esses números sem
+// nenhum contexto de tamanho de amostra. Ajustável; não é um valor calibrado
+// contra dado real, só um piso razoável.
+const MIN_SAMPLE_FOR_CONFIDENT_STATS = 5;
+
 function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverview; organizationId: string }) {
   const maxStageValue = Math.max(1, ...DEAL_STAGES.map((stage) => data.dealsByStage[stage].value));
+  const wonCount = data.dealsByStage.WON.count;
 
   return (
     <section className="flex flex-col gap-6 border-t border-border pt-8">
@@ -389,11 +398,29 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCardDark label="Valor em aberto" value={formatCurrency(data.openValue)} />
-        <StatCardDark label="Taxa de vitória" value={`${Math.round(data.winRate * 100)}%`} hint="dos negócios fechados" />
+        <StatCardDark
+          label="Taxa de vitória"
+          value={
+            data.closedDealCount < MIN_SAMPLE_FOR_CONFIDENT_STATS ? '—' : `${Math.round(data.winRate * 100)}%`
+          }
+          hint={
+            data.closedDealCount === 0
+              ? 'nenhum negócio fechado ainda'
+              : data.closedDealCount < MIN_SAMPLE_FOR_CONFIDENT_STATS
+                ? `poucos negócios fechados ainda (n=${data.closedDealCount}) — ainda não é um sinal confiável`
+                : `dos negócios fechados (n=${data.closedDealCount})`
+          }
+        />
         <StatCardDark
           label="Ciclo médio de venda"
           value={data.avgSalesCycleDays === null ? '—' : `${Math.round(data.avgSalesCycleDays)} dias`}
-          hint={data.avgSalesCycleDays === null ? 'nenhum negócio ganho ainda' : 'entre criação e fechamento'}
+          hint={
+            data.avgSalesCycleDays === null
+              ? 'nenhum negócio ganho ainda'
+              : wonCount < MIN_SAMPLE_FOR_CONFIDENT_STATS
+                ? `poucos negócios ganhos ainda (n=${wonCount}) — valor pode não refletir o ciclo real`
+                : 'entre criação e fechamento'
+          }
         />
         <StatCardDark
           label="Propostas assinadas"
@@ -500,10 +527,9 @@ function SalesForecastSection({ data }: { data: SalesForecast }) {
       <h2 className="text-sm font-medium text-muted-foreground">Previsão de fechamento</h2>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <StatCardDark
-          label="Pipeline ponderado"
-          value={formatCurrency(data.weightedPipelineValue)}
-          hint="valor em aberto ajustado pela probabilidade de cada estágio"
+        <ForecastBreakdown
+          weightedPipelineValue={data.weightedPipelineValue}
+          weightedPipelineByStage={data.weightedPipelineByStage}
         />
         <StatCardDark
           label="Sem previsão de fechamento"

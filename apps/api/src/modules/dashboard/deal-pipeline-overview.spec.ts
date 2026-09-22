@@ -96,6 +96,30 @@ describe('DashboardService.getDealPipelineOverview', () => {
     expect(result.winRate).toBe(0);
   });
 
+  // Fase 4 (transparência do dashboard, 2026-09): exposto pra UI decidir
+  // quando winRate/avgSalesCycleDays têm amostra pequena demais pra mostrar
+  // como percentual/dia "confiável" sem qualificar.
+  it('closedDealCount = won + lost', async () => {
+    mockAll({
+      byStage: [
+        { stage: 'WON', _count: { _all: 3 }, _sum: { value: 3000 } },
+        { stage: 'LOST', _count: { _all: 1 }, _sum: { value: 100 } },
+      ],
+    });
+
+    const result = await service.getDealPipelineOverview('org-1');
+
+    expect(result.closedDealCount).toBe(4);
+  });
+
+  it('closedDealCount 0 quando não há nenhum deal WON nem LOST', async () => {
+    mockAll({ byStage: [{ stage: 'QUALIFICATION', _count: { _all: 5 }, _sum: { value: 500 } }] });
+
+    const result = await service.getDealPipelineOverview('org-1');
+
+    expect(result.closedDealCount).toBe(0);
+  });
+
   it('retorna avgSalesCycleDays null quando não há nenhum deal WON', async () => {
     mockAll({ avgSalesCycleRows: [{ avgDays: null }] });
 

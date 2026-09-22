@@ -69,6 +69,34 @@ describe('DashboardService.getSalesForecast', () => {
     expect(result.unscheduledValue).toBe(500);
   });
 
+  // Fase 4 (transparência do dashboard, 2026-09): breakdown por estágio de
+  // como weightedPipelineValue foi composto — antes disso a UI só recebia o
+  // total, sem forma de verificar a conta.
+  it('weightedPipelineByStage: agrupa por estágio, na ordem fixa do funil (não a ordem de inserção)', async () => {
+    mockAll({
+      openDeals: [
+        { stage: 'NEGOTIATION', value: 1000, expectedCloseDate: null },
+        { stage: 'PROPOSAL', value: 2000, expectedCloseDate: null },
+        { stage: 'PROPOSAL', value: 1500, expectedCloseDate: null },
+      ],
+    });
+
+    const result = await service.getSalesForecast('org-1');
+
+    expect(result.weightedPipelineByStage).toEqual([
+      { stage: 'PROPOSAL', dealCount: 2, openValue: 3500, probability: 0.3, weightedValue: 1050 },
+      { stage: 'NEGOTIATION', dealCount: 1, openValue: 1000, probability: 0.6, weightedValue: 600 },
+    ]);
+  });
+
+  it('weightedPipelineByStage: lista vazia quando não há nenhum deal aberto (nunca lista estágios zerados)', async () => {
+    mockAll({ openDeals: [] });
+
+    const result = await service.getSalesForecast('org-1');
+
+    expect(result.weightedPipelineByStage).toEqual([]);
+  });
+
   it('agrupa forecastByMonth por mês de expectedCloseDate, ordenado ascendente', async () => {
     mockAll({
       openDeals: [

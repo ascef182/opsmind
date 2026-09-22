@@ -139,6 +139,9 @@ export interface DealPipelineOverview {
   openValue: number;
   dealsByStage: Record<DealStage, DealStageBucket>;
   winRate: number;
+  // `won + lost` — usado pra decidir quando winRate/avgSalesCycleDays têm
+  // amostra pequena demais pra mostrar como número "confiável" sem qualificar.
+  closedDealCount: number;
   avgSalesCycleDays: number | null;
   dealsClosingSoon: DealPipelineDeal[];
   recentlyWonDeals: DealPipelineDeal[];
@@ -169,8 +172,17 @@ export interface WonRevenueMonthPoint {
   wonCount: number;
 }
 
+export interface WeightedPipelineStageBucket {
+  stage: DealStage;
+  dealCount: number;
+  openValue: number;
+  probability: number;
+  weightedValue: number;
+}
+
 export interface SalesForecast {
   weightedPipelineValue: number;
+  weightedPipelineByStage: WeightedPipelineStageBucket[];
   unscheduledValue: number;
   forecastByMonth: ForecastMonthBucket[];
   wonRevenueByMonth: WonRevenueMonthPoint[];
