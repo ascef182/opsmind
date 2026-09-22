@@ -10,6 +10,7 @@ import {
   processLeadScrapeJob,
   normalizeUrlForDedup,
   extractWhatsappPhone,
+  looksLikeDirectoryOrListicle,
 } from './lead-scrape-processor';
 import { isOverBudget, recordSpend } from './budget';
 
@@ -52,6 +53,48 @@ describe('normalizeUrlForDedup', () => {
 
   it('nunca lança em entrada não-parseável — cai no fallback best-effort', () => {
     expect(() => normalizeUrlForDedup('não é uma url')).not.toThrow();
+  });
+});
+
+describe('looksLikeDirectoryOrListicle', () => {
+  it('descarta domínio de portal conhecido', () => {
+    expect(
+      looksLikeDirectoryOrListicle({
+        title: 'Imobiliárias em São Paulo | SP Imóvel',
+        url: 'https://www.imovelweb.com.br/imobiliarias-sao-paulo.html',
+      }),
+    ).toBe(true);
+  });
+
+  it('descarta título estilo listicle ("melhores")', () => {
+    expect(
+      looksLikeDirectoryOrListicle({
+        title: 'As 20 melhores barbearias em São Paulo (SP) · AvataReel',
+        url: 'https://avatareel.com.br/melhores-barbearias-sp',
+      }),
+    ).toBe(true);
+  });
+
+  it('descarta título estilo listicle ("N ... em <cidade>")', () => {
+    expect(
+      looksLikeDirectoryOrListicle({
+        title: '766 imobiliárias em São Paulo Estado de São Paulo - Imovelweb',
+        url: 'https://www.imovelweb.com.br/imobiliarias-sao-paulo.html',
+      }),
+    ).toBe(true);
+  });
+
+  it('NÃO descarta um negócio real (domínio desconhecido, título é só o nome do negócio)', () => {
+    expect(
+      looksLikeDirectoryOrListicle({ title: 'Padaria Central', url: 'https://padariacentral.com.br' }),
+    ).toBe(false);
+    expect(
+      looksLikeDirectoryOrListicle({ title: 'Imóveis Silva', url: 'https://imoveissilva.com.br/contato' }),
+    ).toBe(false);
+  });
+
+  it('sem título (null) e domínio desconhecido não descarta', () => {
+    expect(looksLikeDirectoryOrListicle({ title: null, url: 'https://negocio-qualquer.com.br' })).toBe(false);
   });
 });
 
@@ -225,6 +268,98 @@ describe('processLeadScrapeJob', () => {
     // o pipeline usa por lead (valor casado com o comentário da constante).
     expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', 0.006);
     expect(result.status).toBe('COMPLETED');
+  });
+
+  // Regressão do bug real (2026-09): antes da Fase 1 do fix de scoring, todo
+  // lead do Camoufox ganhava os 50 pontos de "sem site" incondicionalmente
+  // (o campo nunca é capturado por essa fonte, então `website` era sempre
+  // `null`) — o que sozinho já cruzava QUALIFICATION_THRESHOLD, mesmo pra um
+  // resultado sem nenhum sinal real de que é um negócio de verdade.
+  it('sucesso (Camoufox): sem confirmação de site nem keyword batendo, lead sai DISQUALIFIED (antes qualificava só pela fonte)', async () => {
+    const tx = setupTx();
+    (isOverBudget as jest.Mock).mockResolvedValue(false);
+    const prisma = buildPrisma();
+    prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({
+      ...baseScrapeJob,
+      sourceType: 'CAMOFOX_GOOGLE_SEARCH' as const,
+      businessType: 'imobiliaria',
+    });
+    prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+    tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+    // Camoufox nunca tem `placeId` — vai pelo caminho de dedup por URL/nome
+    // (`tx.lead.findFirst` + `tx.lead.create`), não `tx.lead.upsert` (esse é
+    // só pro caminho com `placeId`, fontes estruturadas).
+    tx.lead.create.mockImplementation((args: { data: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'lead-1', ...args.data }),
+    );
+
+    const gateways = fakeGateways();
+    // Deliberadamente NÃO um exemplo de portal/listicle (isso é coberto pelo
+    // filtro da Fase 2, testado separadamente em `looksLikeDirectoryOrListicle`)
+    // — aqui o objetivo é isolar só o fix de scoring da Fase 1: um resultado
+    // que passa pelo filtro de ingestão mas ainda assim não tem nenhuma
+    // confirmação real de ausência de site.
+    gateways.camofox.search.mockResolvedValue([
+      { title: 'Imóveis Silva', url: 'https://imoveissilva.com.br/contato', textContent: null, raw: {} },
+    ]);
+
+    await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+    expect(tx.lead.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'DISQUALIFIED',
+          score: 0,
+          scoreBreakdown: expect.objectContaining({ hasNoWebsitePoints: 0 }),
+        }),
+      }),
+    );
+  });
+
+  // Fase 2: filtro de ingestão — lote misto (2 portais/listicles + 1 negócio
+  // real) só persiste o negócio real. Complementa o teste de scoring acima:
+  // aqui o lixo nem chega a virar `Lead`.
+  it('CAMOFOX_GOOGLE_SEARCH: lote misto de portal/listicle + negócio real só persiste o negócio real', async () => {
+    const tx = setupTx();
+    (isOverBudget as jest.Mock).mockResolvedValue(false);
+    const prisma = buildPrisma();
+    prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({
+      ...baseScrapeJob,
+      sourceType: 'CAMOFOX_GOOGLE_SEARCH' as const,
+      businessType: 'imobiliaria',
+    });
+    prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+    tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+    tx.lead.create.mockImplementation((args: { data: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'lead-1', ...args.data }),
+    );
+
+    const gateways = fakeGateways();
+    gateways.camofox.search.mockResolvedValue([
+      {
+        title: '766 imobiliárias em São Paulo Estado de São Paulo - Imovelweb',
+        url: 'https://www.imovelweb.com.br/imobiliarias-sao-paulo.html',
+        textContent: null,
+        raw: {},
+      },
+      {
+        title: 'As 20 melhores imobiliárias de São Paulo · AvataReel',
+        url: 'https://avatareel.com.br/melhores-imobiliarias-sp',
+        textContent: null,
+        raw: {},
+      },
+      { title: 'Imóveis Silva', url: 'https://imoveissilva.com.br/contato', textContent: null, raw: {} },
+    ]);
+
+    await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+    expect(tx.lead.create).toHaveBeenCalledTimes(1);
+    expect(tx.lead.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ name: 'Imóveis Silva' }) }),
+    );
+    expect(tx.scrapeJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ leadsFound: 1 }) }),
+    );
   });
 
   it('orçamento estourado: job falha sem chamar nenhum gateway nem gastar nada', async () => {

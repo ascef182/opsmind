@@ -10,6 +10,7 @@ import {
   QUALIFICATION_THRESHOLD,
   scoreLead,
   pickRoundRobinAssignee,
+  STRUCTURED_WEBSITE_SOURCES,
   type LeadScoringInput,
   type ServiceOfferingIcp,
 } from '@opsmind/shared-types';
@@ -396,6 +397,11 @@ export class LeadsService {
 
     const scoreInput: LeadScoringInput = {
       website: lead.website,
+      // Mesma regra do worker (`lead-scrape-processor.ts` `upsertLead`):
+      // ausência de site só conta como CONFIRMADA quando a fonte original
+      // do lead expõe esse campo de verdade (Apify/Explorium) — nunca pra
+      // Camoufox/MANUAL, que nunca capturam isso na origem.
+      websiteConfirmedAbsent: STRUCTURED_WEBSITE_SOURCES.has(lead.sourceType) && lead.website === null,
       googleCategory: lead.googleCategory,
       rating: lead.rating ? Number(lead.rating) : null,
       reviewCount: lead.reviewCount,

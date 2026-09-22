@@ -10,6 +10,17 @@ export const QUALIFICATION_THRESHOLD = 50;
 
 export interface LeadScoringInput {
   website: string | null;
+  // `website === null` sozinho NÃO significa "confirmado sem site" — fontes
+  // não-estruturadas (Camoufox) nunca capturam este campo, então `null` ali
+  // só significa "nunca observado", não "verificado ausente". Este flag
+  // existe pra separar os dois casos: só fontes que efetivamente expõem um
+  // campo de site na própria busca (Apify Google Maps, Explorium) podem
+  // setar `true` quando esse campo vier vazio. Achado real (2026-09):
+  // antes deste campo, `hasNoWebsitePoints` dava os 50 pontos (= o próprio
+  // QUALIFICATION_THRESHOLD) pra QUALQUER lead do Camoufox, sem exceção,
+  // porque `website` era sempre `null` ali — todo lead dessa fonte nascia
+  // QUALIFIED antes de qualquer conteúdo real ser avaliado.
+  websiteConfirmedAbsent: boolean;
   googleCategory: string | null;
   rating: number | null;
   reviewCount: number | null;
@@ -195,7 +206,13 @@ function computeKeywordFallback(
 export function scoreLead(input: LeadScoringInput, offerings: ServiceOfferingIcp[]): LeadScoreBreakdown {
   // Sinal central do ICP desta feature: negócio sem site é o alvo (PRD da
   // feature — ver docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md).
-  const hasNoWebsitePoints = input.website === null || input.website === '' ? 50 : 0;
+  // Só conta quando a AUSÊNCIA foi confirmada pela fonte (ver
+  // `websiteConfirmedAbsent` acima) — nunca quando o dado simplesmente não
+  // foi capturado. Checa os dois (não só a flag) como defesa em
+  // profundidade barata: nunca premia "sem site" se `website` de fato tiver
+  // um valor, mesmo que o chamador tenha setado a flag errado.
+  const hasNoWebsitePoints =
+    input.websiteConfirmedAbsent && (input.website === null || input.website === '') ? 50 : 0;
 
   const activityPoints =
     ((input.reviewCount ?? 0) > 0 ? 10 : 0) + ((input.rating ?? 0) >= 4.0 ? 10 : 0);

@@ -15,6 +15,10 @@ describe('scoreLead', () => {
     const result = scoreLead(
       {
         website: null,
+        // Fonte estruturada (tem firmographics) — ausência de site é
+        // CONFIRMADA pela própria busca (Apify/Explorium), não um gap de
+        // captura.
+        websiteConfirmedAbsent: true,
         googleCategory: 'Restaurante Italiano',
         rating: 4.5,
         reviewCount: 120,
@@ -37,6 +41,7 @@ describe('scoreLead', () => {
     const result = scoreLead(
       {
         website: 'https://restaurante-exemplo.com',
+        websiteConfirmedAbsent: false,
         googleCategory: 'Restaurante Italiano',
         rating: 4.5,
         reviewCount: 120,
@@ -50,10 +55,16 @@ describe('scoreLead', () => {
     expect(result.total).toBe(50); // 30 (icp fit) + 20 (activity), sem os 50 do website
   });
 
-  it('lead sem firmographics mas com rawContent batendo signals => fallback de keyword ativado', () => {
+  it('lead sem firmographics mas com rawContent batendo signals => fallback de keyword ativado (fonte não-estruturada, ex. Camoufox — nunca confirma ausência de site)', () => {
     const result = scoreLead(
       {
         website: null,
+        // Formato real de um lead do Camoufox: sem firmographics, só
+        // rawContent — o campo `website` nunca foi observado, então NUNCA
+        // é "confirmado ausente" (achado real, 2026-09: antes deste campo
+        // existir, todo lead do Camoufox ganhava os 50 pontos aqui mesmo
+        // sem nenhuma evidência de que o negócio de fato não tem site).
+        websiteConfirmedAbsent: false,
         googleCategory: 'Restaurante',
         rating: null,
         reviewCount: null,
@@ -64,17 +75,23 @@ describe('scoreLead', () => {
     );
 
     // 2 de 4 signals bateram ("delivery próprio", "cardápio online") => round(2/4*60) = 30
+    expect(result.hasNoWebsitePoints).toBe(0); // nunca confirmado, nunca premiado
     expect(result.icpFitPoints).toBe(0); // sem firmographics, ICP fit não roda
     expect(result.keywordMatchPoints).toBe(30);
     expect(result.matchedOfferingId).toBe('offering-restaurant');
     expect(result.matchedSignals.sort()).toEqual(['cardápio online', 'delivery próprio'].sort());
-    expect(result.total).toBe(50 + 30); // hasNoWebsite + keyword match, sem activity
+    expect(result.total).toBe(30); // só keyword match, sem os 50 de hasNoWebsite
+    expect(result.total).toBeLessThan(QUALIFICATION_THRESHOLD); // não qualifica só por bater 1-2 keywords genéricas
   });
 
   it('nenhuma offering ativa => score só de hasNoWebsite + activity', () => {
     const result = scoreLead(
       {
         website: null,
+        // Fonte estruturada com rating/reviewCount reais (ex. Apify), só
+        // sem nenhuma ServiceOffering ativa pra casar — ausência de site
+        // continua confirmada independente disso.
+        websiteConfirmedAbsent: true,
         googleCategory: 'Restaurante',
         rating: 4.2,
         reviewCount: 5,
@@ -116,6 +133,7 @@ describe('scoreLead', () => {
     const result = scoreLead(
       {
         website: 'https://exemplo.com',
+        websiteConfirmedAbsent: false,
         googleCategory: null,
         rating: null,
         reviewCount: null,
@@ -144,6 +162,9 @@ describe('scoreLead', () => {
     const result = scoreLead(
       {
         website: null,
+        // Apify confirma ausência de site na própria busca do Google Maps,
+        // mesmo sem Explorium pra firmographics.
+        websiteConfirmedAbsent: true,
         googleCategory: 'Bakery',
         rating: null,
         reviewCount: null,
@@ -156,5 +177,43 @@ describe('scoreLead', () => {
     expect(result.keywordMatchPoints).toBe(30); // 1 de 2 signals ("bakery") => round(1/2*60)
     expect(result.matchedOfferingId).toBe('offering-site');
     expect(result.matchedSignals).toEqual(['bakery']);
+  });
+
+  // Regressão direta do bug real reportado (2026-09): uma página de portal
+  // imobiliário ("766 imobiliárias em São Paulo... - Imovelweb") batendo só
+  // a palavra-chave genérica da categoria não pode mais qualificar um lead
+  // do Camoufox sozinha — antes desta correção, `hasNoWebsitePoints: 50`
+  // sozinho já cruzava QUALIFICATION_THRESHOLD independente do conteúdo.
+  it('página de diretório/portal com 1 keyword genérica batendo, sem site confirmado => não qualifica', () => {
+    const realEstateOffering: ServiceOfferingIcp = {
+      id: 'offering-imobiliaria',
+      signals: [
+        'imobiliária', 'corretor', 'aluguel', 'venda de imóveis', 'apartamento',
+        'casa à venda', 'financiamento', 'avaliação de imóvel', 'plantão de vendas',
+        'lançamento imobiliário', 'permuta', 'locação',
+      ],
+      targetIndustries: [],
+      minEmployees: null,
+      maxEmployees: null,
+      minRevenueUsd: null,
+      maxRevenueUsd: null,
+    };
+
+    const result = scoreLead(
+      {
+        website: null,
+        websiteConfirmedAbsent: false, // Camoufox — nunca confirma isso
+        googleCategory: null,
+        rating: null,
+        reviewCount: null,
+        rawContent: '766 imobiliárias em São Paulo Estado de São Paulo - Imovelweb',
+        firmographics: null,
+      },
+      [realEstateOffering],
+    );
+
+    expect(result.hasNoWebsitePoints).toBe(0);
+    expect(result.keywordMatchPoints).toBeLessThanOrEqual(10); // 1 de 12 signals => round(1/12*60) = 5
+    expect(result.total).toBeLessThan(QUALIFICATION_THRESHOLD);
   });
 });

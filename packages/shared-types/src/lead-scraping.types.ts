@@ -24,3 +24,18 @@ export interface LeadScrapeJobData {
   actorType: AuditActorType;
   actorId?: string;
 }
+
+// Fontes de scrape cujo formato de busca inclui um campo de site de verdade
+// (Apify Google Maps, Explorium) — `website: null` vindo dessas fontes é uma
+// ausência CONFIRMADA, não um dado nunca capturado (Camoufox/MANUAL nunca
+// entram aqui). Compartilhado entre `apps/worker` (scoring em lote,
+// `lead-scrape-processor.ts`) e `apps/api` (`LeadsService.score()`, re-score
+// sob demanda) — precisa ser a mesma fonte de verdade nos dois processos
+// pra `LeadScoringInput.websiteConfirmedAbsent` nunca divergir entre eles.
+// Tipado como `ReadonlySet<string>` (não `ScrapeSourceType` do Prisma) de
+// propósito: este pacote não depende de `@opsmind/database` (mesmo racional
+// de pureza documentado no topo de `lead-scoring.ts`).
+export const STRUCTURED_WEBSITE_SOURCES: ReadonlySet<string> = new Set([
+  'APIFY_GOOGLE_MAPS',
+  'EXPLORIUM_BUSINESS_SEARCH',
+]);

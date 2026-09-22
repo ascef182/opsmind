@@ -398,6 +398,12 @@ describe('LeadsService', () => {
         id: 'lead-1',
         organizationId: 'org-1',
         status: 'DISCOVERED',
+        // Fonte estruturada (Apify) — sem isso, `websiteConfirmedAbsent`
+        // fica `false` e os 50 pontos de "sem site" não são premiados (ver
+        // `STRUCTURED_WEBSITE_SOURCES` em `leads.service.ts` `score()`).
+        // Cenário real: Apify não traz firmografia na própria busca, só via
+        // `matchBusiness` — exatamente o `LeadEnrichment` mockado abaixo.
+        sourceType: 'APIFY_GOOGLE_MAPS',
         website: null,
         googleCategory: null,
         rating: null,
@@ -428,13 +434,48 @@ describe('LeadsService', () => {
       expect(result.suggestedOfferingId).toBe('off-1');
     });
 
+    // Regressão do bug real (2026-09): re-score sob demanda seguia a mesma
+    // regra do worker — só premia os 50 pontos de "sem site" quando a fonte
+    // do lead confirma isso na própria busca (ver STRUCTURED_WEBSITE_SOURCES
+    // em @opsmind/shared-types). Camoufox nunca confirma, então um re-score
+    // não pode "resgatar" um lead ruim dessa fonte pra QUALIFIED sozinho.
+    it('re-score de um lead CAMOFOX_GOOGLE_SEARCH: website null não confirma ausência, hasNoWebsitePoints fica 0', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'DISCOVERED',
+        sourceType: 'CAMOFOX_GOOGLE_SEARCH',
+        website: null,
+        googleCategory: null,
+        rating: null,
+        reviewCount: null,
+        rawContent: '766 imobiliárias em São Paulo Estado de São Paulo - Imovelweb',
+      });
+      prisma.serviceOffering.findMany.mockResolvedValue([]);
+      prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+      prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ id: 'lead-1', ...data }));
+
+      const result = await service.score('org-1', 'lead-1', 'user-1');
+
+      expect(result.status).toBe('DISQUALIFIED');
+      expect(prisma.lead.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            score: 0,
+            scoreBreakdown: expect.objectContaining({ hasNoWebsitePoints: 0 }),
+          }),
+        }),
+      );
+    });
+
     it('nunca regride status de um lead que já avançou além da qualificação (ex.: CONVERTED)', async () => {
       prisma.lead.findFirst.mockResolvedValue({
         id: 'lead-1',
         organizationId: 'org-1',
         status: 'CONVERTED',
         convertedCustomerId: 'cust-1',
-        website: null, // pontuaria QUALIFIED se status fosse escrito
+        sourceType: 'APIFY_GOOGLE_MAPS', // fonte estruturada — website:null pontuaria QUALIFIED se status fosse escrito
+        website: null,
         googleCategory: null,
         rating: null,
         reviewCount: null,

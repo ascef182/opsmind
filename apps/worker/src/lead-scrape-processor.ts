@@ -6,6 +6,7 @@ import {
   QUALIFICATION_THRESHOLD,
   ROLE_HIERARCHY,
   pickRoundRobinAssignee,
+  STRUCTURED_WEBSITE_SOURCES,
   type LeadScoringInput,
   type ServiceOfferingIcp,
   type SocialLink,
@@ -96,11 +97,6 @@ const CONTACT_ENRICHMENT_COST_PER_CALL_USD = {
   APIFY_INSTAGRAM_PROFILE: 0.05,
 } as const;
 
-const STRUCTURED_WEBSITE_SOURCES: ReadonlySet<ScrapeSourceType> = new Set([
-  'APIFY_GOOGLE_MAPS',
-  'EXPLORIUM_BUSINESS_SEARCH',
-]);
-
 /**
  * Único `sourceType` que precisa de uma chamada de enrichment separada
  * (`explorium.matchBusiness`) para obter firmographics — Apify não devolve
@@ -139,6 +135,13 @@ interface RawCandidate {
   state: string | null;
   phone: string | null;
   website: string | null;
+  // `true` só quando a fonte confirma ausência de site (Apify/Explorium com
+  // `website: null` na própria busca) — nunca `true` pro Camoufox, que
+  // simplesmente não captura este campo. Ver `LeadScoringInput
+  // .websiteConfirmedAbsent` (`@opsmind/shared-types`, `lead-scoring.ts`)
+  // pro porquê disso importa: sem essa distinção, `scoreLead` dava os 50
+  // pontos de "sem site" pra TODO lead do Camoufox, sempre.
+  websiteConfirmedAbsent: boolean;
   googleCategory: string | null;
   rating: number | null;
   reviewCount: number | null;
@@ -171,6 +174,9 @@ function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
     state: r.state,
     phone: r.phone,
     website: r.website,
+    // Google Maps (via Apify) expõe um campo de site de verdade na própria
+    // busca — `null` aqui é uma ausência confirmada, não um gap de captura.
+    websiteConfirmedAbsent: r.website === null,
     googleCategory: r.googleCategory,
     rating: r.rating,
     reviewCount: r.reviewCount,
@@ -196,6 +202,9 @@ function mapExploriumResult(r: ExploriumBusinessResult): RawCandidate {
     state: null,
     phone: null,
     website: r.website,
+    // Mesmo racional da Apify acima — a busca da Explorium expõe um campo
+    // de site real, então `null` aqui é confirmado, não desconhecido.
+    websiteConfirmedAbsent: r.website === null,
     // Explorium não devolve uma "categoria Google" — `industry` é o análogo
     // mais próximo disponível na própria resposta de busca.
     googleCategory: r.industry,
@@ -225,6 +234,13 @@ function mapCamofoxResult(r: CamofoxSearchResult): RawCandidate {
     state: null,
     phone: null,
     website: null,
+    // NUNCA `true` pro Camoufox: um resultado de busca genérico
+    // (`@google_search`/`@reddit_search`) não confirma ausência de site,
+    // só que este campo não foi observado (ver comentário de `website` na
+    // definição de `RawCandidate` acima). Achado real que motivou este
+    // campo: antes disso, todo lead do Camoufox ganhava os 50 pontos de
+    // "sem site" (= QUALIFICATION_THRESHOLD) só por vir desta fonte.
+    websiteConfirmedAbsent: false,
     googleCategory: null,
     rating: null,
     reviewCount: null,
@@ -238,6 +254,68 @@ function mapCamofoxResult(r: CamofoxSearchResult): RawCandidate {
     email: null,
     socialLinks: null,
   };
+}
+
+// Domínios de portal/agregador BR conhecidos que aparecem com frequência nos
+// resultados de `@google_search` pra categorias de negócio genéricas
+// (imobiliária, barbearia etc.) — sempre a PRÓPRIA página do portal, nunca
+// um negócio individual. Heurística curta e deliberadamente NÃO exaustiva
+// (achado real: 2026-09, resultados como "766 imobiliárias em São Paulo... -
+// Imovelweb" virando lead QUALIFIED) — vai precisar de manutenção conforme
+// novos portais aparecerem nos resultados reais. Combinada com
+// `LISTICLE_TITLE_PATTERN` abaixo, não substitui o fix de scoring da Fase 1
+// (`websiteConfirmedAbsent`), só reduz o volume de lixo que chega a virar
+// `Lead` em primeiro lugar.
+const KNOWN_DIRECTORY_DOMAINS: ReadonlySet<string> = new Set([
+  'imovelweb.com.br',
+  'vivareal.com.br',
+  'zapimoveis.com.br',
+  'olx.com.br',
+  'lopes.com.br',
+  'lello.com.br',
+  'guiamais.com.br',
+  'apontador.com.br',
+  'telelistas.net',
+  'reclameaqui.com.br',
+]);
+
+// "As 20 melhores barbearias em São Paulo", "766 imobiliárias em São Paulo",
+// "8 barbearias incríveis em SP que todo homem deveria conhecer" — título de
+// listicle/blog sobre a categoria, não o negócio em si. Best-effort: nem
+// todo diretório usa essas palavras, e um negócio real cujo nome contenha
+// um número ("Barbearia Top 10") pode colidir — ver comentário de
+// `looksLikeDirectoryOrListicle`.
+const LISTICLE_TITLE_PATTERN = /\bmelhores?\b|\btop\s*\d+\b|\b\d+\s+\S+.*\bem\b/i;
+
+function extractHostname(rawUrl: string): string | null {
+  try {
+    const withProtocol = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+    return new URL(withProtocol).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Filtro best-effort aplicado só a `@google_search` (Camoufox) ANTES de virar
+ * `RawCandidate`/`Lead` — descarta o que claramente é uma página de
+ * diretório/portal/listicle sobre a categoria buscada, não um negócio local
+ * individual. NÃO é uma garantia de correção: falso-negativo é certo (qualquer
+ * domínio fora da denylist, ou título de listicle fraseado diferente, passa
+ * batido) e falso-positivo é possível (negócio real com número no nome, ex.
+ * "Restaurante 5 Estrelas"). Complementa, não substitui, o fix de scoring da
+ * Fase 1 — a defesa real contra qualificar lixo é `websiteConfirmedAbsent`;
+ * isto só reduz volume.
+ */
+export function looksLikeDirectoryOrListicle(candidate: { title: string | null; url: string }): boolean {
+  const host = extractHostname(candidate.url);
+  if (host && KNOWN_DIRECTORY_DOMAINS.has(host)) {
+    return true;
+  }
+  if (candidate.title && LISTICLE_TITLE_PATTERN.test(candidate.title)) {
+    return true;
+  }
+  return false;
 }
 
 type SourceHandler = (job: ScrapeJob, gateways: LeadScrapeGateways) => Promise<RawCandidate[]>;
@@ -275,7 +353,19 @@ const SOURCE_REGISTRY: Record<ScrapeSourceType, SourceHandler> = {
       query: `${job.businessType} em ${job.city}, ${job.state}`,
       limit: job.limit,
     });
-    return results.map(mapCamofoxResult);
+    // Filtro de portal/listicle só faz sentido aqui — `@reddit_search`
+    // (abaixo) é estruturalmente diferente (thread individual, não página de
+    // diretório) e `runCamofoxFallback` busca perfil social, não candidato a
+    // lead (ver docstring de `looksLikeDirectoryOrListicle`).
+    const filtered = results.filter((r) => !looksLikeDirectoryOrListicle(r));
+    const discarded = results.length - filtered.length;
+    if (discarded > 0) {
+      // eslint-disable-next-line no-console -- visibilidade mínima da heurística de filtro (sem logger estruturado disponível nesta função pura)
+      console.info(
+        `[lead-scrape-processor] ${discarded}/${results.length} resultado(s) do Camoufox descartado(s) por parecer diretório/portal/listicle (scrapeJobId=${job.id}).`,
+      );
+    }
+    return filtered.map(mapCamofoxResult);
   },
   CAMOFOX_REDDIT_SEARCH: async (job, gateways) => {
     const results = await gateways.camofox.search({
@@ -814,6 +904,7 @@ async function upsertLead(
 ): Promise<Lead> {
   const scoreInput: LeadScoringInput = {
     website: candidate.website,
+    websiteConfirmedAbsent: candidate.websiteConfirmedAbsent,
     googleCategory: candidate.googleCategory,
     rating: candidate.rating,
     reviewCount: candidate.reviewCount,
