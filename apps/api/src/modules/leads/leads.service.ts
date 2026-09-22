@@ -468,6 +468,46 @@ export class LeadsService {
   }
 
   /**
+   * `POST .../leads/discard-by-scrape-job` — descarte em lote de todos os
+   * leads de UMA busca específica (Fase 5b do plano de qualidade de leads,
+   * 2026-09). Ferramenta de limpeza: útil pra descartar de uma vez um lote
+   * ruim (ex.: resultados de diretório/portal que passaram pelo filtro de
+   * ingestão antes da Fase 2 existir). Nunca um DELETE — reaproveita
+   * `LeadStatus.DISQUALIFIED` (mesmo princípio do resto do módulo: um lead
+   * nunca é apagado, só transiciona status) e o mesmo guard de
+   * `PRE_QUALIFICATION_STATUSES` que `score()` já usa, então nunca regride
+   * um lead que já avançou além da qualificação (ex.: um que já ganhou um
+   * rascunho de outreach ou foi convertido) mesmo que pertença à mesma
+   * busca. `scrapeJobId` de outra organização (ou inexistente) nunca
+   * precisa de uma checagem separada: o `organizationId` já no `WHERE` do
+   * `updateMany` garante `count: 0` nesse caso — mesma disciplina TOCTOU-safe
+   * de `applyTransition` em `outreach.service.ts`.
+   */
+  async discardByScrapeJob(
+    organizationId: string,
+    scrapeJobId: string,
+    actorUserId: string,
+  ): Promise<{ count: number }> {
+    const { count } = await this.prisma.lead.updateMany({
+      where: { organizationId, scrapeJobId, status: { in: PRE_QUALIFICATION_STATUSES } },
+      data: { status: 'DISQUALIFIED' },
+    });
+
+    if (count > 0) {
+      await this.auditService.log({
+        actorType: 'USER',
+        actorId: actorUserId,
+        organizationId,
+        action: 'lead.bulk_discarded',
+        resource: `ScrapeJob:${scrapeJobId}`,
+        metadata: { scrapeJobId, count },
+      });
+    }
+
+    return { count };
+  }
+
+  /**
    * `POST .../leads/:leadId/enrich` — enrichment sob demanda de UM lead
    * (fora do fluxo de scrape em massa, que já enriquece via
    * `NEEDS_MATCH_ENRICHMENT` no worker): chama `ExploriumGateway.matchBusiness`

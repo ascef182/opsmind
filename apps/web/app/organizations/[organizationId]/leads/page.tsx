@@ -8,7 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { MessageCircle } from 'lucide-react';
 import { useCurrentMembership, useMembers } from '@/lib/memberships/use-memberships';
-import { useLeads } from '@/lib/leads/use-leads';
+import { useLeads, useDiscardLeadsByScrapeJob } from '@/lib/leads/use-leads';
 import { useCreateScrapeJob, useScrapeJobs } from '@/lib/leads/use-scrape-jobs';
 import { SCRAPE_SOURCE_LABELS, WRITE_ROLES, type LeadStatus, type ScrapeSourceType } from '@/lib/leads/types';
 import { ApiError } from '@/lib/api-client';
@@ -88,13 +88,16 @@ function ScrapeJobsPanel({
   organizationId,
   activeScrapeJobId,
   onSelectScrapeJob,
+  canWrite,
 }: {
   organizationId: string;
   activeScrapeJobId?: string;
   onSelectScrapeJob: (jobId: string | null) => void;
+  canWrite: boolean;
 }) {
   const [expanded, setExpanded] = useState(Boolean(activeScrapeJobId));
   const scrapeJobs = useScrapeJobs(organizationId);
+  const discardLeads = useDiscardLeadsByScrapeJob(organizationId);
 
   return (
     <div className="rounded-lg border border-border bg-card">
@@ -117,7 +120,7 @@ function ScrapeJobsPanel({
             {scrapeJobs.data?.map((job) => {
               const isActive = job.id === activeScrapeJobId;
               return (
-                <li key={job.id}>
+                <li key={job.id} className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => onSelectScrapeJob(isActive ? null : job.id)}
@@ -137,6 +140,25 @@ function ScrapeJobsPanel({
                     </div>
                     <Badge value={job.status} />
                   </button>
+                  {canWrite && job.leadsFound > 0 && (
+                    <button
+                      type="button"
+                      title="Descartar todos os leads desta busca"
+                      disabled={discardLeads.isPending}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Descartar (marcar como desqualificado) todos os ${job.leadsFound} leads desta busca? Leads que já avançaram além da qualificação (ex.: com contato em andamento) não são afetados.`,
+                          )
+                        ) {
+                          discardLeads.mutate(job.id);
+                        }
+                      }}
+                      className="shrink-0 whitespace-nowrap text-xs font-medium text-negative-500 hover:underline disabled:opacity-50"
+                    >
+                      Descartar
+                    </button>
+                  )}
                 </li>
               );
             })}
@@ -162,6 +184,10 @@ export default function LeadsPage() {
   const [status, setStatus] = useState<LeadStatus | ''>('');
   const [hasWebsite, setHasWebsite] = useState<'' | 'true' | 'false'>('');
   const [hasContactMethod, setHasContactMethod] = useState<'' | 'true' | 'false'>('');
+  // Filtro de score mínimo — o backend já suportava (`ListLeadsQueryDto
+  // .minScore`), só faltava expor na UI. String (não number) pra permitir o
+  // campo vazio sem cair no caso de borda de `Number('') === 0`.
+  const [minScore, setMinScore] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
 
   // "Uma lista pra cada busca" — vive na URL (`?scrapeJobId=`) pra ser
@@ -189,6 +215,7 @@ export default function LeadsPage() {
     status: status || undefined,
     hasWebsite: hasWebsite === '' ? undefined : hasWebsite === 'true',
     hasContactMethod: hasContactMethod === '' ? undefined : hasContactMethod === 'true',
+    minScore: minScore === '' ? undefined : Number(minScore),
     scrapeJobId,
   });
   const createScrapeJob = useCreateScrapeJob(organizationId);
@@ -314,6 +341,15 @@ export default function LeadsPage() {
           <option value="true">Com contato</option>
           <option value="false">Sem contato</option>
         </Select>
+        <Input
+          type="number"
+          min={0}
+          max={100}
+          placeholder="Score mín."
+          value={minScore}
+          onChange={(e) => setMinScore(e.target.value)}
+          className="max-w-[120px]"
+        />
       </div>
 
       {scrapeJobId && (
@@ -407,6 +443,7 @@ export default function LeadsPage() {
         organizationId={organizationId}
         activeScrapeJobId={scrapeJobId}
         onSelectScrapeJob={setScrapeJobFilter}
+        canWrite={canWrite}
       />
     </div>
   );

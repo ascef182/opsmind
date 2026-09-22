@@ -9,6 +9,7 @@ import { UpdateLeadDto } from './dto/update-lead.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
 import { ConvertLeadDto } from './dto/convert-lead.dto';
 import { AssignLeadDto } from './dto/assign-lead.dto';
+import { DiscardLeadsByScrapeJobDto } from './dto/discard-leads-by-scrape-job.dto';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
@@ -41,6 +42,21 @@ export class LeadsController {
     @Query() query: ListLeadsQueryDto,
   ): Promise<Lead[]> {
     return this.leadsService.list(organizationId, query);
+  }
+
+  // Ferramenta de limpeza (Fase 5b, 2026-09) — descarta (DISQUALIFIED, nunca
+  // um DELETE) todos os leads pré-qualificação de UMA busca específica.
+  // Rota estática (não `:leadId`) — sem colisão com nenhuma outra rota POST
+  // deste controller.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post('discard-by-scrape-job')
+  discardByScrapeJob(
+    @Param('organizationId') organizationId: string,
+    @CurrentUser() user: { id: string },
+    @Body() dto: DiscardLeadsByScrapeJobDto,
+  ): Promise<{ count: number }> {
+    return this.leadsService.discardByScrapeJob(organizationId, dto.scrapeJobId, user.id);
   }
 
   @Get(':leadId')

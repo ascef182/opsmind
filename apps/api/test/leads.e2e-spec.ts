@@ -424,4 +424,108 @@ describe('Leads/Prospecção (e2e)', () => {
       .expect(200);
     expect(originalAfterRegenerate.body.status).toBe('REJECTED');
   });
+
+  // Fase 5b (2026-09) — descarte em lote por busca. Leads com scrapeJobId
+  // real só existem via o worker (fora do escopo deste e2e, ver comentário
+  // de topo do arquivo) — semeados direto via Prisma aqui (fora de contexto
+  // de request HTTP, então sem `app.current_org_id` setado; RLS trata isso
+  // como "sem contexto" e permite, mesma classe de exceção documentada em
+  // `enable_row_level_security/migration.sql` para scripts/seed).
+  it('discard-by-scrape-job: descarta só os leads pré-qualificação da própria organização, nunca de outra', async () => {
+    const ownerA = await registerUser(app, `leads-discard-a-${randomUUID()}@opsmind.test`);
+    const orgA = await createOrg(app, ownerA.accessToken, 'Leads Co Discard A');
+    const authA = { Authorization: `Bearer ${ownerA.accessToken}` };
+
+    const ownerB = await registerUser(app, `leads-discard-b-${randomUUID()}@opsmind.test`);
+    const orgB = await createOrg(app, ownerB.accessToken, 'Leads Co Discard B');
+    const authB = { Authorization: `Bearer ${ownerB.accessToken}` };
+
+    const scrapeJobRes = await request(app.getHttpServer())
+      .post(`/organizations/${orgA}/scrape-jobs`)
+      .set(authA)
+      .send({ sourceType: 'CAMOFOX_GOOGLE_SEARCH', city: 'São Paulo', state: 'SP', businessType: 'imobiliaria' })
+      .expect(201);
+    const scrapeJobId = scrapeJobRes.body.id as string;
+
+    const [qualifiedLead, disqualifiedLead, alreadyDraftedLead] = await Promise.all([
+      prisma.lead.create({
+        data: { organizationId: orgA, scrapeJobId, name: 'Portal Lixo 1', status: 'QUALIFIED', actorType: 'USER' },
+      }),
+      prisma.lead.create({
+        data: {
+          organizationId: orgA,
+          scrapeJobId,
+          name: 'Portal Lixo 2',
+          status: 'DISQUALIFIED',
+          actorType: 'USER',
+        },
+      }),
+      // Já avançou além da qualificação — nunca deve ser tocado pelo
+      // descarte em lote, mesmo pertencendo à mesma busca.
+      prisma.lead.create({
+        data: {
+          organizationId: orgA,
+          scrapeJobId,
+          name: 'Lead Já Em Andamento',
+          status: 'OUTREACH_DRAFTED',
+          actorType: 'USER',
+        },
+      }),
+    ]);
+
+    // Org B tentando descartar uma busca que não é dela: organizationId no
+    // WHERE garante count 0, nenhum lead da org A é tocado.
+    const crossTenantRes = await request(app.getHttpServer())
+      .post(`/organizations/${orgB}/leads/discard-by-scrape-job`)
+      .set(authB)
+      .send({ scrapeJobId })
+      .expect(201);
+    expect(crossTenantRes.body.count).toBe(0);
+
+    const stillQualified = await prisma.lead.findUnique({ where: { id: qualifiedLead.id } });
+    expect(stillQualified?.status).toBe('QUALIFIED');
+
+    // Org A descartando a própria busca: só os 2 leads pré-qualificação.
+    const discardRes = await request(app.getHttpServer())
+      .post(`/organizations/${orgA}/leads/discard-by-scrape-job`)
+      .set(authA)
+      .send({ scrapeJobId })
+      .expect(201);
+    expect(discardRes.body.count).toBe(2);
+
+    const [afterQualified, afterDisqualified, afterDrafted] = await Promise.all([
+      prisma.lead.findUnique({ where: { id: qualifiedLead.id } }),
+      prisma.lead.findUnique({ where: { id: disqualifiedLead.id } }),
+      prisma.lead.findUnique({ where: { id: alreadyDraftedLead.id } }),
+    ]);
+    expect(afterQualified?.status).toBe('DISQUALIFIED');
+    expect(afterDisqualified?.status).toBe('DISQUALIFIED');
+    // Nunca regride um lead que já passou de OUTREACH_DRAFTED+.
+    expect(afterDrafted?.status).toBe('OUTREACH_DRAFTED');
+
+    const auditEntry = await prisma.auditLog.findFirst({
+      where: { organizationId: orgA, action: 'lead.bulk_discarded', resource: `ScrapeJob:${scrapeJobId}` },
+    });
+    expect(auditEntry).toBeTruthy();
+
+    // VIEWER não pode disparar a ação (WRITE_ROLES only).
+    const viewer = await registerUser(app, `leads-discard-viewer-${randomUUID()}@opsmind.test`);
+    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    await request(app.getHttpServer())
+      .post(`/organizations/${orgA}/invite`)
+      .set(authA)
+      .send({ email: viewer.email, role: 'VIEWER' })
+      .expect(201);
+    const invitationToken = /token: (\S+)/.exec(logSpy.mock.calls.map((c) => c.join(' ')).join('\n'))?.at(1);
+    logSpy.mockRestore();
+    await request(app.getHttpServer())
+      .post(`/invitations/${invitationToken}/accept`)
+      .set({ Authorization: `Bearer ${viewer.accessToken}` })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/organizations/${orgA}/leads/discard-by-scrape-job`)
+      .set({ Authorization: `Bearer ${viewer.accessToken}` })
+      .send({ scrapeJobId })
+      .expect(403);
+  });
 });

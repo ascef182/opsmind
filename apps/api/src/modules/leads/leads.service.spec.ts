@@ -554,6 +554,62 @@ describe('LeadsService', () => {
     });
   });
 
+  describe('discardByScrapeJob', () => {
+    it('marca DISQUALIFIED todos os leads pré-qualificação da busca e audita', async () => {
+      prisma.lead.updateMany.mockResolvedValue({ count: 3 });
+
+      const result = await service.discardByScrapeJob('org-1', 'job-1', 'user-1');
+
+      expect(prisma.lead.updateMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          scrapeJobId: 'job-1',
+          status: { in: ['DISCOVERED', 'QUALIFIED', 'DISQUALIFIED'] },
+        },
+        data: { status: 'DISQUALIFIED' },
+      });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorType: 'USER',
+          actorId: 'user-1',
+          organizationId: 'org-1',
+          action: 'lead.bulk_discarded',
+          resource: 'ScrapeJob:job-1',
+          metadata: { scrapeJobId: 'job-1', count: 3 },
+        }),
+      );
+      expect(result).toEqual({ count: 3 });
+    });
+
+    // O guard de status entra no próprio WHERE do updateMany (nunca uma
+    // checagem em memória separada) — leads OUTREACH_DRAFTED+ nunca
+    // aparecem no resultado do updateMany, então nunca são tocados. Este
+    // teste só confirma que o WHERE realmente restringe a esses 3 status,
+    // não simula o banco filtrando de verdade (isso é coberto pelo e2e).
+    it('nunca audita quando nenhum lead pré-qualificação existe nesta busca (count 0)', async () => {
+      prisma.lead.updateMany.mockResolvedValue({ count: 0 });
+
+      const result = await service.discardByScrapeJob('org-1', 'job-1', 'user-1');
+
+      expect(auditService.log).not.toHaveBeenCalled();
+      expect(result).toEqual({ count: 0 });
+    });
+
+    // Isolamento multi-tenant: um scrapeJobId de outra organização (ou
+    // inexistente) nunca precisa de checagem separada — o organizationId já
+    // no WHERE garante count:0, sem tocar nenhum lead de outro tenant.
+    it('scrapeJobId de outra organização (ou inexistente): organizationId no WHERE garante count 0, sem checagem extra', async () => {
+      prisma.lead.updateMany.mockResolvedValue({ count: 0 });
+
+      const result = await service.discardByScrapeJob('org-1', 'job-de-outra-org', 'user-1');
+
+      expect(prisma.lead.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-1' }) }),
+      );
+      expect(result).toEqual({ count: 0 });
+    });
+  });
+
   describe('enrich', () => {
     it('grava LeadEnrichment quando a Explorium encontra um match e recalcula o score', async () => {
       const lead = {

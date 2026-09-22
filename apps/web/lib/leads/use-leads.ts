@@ -64,6 +64,21 @@ export function useScoreLead(organizationId: string, leadId: string) {
   });
 }
 
+// `POST .../leads/discard-by-scrape-job` — descarte em lote (marca
+// DISQUALIFIED, nunca um DELETE) de todos os leads pré-qualificação de uma
+// busca específica. Ver LeadsService.discardByScrapeJob.
+export function useDiscardLeadsByScrapeJob(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (scrapeJobId: string) =>
+      apiFetch<{ count: number }>(`/organizations/${organizationId}/leads/discard-by-scrape-job`, {
+        method: 'POST',
+        body: { scrapeJobId },
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'leads'] }),
+  });
+}
+
 // `POST .../leads/:leadId/assign` — reatribuição manual/explícita, sempre
 // vence sobre o round-robin automático da criação (ver LeadsService.assign).
 export function useAssignLead(organizationId: string, leadId: string) {
