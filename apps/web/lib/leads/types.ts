@@ -31,10 +31,22 @@ export const AUTOMATABLE_SOURCE_TYPES: Exclude<ScrapeSourceType, 'MANUAL'>[] = [
   'CAMOFOX_REDDIT_SEARCH',
 ];
 
+// CAMOFOX_GOOGLE_SEARCH rotulado como "experimental" (2026-09): achado ao
+// vivo que a maioria dos resultados de @google_search pra uma categoria
+// genérica são página de portal/diretório/listicle sobre a categoria, não o
+// negócio individual — e um negócio que de fato não tem site estruturalmente
+// não aparece como resultado orgânico do Google (não tem página própria pra
+// indexar). Apify/Explorium confirmam ausência de site via dado estruturado
+// real (Google Maps/firmografia) — por isso vêm primeiro em
+// `AUTOMATABLE_SOURCE_TYPES` abaixo. Mantido disponível (não removido): o
+// filtro de ingestão (`looksLikeDirectoryOrListicle`, apps/worker) e o fix
+// de scoring (`websiteConfirmedAbsent`) já reduzem bastante o risco, mas a
+// cobertura pra achar negócio sem site por essa via específica continua
+// menor que as outras duas fontes.
 export const SCRAPE_SOURCE_LABELS: Record<ScrapeSourceType, string> = {
   APIFY_GOOGLE_MAPS: 'Apify — Google Maps',
   EXPLORIUM_BUSINESS_SEARCH: 'Explorium — Busca B2B',
-  CAMOFOX_GOOGLE_SEARCH: 'Camoufox — Busca no Google',
+  CAMOFOX_GOOGLE_SEARCH: 'Camoufox — Busca no Google (experimental, cobertura menor para negócio sem site)',
   CAMOFOX_REDDIT_SEARCH: 'Camoufox — Busca no Reddit',
   MANUAL: 'Manual',
 };
