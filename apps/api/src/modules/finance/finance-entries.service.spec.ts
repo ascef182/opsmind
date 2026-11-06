@@ -321,4 +321,20 @@ describe('FinanceEntriesService.list', () => {
       expect.objectContaining({ where: expect.objectContaining({ scope: 'PERSONAL' }) }),
     );
   });
+
+  it('sem sort informado, ordena por vencimento mais recente primeiro', async () => {
+    const { service, prisma } = setup();
+    await service.list(ORG, { limit: 20, offset: 0 } as never);
+    expect(prisma.financialEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: [{ dueDate: 'desc' }, { createdAt: 'desc' }] }),
+    );
+  });
+
+  it('com sort=asc, ordena por vencimento mais antigo primeiro', async () => {
+    const { service, prisma } = setup();
+    await service.list(ORG, { sort: 'asc', limit: 20, offset: 0 } as never);
+    expect(prisma.financialEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }] }),
+    );
+  });
 });

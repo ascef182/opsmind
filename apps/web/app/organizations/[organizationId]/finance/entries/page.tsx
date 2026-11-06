@@ -537,6 +537,7 @@ export default function EntriesPage() {
   const [search, setSearch] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [sort, setSort] = useState<'asc' | 'desc'>('desc');
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -550,8 +551,9 @@ export default function EntriesPage() {
       search: search.trim() || undefined,
       from: from || undefined,
       to: to || undefined,
+      sort,
     }),
-    [direction, status, category, scope, search, from, to],
+    [direction, status, category, scope, search, from, to, sort],
   );
   const entries = useFinancialEntries(organizationId, filter);
   const allCategories = [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES];
@@ -589,6 +591,10 @@ export default function EntriesPage() {
         <Input className="w-40" type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Vencimento de" />
         <Input className="w-40" type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Vencimento até" />
         <Input className="w-48" placeholder="Buscar descrição…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <Select className="w-44" value={sort} onChange={(e) => setSort(e.target.value as 'asc' | 'desc')} aria-label="Ordenar por">
+          <option value="desc">Mais recentes primeiro</option>
+          <option value="asc">Mais antigos primeiro</option>
+        </Select>
         <div className="ml-auto flex gap-2">
           <Button
             variant="secondary"

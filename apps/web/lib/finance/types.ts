@@ -216,6 +216,8 @@ export interface EntryFilter {
   from?: string;
   to?: string;
   search?: string;
+  // Ordena pelo vencimento. Padrão (sem informar): mais recente primeiro.
+  sort?: 'asc' | 'desc';
 }
 
 export interface CreateEntryInput {

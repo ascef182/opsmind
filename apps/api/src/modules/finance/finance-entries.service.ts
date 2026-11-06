@@ -133,10 +133,11 @@ export class FinanceEntriesService {
       where.status = query.status;
     }
 
+    const direction = query.sort ?? 'desc';
     const entries = await this.prisma.financialEntry.findMany({
       where,
       include: ENTRY_INCLUDE,
-      orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+      orderBy: [{ dueDate: direction }, { createdAt: direction }],
       take: query.limit,
       skip: query.offset,
     });

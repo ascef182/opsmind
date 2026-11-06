@@ -263,6 +263,11 @@ export class ListEntriesQueryDto {
   @MaxLength(100)
   search?: string;
 
+  // Ordena pelo vencimento. Padrão: mais recente primeiro.
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sort?: 'asc' | 'desc';
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()
