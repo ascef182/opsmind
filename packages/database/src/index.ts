@@ -46,4 +46,13 @@ export type {
   OutreachChannel,
   OutreachStatus,
   MarketOpportunityStatus,
+  Contract,
+  RecurringEntry,
+  FinancialEntry,
+  FinancialPayment,
+  FinancialDirection,
+  FinancialCategory,
+  FinancialEntryStatus,
+  ContractBilling,
+  ContractStatus,
 } from '@prisma/client';

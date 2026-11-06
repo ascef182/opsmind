@@ -29,6 +29,7 @@ import {
 } from '@/lib/meetings/use-meetings';
 import { buildGoogleCalendarUrl } from '@/lib/meetings/types';
 import { useCreateDealNote, useDealNotes } from '@/lib/collaboration/use-internal-notes';
+import { DealContractCard } from '@/components/finance/deal-contract-card';
 import { InternalNotesCard } from '@/components/collaboration/internal-notes-card';
 import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
@@ -138,6 +139,12 @@ export default function DealDetailPage() {
           )}
         </div>
       </Card>
+
+      <DealContractCard
+        organizationId={organizationId}
+        dealId={dealId}
+        dealStage={deal.data.stage}
+      />
 
       {canWrite && (
         <Card>

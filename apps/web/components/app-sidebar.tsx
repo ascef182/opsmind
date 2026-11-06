@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { NAV_GROUPS, NAV_ITEMS } from '@/lib/nav-items';
+import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import {
   Sidebar,
   SidebarContent,
@@ -19,6 +20,9 @@ import {
 
 export function AppSidebar({ organizationId }: { organizationId: string }) {
   const pathname = usePathname();
+  const { membership } = useCurrentMembership(organizationId);
+  // Item com `roles` só aparece quando o papel é conhecido e permitido (some enquanto carrega — evita piscar).
+  const visibleItems = NAV_ITEMS.filter((item) => !item.roles || (membership && item.roles.includes(membership.role)));
 
   // O antigo app-nav.tsx tentava evitar que "Assistente IA" (/ai) e "Uso de
   // IA" (/ai/usage) acendessem juntos comparando `startsWith(href + '/')`,
@@ -26,7 +30,7 @@ export function AppSidebar({ organizationId }: { organizationId: string }) {
   // true, então os dois continuavam acendendo ao mesmo tempo. A correção de
   // verdade é achar o segmento MAIS ESPECÍFICO que bate com a rota atual (o
   // de maior tamanho) e marcar só esse como ativo.
-  const activeSegment = [...NAV_ITEMS]
+  const activeSegment = [...visibleItems]
     .filter((item) => {
       const href = `/organizations/${organizationId}/${item.segment}`;
       return pathname === href || (pathname?.startsWith(href + '/') ?? false);
@@ -35,7 +39,7 @@ export function AppSidebar({ organizationId }: { organizationId: string }) {
 
   const isActive = (segment: string) => segment === activeSegment;
 
-  const footerItems = NAV_ITEMS.filter((item) => item.group === null);
+  const footerItems = visibleItems.filter((item) => item.group === null);
 
   return (
     <Sidebar collapsible="icon">
@@ -49,7 +53,7 @@ export function AppSidebar({ organizationId }: { organizationId: string }) {
       </SidebarHeader>
       <SidebarContent>
         {NAV_GROUPS.map((group) => {
-          const items = NAV_ITEMS.filter((item) => item.group === group.id);
+          const items = visibleItems.filter((item) => item.group === group.id);
           return (
             <SidebarGroup key={group.id}>
               <SidebarGroupLabel>{group.label}</SidebarGroupLabel>

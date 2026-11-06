@@ -10,3 +10,4 @@ export * from './market-opportunity.types';
 export * from './outreach-autodraft.types';
 export * from './social-link.types';
 export * from './safe-url';
+export * from './finance';

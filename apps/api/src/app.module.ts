@@ -27,6 +27,7 @@ import { AutomationsModule } from './modules/automations/automations.module';
 import { LeadsModule } from './modules/leads/leads.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { MarketOpportunitiesModule } from './modules/market-opportunities/market-opportunities.module';
+import { FinanceModule } from './modules/finance/finance.module';
 import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
 import { TenantContextInterceptor } from './shared/interceptors/tenant-context.interceptor';
 
@@ -79,6 +80,7 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     LeadsModule,
     WebhooksModule,
     MarketOpportunitiesModule,
+    FinanceModule,
   ],
   controllers: [AppController],
   providers: [

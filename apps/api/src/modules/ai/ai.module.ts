@@ -30,6 +30,8 @@ import { MoveDealStageTool } from './tools/move-deal-stage.tool';
 import { ListDealsTool } from './tools/list-deals.tool';
 import { GenerateDealProposalTool } from './tools/generate-deal-proposal.tool';
 import { GetSalesForecastTool } from './tools/get-sales-forecast.tool';
+import { GetFinancialSummaryTool } from './tools/get-financial-summary.tool';
+import { FinanceModule } from '../finance/finance.module';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 
 @Module({
@@ -42,6 +44,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     LeadsModule,
     DealsModule,
     DashboardModule,
+    FinanceModule,
   ],
   controllers: [AiController],
   providers: [
@@ -66,6 +69,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     ListDealsTool,
     GenerateDealProposalTool,
     GetSalesForecastTool,
+    GetFinancialSummaryTool,
     {
       provide: AI_TOOLS,
       useFactory: (
@@ -85,6 +89,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         listDeals: ListDealsTool,
         generateDealProposal: GenerateDealProposalTool,
         getSalesForecast: GetSalesForecastTool,
+        getFinancialSummary: GetFinancialSummaryTool,
       ): AiTool[] => [
         getCustomer,
         searchCustomers,
@@ -102,6 +107,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         listDeals,
         generateDealProposal,
         getSalesForecast,
+        getFinancialSummary,
       ],
       inject: [
         GetCustomerTool,
@@ -120,6 +126,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         ListDealsTool,
         GenerateDealProposalTool,
         GetSalesForecastTool,
+        GetFinancialSummaryTool,
       ],
     },
   ],

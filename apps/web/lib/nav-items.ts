@@ -1,11 +1,14 @@
 import type { LucideIcon } from 'lucide-react';
-import { Building2, Gauge, Handshake, LayoutDashboard, Lightbulb, ListTodo, Send, Sparkles, Target, Users, UsersRound } from 'lucide-react';
+import { Building2, Gauge, Handshake, LayoutDashboard, Lightbulb, ListTodo, Send, Sparkles, Target, Users, UsersRound, Wallet } from 'lucide-react';
+import type { Role } from '@opsmind/shared-types';
 
 export interface NavItem {
   label: string;
   segment: string;
   icon: LucideIcon;
   group: 'workspace' | 'intelligence' | null;
+  /** Papéis que enxergam o item. Omitido = todos. Só esconde UI; a API é quem barra. */
+  roles?: Role[];
 }
 
 // Array tipado (não JSX por item) — permite empurrar uma nova seção
@@ -20,6 +23,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Clientes', segment: 'customers', icon: Building2, group: 'workspace' },
   { label: 'Negócios', segment: 'deals', icon: Handshake, group: 'workspace' },
   { label: 'Tarefas', segment: 'tasks', icon: ListTodo, group: 'workspace' },
+  { label: 'Financeiro', segment: 'finance', icon: Wallet, group: 'workspace', roles: ['OWNER', 'ADMIN', 'MANAGER'] },
   { label: 'Assistente IA', segment: 'ai', icon: Sparkles, group: 'intelligence' },
   { label: 'Uso de IA', segment: 'ai/usage', icon: Gauge, group: 'intelligence' },
   { label: 'Equipe', segment: 'team', icon: UsersRound, group: null },

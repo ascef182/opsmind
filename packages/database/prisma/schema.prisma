@@ -162,10 +162,10 @@ model Organization {
   // automático de outreach (Task 11) e o clustering de Reddit (Task 12) chamam
   // a IA sozinhos, disparados por scan/fila. Qualquer organização com esses
   // caminhos ativos DEVE ter este campo configurado.
-  aiMonthlyBudget       Decimal? @map("ai_monthly_budget") @db.Decimal(10, 2)
+  aiMonthlyBudget         Decimal? @map("ai_monthly_budget") @db.Decimal(10, 2)
   // Regra de negócio (PRD §8): "cliente inativo há mais de N dias, configurável
   // por organização, padrão 14" — sem este campo não há onde configurar o N.
-  inactiveAfterDays     Int      @default(14) @map("inactive_after_days")
+  inactiveAfterDays       Int      @default(14) @map("inactive_after_days")
   // Teto de gasto mensal com scraping (Apify/Explorium/Camoufox) — mesmo
   // espírito de aiMonthlyBudget, mas orçamento separado: os dois consomem
   // orçamentos de fornecedores distintos e não devem competir pelo mesmo teto.
@@ -173,17 +173,17 @@ model Organization {
   // IMPORTANTE: qualquer organização com scans automáticos ativos (Tasks 7/13)
   // DEVE ter este campo configurado — sem limite = risco de gasto descontrolado
   // em scraping automático de alto volume.
-  scrapingMonthlyBudget Decimal? @map("scraping_monthly_budget") @db.Decimal(10, 2)
+  scrapingMonthlyBudget   Decimal? @map("scraping_monthly_budget") @db.Decimal(10, 2)
   // Texto livre curto descrevendo tom/estilo de outreach, usado como guia
   // few-shot no prompt de `generate_outreach_message` (Task 10) — sem isso, o
   // prompt usa a orientação de tom padrão já escrita em OUTREACH_SYSTEM_PROMPT.
-  outreachVoiceGuide    String?  @map("outreach_voice_guide") @db.Text
+  outreachVoiceGuide      String?  @map("outreach_voice_guide") @db.Text
   // Endereço físico de correspondência exigido em TODO e-mail de outreach
   // (CAN-SPAM/EUA: obrigatório por lei, multa até $53k/e-mail; boa prática
   // mesmo fora dos EUA) — sem isso preenchido, `OutreachService.send()`
   // recusa enviar (ver comentário em `renderOutreachHtml`). Null só é
   // aceitável antes da organização configurar isso pela primeira vez.
-  outreachPhysicalAddress String? @map("outreach_physical_address") @db.Text
+  outreachPhysicalAddress String?  @map("outreach_physical_address") @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -212,6 +212,10 @@ model Organization {
   meetings              Meeting[]
   dealSignatureRequests DealSignatureRequest[]
   internalNotes         InternalNote[]
+  contracts             Contract[]
+  financialEntries      FinancialEntry[]
+  financialPayments     FinancialPayment[]
+  recurringEntries      RecurringEntry[]
 
   @@map("organizations")
 }
@@ -377,15 +381,20 @@ model Customer {
   createdAt      DateTime       @default(now()) @map("created_at")
   updatedAt      DateTime       @updatedAt @map("updated_at")
 
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  owner        User?         @relation("CustomerOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  tasks        Task[]
-  activityLogs ActivityLog[]
-  documents    Document[]
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner            User?            @relation("CustomerOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  tasks            Task[]
+  activityLogs     ActivityLog[]
+  documents        Document[]
   // Leads convertidos em cliente (Lead.convertedCustomerId) — permite navegar
   // de um Customer de volta ao(s) Lead(s) de prospecção que o originaram.
-  originLeads  Lead[]
-  deals        Deal[]
+  originLeads      Lead[]
+  deals            Deal[]
+  // Financeiro: registros de dinheiro nunca somem junto com o cliente (Customer
+  // usa soft-delete), por isso as FKs de contrato/lançamento são RESTRICT.
+  contracts        Contract[]
+  financialEntries FinancialEntry[]
+  recurringEntries RecurringEntry[]
 
   @@index([organizationId, status])
   @@index([organizationId, lastActivityAt])
@@ -504,6 +513,7 @@ model Deal {
   meetings          Meeting[]
   signatureRequests DealSignatureRequest[]
   internalNotes     InternalNote[]
+  contracts         Contract[]
 
   @@index([organizationId, stage])
   @@index([organizationId, customerId])
@@ -1064,11 +1074,11 @@ model ProspectingTarget {
 // Termo/subreddit monitorado (Task 12/13/14) — a partir daqui o worker busca
 // menções recorrentes de um problema e agrupa em MarketOpportunity.
 model RedditWatchTopic {
-  id             String   @id @default(uuid())
-  organizationId String   @map("organization_id")
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
   query          String
   subreddit      String?
-  isActive       Boolean  @default(true) @map("is_active")
+  isActive       Boolean   @default(true) @map("is_active")
   // Histórico da última tentativa de scan (`scanRedditMiningTopics`,
   // apps/worker/src/reddit-mining-scan.ts) — sem isso o monitoramento parecia
   // "não funcionar" silenciosamente sempre que o Camofox estivesse
@@ -1078,10 +1088,10 @@ model RedditWatchTopic {
   // enum Prisma — mesmo padrão de texto livre curto que outros status
   // "internos" deste schema, evita migration extra pra adicionar um valor).
   lastScannedAt  DateTime? @map("last_scanned_at")
-  lastScanStatus String?  @map("last_scan_status")
-  lastScanError  String?  @map("last_scan_error")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  lastScanStatus String?   @map("last_scan_status")
+  lastScanError  String?   @map("last_scan_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -1115,4 +1125,265 @@ model MarketOpportunity {
   @@unique([organizationId, topicKey])
   @@index([organizationId, status])
   @@map("market_opportunities")
+}
+
+// ── Financeiro ───────────────────────────────────────────────────────────
+// Módulo financeiro integrado ao CRM (Customer -> Deal -> Contract ->
+// FinancialEntry -> FinancialPayment). Decisões que valem para as quatro
+// tabelas abaixo (detalhes e raciocínio na migration
+// 20261106120000_finance_module):
+//
+//  1. DINHEIRO EM CENTAVOS INTEIROS (`*_cents`, Int) — nunca Decimal/float.
+//     Soma exata, serialização JSON segura (Decimal vira string). Teto de
+//     ~R$ 21,4 milhões por lançamento, folgado para uma operação deste porte.
+//  2. NADA É APAGADO. Lançamento é CANCELADO (status + motivo), pagamento é
+//     ESTORNADO (`reversed_at`). `delete` em linha de dinheiro reescreve o
+//     passado — por isso também as FKs para Customer são RESTRICT.
+//  3. CONTRATADO != FATURADO != RECEBIDO. Contract guarda o que foi
+//     combinado; FinancialEntry (status PLANNED/PENDING...) o que foi/será
+//     cobrado; FinancialPayment o dinheiro que realmente entrou/saiu. Os
+//     relatórios nunca misturam as três coisas.
+//  4. "ATRASADO" É DERIVADO, nunca gravado: vencimento < hoje e ainda não
+//     quitado. Um status gravado ficaria errado na virada do dia sem job.
+//  5. DATAS DE NEGÓCIO SÃO `DATE` (sem hora/fuso): vencimento e pagamento
+//     são dias do calendário brasileiro, não instantes.
+
+enum FinancialDirection {
+  INCOME
+  EXPENSE
+}
+
+// Dono do lançamento: empresa (CNPJ) ou pessoa física. Default BUSINESS —
+// todo o histórico existente antes deste campo é da empresa. Ver
+// FinancialScope em packages/shared-types/src/finance.ts.
+enum FinancialScope {
+  BUSINESS
+  PERSONAL
+}
+
+// Uma lista só para entradas e saídas; a coerência direção <-> categoria é
+// validada no service (packages/shared-types/src/finance.ts, CATEGORY_DIRECTION).
+enum FinancialCategory {
+  // Receitas
+  IMPLEMENTATION
+  PROJECT
+  DEVELOPMENT
+  CONSULTING
+  MONTHLY_FEE
+  SAAS
+  RECURRING_CONTRACT
+  ADDITIONAL_SERVICE
+  OTHER_INCOME
+  PRODUCT_SALE
+  PERSONAL_ASSET_SALE
+  // Despesas
+  INFRASTRUCTURE
+  DOMAINS
+  APIS
+  AI
+  WHATSAPP
+  TOOLS
+  MARKETING
+  TAXES
+  SUPPLIERS
+  OPERATIONAL
+  OTHER_EXPENSE
+}
+
+// PLANNED = previsto (ainda não cobrado/emitido); PENDING = cobrado, nada
+// recebido; PARTIAL = parte quitada; PAID = quitado; CANCELLED = anulado.
+// OVERDUE não existe aqui de propósito (ver decisão 4 acima).
+enum FinancialEntryStatus {
+  PLANNED
+  PENDING
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+// Moeda estrangeira nominal de uma despesa/receita cotada fora do real (ex.:
+// assinatura cobrada em USD). Nunca inclui BRL — BRL é o padrão implícito de
+// amountCents, "estrangeira" só existe quando é de fato outra moeda. Apenas
+// USD por ora; estende-se com ALTER TYPE ... ADD VALUE se precisar de outra.
+enum FinancialCurrency {
+  USD
+}
+
+enum ContractBilling {
+  ONE_TIME
+  MONTHLY
+}
+
+enum ContractStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+// O que foi combinado com o cliente (receita CONTRATADA) — também faz o
+// papel de "projeto" na rentabilidade: cada contrato é uma frente de
+// trabalho com receitas e custos próprios.
+model Contract {
+  id             String            @id @default(uuid())
+  organizationId String            @map("organization_id")
+  customerId     String            @map("customer_id")
+  // Ponte "ganhar -> faturar": Deal que originou o contrato, quando houver.
+  dealId         String?           @map("deal_id")
+  title          String
+  // Sempre uma categoria de RECEITA (validado no service).
+  category       FinancialCategory
+  billing        ContractBilling
+  // ONE_TIME: valor total do contrato. MONTHLY: valor de cada mensalidade.
+  valueCents     Int               @map("value_cents")
+  startDate      DateTime          @map("start_date") @db.Date
+  // Nulo em MONTHLY = vigência indeterminada.
+  endDate        DateTime?         @map("end_date") @db.Date
+  // Dia do mês da cobrança (1-31; dia inexistente cai no último dia do mês).
+  billingDay     Int?              @map("billing_day")
+  status         ContractStatus    @default(ACTIVE)
+  notes          String?           @db.Text
+  actorType      AuditActorType    @map("actor_type")
+  actorId        String?           @map("actor_id")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  deal             Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  entries          FinancialEntry[]
+  recurringEntries RecurringEntry[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+  @@index([dealId])
+  @@map("contracts")
+}
+
+// MOLDE de lançamento que se repete todo mês (mensalidade, VPS, domínio).
+// Nunca movimenta dinheiro: gera FinancialEntry PENDING, idempotente por
+// (recurring_entry_id, reference_month) — ver unique em FinancialEntry.
+model RecurringEntry {
+  id                 String             @id @default(uuid())
+  organizationId     String             @map("organization_id")
+  direction          FinancialDirection
+  category           FinancialCategory
+  scope              FinancialScope     @default(BUSINESS)
+  description        String
+  supplierName       String?            @map("supplier_name")
+  amountCents        Int                @map("amount_cents")
+  // Taxas/custos de cada lançamento gerado (só faz sentido em receitas).
+  feesCents          Int                @default(0) @map("fees_cents")
+  // Valor nominal de referência em moeda estrangeira (ex.: Railway = US$
+  // 5,00/mês). Só informativo: amountCents continua sendo a estimativa em
+  // reais usada para gerar os lançamentos — a cotação/IOF reais de cada mês
+  // ficam em FinancialEntry, nunca aqui (variam mês a mês, o molde não).
+  foreignCurrency    FinancialCurrency? @map("foreign_currency")
+  foreignAmountCents Int?               @map("foreign_amount_cents")
+  dayOfMonth         Int                @map("day_of_month")
+  // 'YYYY-MM' — primeiro e (opcional) último mês de geração.
+  startMonth         String             @map("start_month")
+  endMonth           String?            @map("end_month")
+  active             Boolean            @default(true)
+  customerId         String?            @map("customer_id")
+  contractId         String?            @map("contract_id")
+  actorType          AuditActorType     @map("actor_type")
+  actorId            String?            @map("actor_id")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contract     Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  entries      FinancialEntry[]
+
+  @@index([organizationId, active])
+  @@map("recurring_entries")
+}
+
+// Conta a receber (INCOME) ou a pagar (EXPENSE) — e a receita/despesa
+// FATURADA. O dinheiro que de fato entrou/saiu está em FinancialPayment.
+model FinancialEntry {
+  id                 String               @id @default(uuid())
+  organizationId     String               @map("organization_id")
+  direction          FinancialDirection
+  category           FinancialCategory
+  scope              FinancialScope       @default(BUSINESS)
+  description        String
+  // Fornecedor (despesas); nulo em receitas.
+  supplierName       String?              @map("supplier_name")
+  customerId         String?              @map("customer_id")
+  contractId         String?              @map("contract_id")
+  recurringEntryId   String?              @map("recurring_entry_id")
+  // 'YYYY-MM' do lançamento gerado por molde — chave de idempotência.
+  referenceMonth     String?              @map("reference_month")
+  // Valor bruto cobrado.
+  amountCents        Int                  @map("amount_cents")
+  // Taxas e custos de recebimento (gateway, imposto retido...). Reconhecidos
+  // no resultado quando o lançamento é totalmente quitado (`settled_at`).
+  feesCents          Int                  @default(0) @map("fees_cents")
+  // Valor nominal em moeda estrangeira deste lançamento específico (herdado
+  // do molde na geração, ou informado manualmente num lançamento avulso).
+  foreignCurrency    FinancialCurrency?   @map("foreign_currency")
+  foreignAmountCents Int?                 @map("foreign_amount_cents")
+  // Cotação do dia e IOF reais — preenchidos quando o usuário reconcilia
+  // este mês contra e-mail/extrato (nunca calculados automaticamente).
+  exchangeRate       Decimal?             @map("exchange_rate") @db.Decimal(10, 4)
+  iofCents           Int?                 @map("iof_cents")
+  // Soma dos pagamentos não estornados — denormalizado e mantido na MESMA
+  // transação que grava/estorna o pagamento (a fonte da verdade continua
+  // sendo financial_payments).
+  paidCents          Int                  @default(0) @map("paid_cents")
+  status             FinancialEntryStatus @default(PENDING)
+  issueDate          DateTime             @map("issue_date") @db.Date
+  dueDate            DateTime             @map("due_date") @db.Date
+  // Dia em que paid_cents alcançou amount_cents; nulo enquanto em aberto.
+  settledAt          DateTime?            @map("settled_at") @db.Date
+  cancelledAt        DateTime?            @map("cancelled_at")
+  cancelReason       String?              @map("cancel_reason")
+  notes              String?              @db.Text
+  actorType          AuditActorType       @map("actor_type")
+  actorId            String?              @map("actor_id")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer?          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contract       Contract?          @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  recurringEntry RecurringEntry?    @relation(fields: [recurringEntryId], references: [id], onDelete: SetNull)
+  payments       FinancialPayment[]
+
+  // Idempotência do gerador de recorrência: o mesmo molde nunca gera dois
+  // lançamentos para o mesmo mês (NULLs são distintos em Postgres, então
+  // lançamentos avulsos não colidem).
+  @@unique([recurringEntryId, referenceMonth])
+  @@index([organizationId, direction, status])
+  @@index([organizationId, scope])
+  @@index([organizationId, dueDate])
+  @@index([organizationId, customerId])
+  @@index([organizationId, contractId])
+  @@map("financial_entries")
+}
+
+// Dinheiro que efetivamente entrou (INCOME) ou saiu (EXPENSE). Parcial é só
+// mais de uma linha para o mesmo lançamento. Estorno marca `reversed_at`.
+model FinancialPayment {
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
+  entryId        String         @map("entry_id")
+  amountCents    Int            @map("amount_cents")
+  paidAt         DateTime       @map("paid_at") @db.Date
+  method         String?
+  note           String?
+  reversedAt     DateTime?      @map("reversed_at")
+  reverseReason  String?        @map("reverse_reason")
+  actorType      AuditActorType @map("actor_type")
+  actorId        String?        @map("actor_id")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entry        FinancialEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, paidAt])
+  @@index([entryId])
+  @@map("financial_payments")
 }

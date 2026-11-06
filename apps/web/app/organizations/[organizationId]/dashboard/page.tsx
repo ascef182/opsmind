@@ -20,7 +20,32 @@ import { Badge } from '@/components/ui/badge';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
 import { ForecastBreakdown } from '@/components/dashboard/forecast-breakdown';
 import { BudgetBar } from '@/components/ai/budget-bar';
-import { BarChartHighlighted, DonutChart, LineChartWithTooltip, SparklineChart } from '@/components/ui/chart-card';
+import { FinanceSnapshotSection } from '@/components/finance/dashboard-snapshot';
+import {
+  BarChartHighlighted,
+  DonutChart,
+  LineChartWithTooltip,
+  SparklineChart,
+} from '@/components/ui/chart-card';
+import { Skeleton } from '@/components/ui/skeleton';
+
+// Skeleton de página inteira — mostrado enquanto QUALQUER uma das 4 consultas
+// principais ainda carrega, pra não aparecer em pedaços conforme cada uma
+// resolve na sua própria velocidade (cada seção mantém seu próprio
+// isError/isSuccess depois disso, sem mudança).
+function DashboardSkeleton() {
+  return (
+    <div className="flex flex-col gap-8">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-24" />
+        ))}
+      </div>
+      <Skeleton className="h-64" />
+      <Skeleton className="h-48" />
+    </div>
+  );
+}
 
 // ── Widgets 1/2 (KPIs "Leads sem site" / "Leads encontrados (14 dias)") ────
 //
@@ -58,7 +83,11 @@ interface DailyPoint {
 // Preenchemos os dias sem nenhum lead com 0 aqui no front: sem isso, tanto o
 // sparkline/gráfico de linha quanto a janela de 7 dias do delta ficariam
 // incorretos em qualquer período com pelo menos um dia sem lead nenhum.
-function buildDailySeries(points: LeadsByDayPoint[], days: number, key: 'total' | 'withoutWebsite'): DailyPoint[] {
+function buildDailySeries(
+  points: LeadsByDayPoint[],
+  days: number,
+  key: 'total' | 'withoutWebsite',
+): DailyPoint[] {
   const byDate = new Map(points.map((p) => [p.date, p[key]]));
   const series: DailyPoint[] = [];
   const cursor = new Date();
@@ -108,7 +137,8 @@ function sumSeries(series: DailyPoint[]): number {
 function DeltaBadge({ delta, colorCoded = false }: { delta: Delta; colorCoded?: boolean }) {
   const arrow = delta.diff > 0 ? '▲' : delta.diff < 0 ? '▼' : '→';
   const diffLabel = `${delta.diff > 0 ? '+' : ''}${delta.diff}`;
-  const pctLabel = delta.pct === null ? '' : ` (${delta.pct >= 0 ? '+' : ''}${Math.round(delta.pct * 100)}%)`;
+  const pctLabel =
+    delta.pct === null ? '' : ` (${delta.pct >= 0 ? '+' : ''}${Math.round(delta.pct * 100)}%)`;
   const colorClass =
     colorCoded && delta.diff > 0
       ? 'bg-positive-500/10 text-positive-500'
@@ -116,7 +146,12 @@ function DeltaBadge({ delta, colorCoded = false }: { delta: Delta; colorCoded?: 
         ? 'bg-negative-500/10 text-negative-500'
         : 'bg-muted text-muted-foreground';
   return (
-    <span className={clsx('inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium', colorClass)}>
+    <span
+      className={clsx(
+        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium',
+        colorClass,
+      )}
+    >
       {arrow} {diffLabel}
       {pctLabel}
     </span>
@@ -159,8 +194,13 @@ function KpiCard({
 // resolvidos como QUALIFIED/DISQUALIFIED) contra a taxa geral — não é uma
 // tendência temporal de verdade, é um proxy "recente vs. geral". `null`
 // quando nenhum dos 8 leads recentes está resolvido ainda.
-function recentQualificationTrend(recentLeads: LeadPipelineOverview['recentLeads'], overallRate: number): number | null {
-  const resolved = recentLeads.filter((l) => l.status === 'QUALIFIED' || l.status === 'DISQUALIFIED');
+function recentQualificationTrend(
+  recentLeads: LeadPipelineOverview['recentLeads'],
+  overallRate: number,
+): number | null {
+  const resolved = recentLeads.filter(
+    (l) => l.status === 'QUALIFIED' || l.status === 'DISQUALIFIED',
+  );
   if (resolved.length === 0) return null;
   const recentRate = resolved.filter((l) => l.status === 'QUALIFIED').length / resolved.length;
   return recentRate - overallRate;
@@ -172,15 +212,22 @@ function QualificationRateCard({ rate, trend }: { rate: number; trend: number | 
       <p className="text-sm text-muted-foreground">Taxa de qualificação</p>
       <p className="mt-1 text-3xl font-semibold text-foreground">{Math.round(rate * 100)}%</p>
       {trend === null ? (
-        <p className="mt-3 text-xs text-muted-foreground">Leads recentes ainda não pontuados o bastante pra uma tendência.</p>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Leads recentes ainda não pontuados o bastante pra uma tendência.
+        </p>
       ) : (
         <p
           className={clsx(
             'mt-3 text-xs font-medium',
-            trend > 0 ? 'text-positive-500' : trend < 0 ? 'text-negative-500' : 'text-muted-foreground',
+            trend > 0
+              ? 'text-positive-500'
+              : trend < 0
+                ? 'text-negative-500'
+                : 'text-muted-foreground',
           )}
         >
-          {trend > 0 ? '▲' : trend < 0 ? '▼' : '→'} {Math.abs(Math.round(trend * 100))}pp vs. geral (últimos leads)
+          {trend > 0 ? '▲' : trend < 0 ? '▼' : '→'} {Math.abs(Math.round(trend * 100))}pp vs. geral
+          (últimos leads)
         </p>
       )}
     </div>
@@ -209,7 +256,9 @@ function AiIntelligenceCard({ organizationId }: { organizationId: string }) {
     <div className="rounded-lg border border-border bg-card p-4">
       <h2 className="mb-3 text-sm font-medium text-foreground">Inteligência de IA</h2>
       {usage.isLoading && <p className="text-sm text-muted-foreground">Carregando…</p>}
-      {usage.isError && <p className="text-sm text-negative-500">Não foi possível carregar o uso de IA.</p>}
+      {usage.isError && (
+        <p className="text-sm text-negative-500">Não foi possível carregar o uso de IA.</p>
+      )}
       {usage.isSuccess && (
         <div className="flex flex-col gap-3">
           <div className="flex items-baseline gap-2">
@@ -241,7 +290,13 @@ const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
 // Isso mudou com o pipeline de Deal (plano
 // pensando-como-empresa-com-agile-beaver.md) — ver `DealPipelineSection`
 // abaixo, uma seção própria, não um tile dentro desta.
-function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverview; organizationId: string }) {
+function LeadPipelineSection({
+  data,
+  organizationId,
+}: {
+  data: LeadPipelineOverview;
+  organizationId: string;
+}) {
   const withoutWebsiteSeries = buildDailySeries(data.leadsByDay, SPARKLINE_DAYS, 'withoutWebsite');
   const totalSeries14d = buildDailySeries(data.leadsByDay, SPARKLINE_DAYS, 'total');
   const totalSeries30d = buildDailySeries(data.leadsByDay, TREND_CHART_DAYS, 'total');
@@ -305,11 +360,17 @@ function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverv
             <p className="text-sm text-muted-foreground">Nenhum dado por cidade ainda.</p>
           ) : (
             <>
-              <BarChartHighlighted data={cityData} dataKey="count" nameKey="label" highlightValue={topWithoutWebsiteCity?.label} />
+              <BarChartHighlighted
+                data={cityData}
+                dataKey="count"
+                nameKey="label"
+                highlightValue={topWithoutWebsiteCity?.label}
+              />
               {topWithoutWebsiteCity && (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Em destaque: <span className="text-accent-400">{topWithoutWebsiteCity.label}</span> — cidade com mais leads sem
-                  site ({topWithoutWebsiteCity.withoutWebsite}).
+                  Em destaque:{' '}
+                  <span className="text-accent-400">{topWithoutWebsiteCity.label}</span> — cidade
+                  com mais leads sem site ({topWithoutWebsiteCity.withoutWebsite}).
                 </p>
               )}
             </>
@@ -328,12 +389,19 @@ function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverv
           ) : (
             <ul className="flex flex-col gap-3">
               {data.recentLeads.map((lead) => (
-                <li key={lead.id} className="flex flex-col gap-2 rounded-md border border-border bg-background px-3 py-2">
+                <li
+                  key={lead.id}
+                  className="flex flex-col gap-2 rounded-md border border-border bg-background px-3 py-2"
+                >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-foreground">{lead.name}</span>
+                    <span className="truncate text-sm font-medium text-foreground">
+                      {lead.name}
+                    </span>
                     <Badge value={lead.status} />
                   </div>
-                  <span className="text-xs text-muted-foreground">{[lead.city, lead.state].filter(Boolean).join('/') || '—'}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {[lead.city, lead.state].filter(Boolean).join('/') || '—'}
+                  </span>
                   {lead.scoreBreakdown ? (
                     <LeadScoreBar breakdown={lead.scoreBreakdown} />
                   ) : (
@@ -360,7 +428,8 @@ function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverv
                       {job.businessType} em {job.city}/{job.state}
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      {job.leadsFound} lead{job.leadsFound === 1 ? '' : 's'} encontrado{job.leadsFound === 1 ? '' : 's'} ·{' '}
+                      {job.leadsFound} lead{job.leadsFound === 1 ? '' : 's'} encontrado
+                      {job.leadsFound === 1 ? '' : 's'} ·{' '}
                       {new Date(job.createdAt).toLocaleString('pt-BR')}
                     </span>
                   </div>
@@ -388,7 +457,13 @@ function LeadPipelineSection({ data, organizationId }: { data: LeadPipelineOverv
 // contra dado real, só um piso razoável.
 const MIN_SAMPLE_FOR_CONFIDENT_STATS = 5;
 
-function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverview; organizationId: string }) {
+function DealPipelineSection({
+  data,
+  organizationId,
+}: {
+  data: DealPipelineOverview;
+  organizationId: string;
+}) {
   const maxStageValue = Math.max(1, ...DEAL_STAGES.map((stage) => data.dealsByStage[stage].value));
   const wonCount = data.dealsByStage.WON.count;
 
@@ -401,7 +476,9 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
         <StatCardDark
           label="Taxa de vitória"
           value={
-            data.closedDealCount < MIN_SAMPLE_FOR_CONFIDENT_STATS ? '—' : `${Math.round(data.winRate * 100)}%`
+            data.closedDealCount < MIN_SAMPLE_FOR_CONFIDENT_STATS
+              ? '—'
+              : `${Math.round(data.winRate * 100)}%`
           }
           hint={
             data.closedDealCount === 0
@@ -413,7 +490,9 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
         />
         <StatCardDark
           label="Ciclo médio de venda"
-          value={data.avgSalesCycleDays === null ? '—' : `${Math.round(data.avgSalesCycleDays)} dias`}
+          value={
+            data.avgSalesCycleDays === null ? '—' : `${Math.round(data.avgSalesCycleDays)} dias`
+          }
           hint={
             data.avgSalesCycleDays === null
               ? 'nenhum negócio ganho ainda'
@@ -425,7 +504,11 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
         <StatCardDark
           label="Propostas assinadas"
           value={`${data.signatureFunnel.signed}/${data.signatureFunnel.sent}`}
-          hint={data.signatureFunnel.sent === 0 ? 'nenhuma enviada pra assinatura ainda' : 'assinadas / enviadas'}
+          hint={
+            data.signatureFunnel.sent === 0
+              ? 'nenhuma enviada pra assinatura ainda'
+              : 'assinadas / enviadas'
+          }
         />
       </div>
 
@@ -436,9 +519,14 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
             const widthPct = Math.max(2, (bucket.value / maxStageValue) * 100);
             return (
               <li key={stage} className="flex items-center gap-3">
-                <span className="w-32 shrink-0 text-xs text-muted-foreground">{DEAL_STAGE_LABELS[stage]}</span>
+                <span className="w-32 shrink-0 text-xs text-muted-foreground">
+                  {DEAL_STAGE_LABELS[stage]}
+                </span>
                 <div className="h-2 flex-1 rounded-full bg-ink-800">
-                  <div className="h-2 rounded-full bg-accent-500" style={{ width: `${widthPct}%` }} />
+                  <div
+                    className="h-2 rounded-full bg-accent-500"
+                    style={{ width: `${widthPct}%` }}
+                  />
                 </div>
                 <span className="w-28 shrink-0 text-right text-xs text-muted-foreground">
                   {bucket.count} · {formatCurrency(bucket.value)}
@@ -452,7 +540,9 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
       <div className="grid gap-4 md:grid-cols-2">
         <DarkCard title="Fechando em breve (30 dias)">
           {data.dealsClosingSoon.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nenhum negócio com fechamento previsto nos próximos 30 dias.</p>
+            <p className="text-sm text-muted-foreground">
+              Nenhum negócio com fechamento previsto nos próximos 30 dias.
+            </p>
           ) : (
             <ul className="flex flex-col gap-2">
               {data.dealsClosingSoon.map((deal) => (
@@ -463,7 +553,9 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
                   >
                     <span className="truncate text-foreground">{deal.title}</span>
                     <span className="flex shrink-0 items-center gap-2">
-                      <span className="text-muted-foreground">{formatCurrency(deal.value, deal.currency)}</span>
+                      <span className="text-muted-foreground">
+                        {formatCurrency(deal.value, deal.currency)}
+                      </span>
                       <Badge value={deal.stage} />
                     </span>
                   </Link>
@@ -485,7 +577,9 @@ function DealPipelineSection({ data, organizationId }: { data: DealPipelineOverv
                     className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2 text-sm hover:border-accent-500/40"
                   >
                     <span className="truncate text-foreground">{deal.title}</span>
-                    <span className="text-positive-500">{formatCurrency(deal.value, deal.currency)}</span>
+                    <span className="text-positive-500">
+                      {formatCurrency(deal.value, deal.currency)}
+                    </span>
                   </Link>
                 </li>
               ))}
@@ -540,20 +634,35 @@ function SalesForecastSection({ data }: { data: SalesForecast }) {
 
       <DarkCard title="Previsão por mês (valor ponderado)">
         {forecastChartData.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nenhum negócio aberto com data de fechamento esperada.</p>
+          <p className="text-sm text-muted-foreground">
+            Nenhum negócio aberto com data de fechamento esperada.
+          </p>
         ) : (
           <BarChartHighlighted data={forecastChartData} dataKey="weightedValue" nameKey="month" />
         )}
       </DarkCard>
 
       <DarkCard title="Receita fechada (últimos 6 meses)">
-        <LineChartWithTooltip data={revenueChartData} dataKey="wonValue" xKey="month" highlightLast />
+        <LineChartWithTooltip
+          data={revenueChartData}
+          dataKey="wonValue"
+          xKey="month"
+          highlightLast
+        />
       </DarkCard>
     </section>
   );
 }
 
-function StatCardDark({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
+function StatCardDark({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: number | string;
+  hint?: string;
+}) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <p className="text-sm text-muted-foreground">{label}</p>
@@ -570,69 +679,102 @@ export default function OrganizationDashboardPage() {
   const dealPipeline = useDealPipelineOverview(organizationId);
   const salesForecast = useSalesForecast(organizationId);
 
+  // Um só gate pras 4 consultas principais — sem isso, cada seção aparecia
+  // num momento diferente conforme sua consulta terminava, dando a impressão
+  // de página quebrada/"não atualizando". `FinanceSnapshotSection` fica fora
+  // de propósito: é gated por permissão (nem dispara consulta pra quem não
+  // pode ver o financeiro) e já tem seu próprio carregamento contido.
+  const loading =
+    dashboard.isLoading ||
+    leadPipeline.isLoading ||
+    dealPipeline.isLoading ||
+    salesForecast.isLoading;
+
   return (
     <div className="flex flex-col gap-8">
       <div>
         <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Pipeline de leads e visão geral de clientes/tarefas.</p>
+        <p className="text-sm text-muted-foreground">
+          Pipeline de leads e visão geral de clientes/tarefas.
+        </p>
       </div>
 
-        {leadPipeline.isLoading && <p className="text-muted-foreground">Carregando pipeline de leads…</p>}
-        {leadPipeline.isError && (
-          <p className="text-negative-500">Não foi possível carregar o pipeline de leads desta organização.</p>
-        )}
-        {leadPipeline.isSuccess && <LeadPipelineSection data={leadPipeline.data} organizationId={organizationId} />}
-
-        {dealPipeline.isLoading && <p className="text-muted-foreground">Carregando pipeline de negociação…</p>}
-        {dealPipeline.isError && (
-          <p className="text-negative-500">Não foi possível carregar o pipeline de negociação desta organização.</p>
-        )}
-        {dealPipeline.isSuccess && <DealPipelineSection data={dealPipeline.data} organizationId={organizationId} />}
-
-        {salesForecast.isLoading && <p className="text-muted-foreground">Carregando previsão de fechamento…</p>}
-        {salesForecast.isError && (
-          <p className="text-negative-500">Não foi possível carregar a previsão de fechamento desta organização.</p>
-        )}
-        {salesForecast.isSuccess && <SalesForecastSection data={salesForecast.data} />}
-
-        <section className="flex flex-col gap-6 border-t border-border pt-8">
-          <h2 className="text-sm font-medium text-muted-foreground">Clientes e tarefas</h2>
-
-          {dashboard.isLoading && <p className="text-muted-foreground">Carregando dashboard…</p>}
-          {dashboard.isError && (
-            <p className="text-negative-500">Não foi possível carregar o dashboard desta organização.</p>
+      {loading ? (
+        <DashboardSkeleton />
+      ) : (
+        <>
+          {leadPipeline.isError && (
+            <p className="text-negative-500">
+              Não foi possível carregar o pipeline de leads desta organização.
+            </p>
+          )}
+          {leadPipeline.isSuccess && (
+            <LeadPipelineSection data={leadPipeline.data} organizationId={organizationId} />
           )}
 
-          {dashboard.isSuccess && (
-            <>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <StatCardDark label="Clientes" value={dashboard.data.customers.total} />
-                <StatCardDark
-                  label="Inativos"
-                  value={dashboard.data.customers.inactiveByRule}
-                  hint="sem contato há tempo demais"
-                />
-                <StatCardDark label="Tarefas" value={dashboard.data.tasks.total} />
-                <StatCardDark label="Em aberto" value={dashboard.data.tasks.byStatus.OPEN} />
-              </div>
-
-              <DarkCard title="Atividade recente">
-                {dashboard.data.recentActivity.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Nenhuma atividade registrada ainda.</p>
-                ) : (
-                  <ul className="flex flex-col gap-2">
-                    {dashboard.data.recentActivity.map((activity) => (
-                      <li key={activity.id} className="flex justify-between text-sm">
-                        <span className="text-foreground/80">{activity.type}</span>
-                        <span className="text-muted-foreground">{new Date(activity.createdAt).toLocaleString('pt-BR')}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </DarkCard>
-            </>
+          {dealPipeline.isError && (
+            <p className="text-negative-500">
+              Não foi possível carregar o pipeline de negociação desta organização.
+            </p>
           )}
-      </section>
+          {dealPipeline.isSuccess && (
+            <DealPipelineSection data={dealPipeline.data} organizationId={organizationId} />
+          )}
+
+          {salesForecast.isError && (
+            <p className="text-negative-500">
+              Não foi possível carregar a previsão de fechamento desta organização.
+            </p>
+          )}
+          {salesForecast.isSuccess && <SalesForecastSection data={salesForecast.data} />}
+
+          <FinanceSnapshotSection organizationId={organizationId} />
+
+          <section className="flex flex-col gap-6 border-t border-border pt-8">
+            <h2 className="text-sm font-medium text-muted-foreground">Clientes e tarefas</h2>
+
+            {dashboard.isError && (
+              <p className="text-negative-500">
+                Não foi possível carregar o dashboard desta organização.
+              </p>
+            )}
+
+            {dashboard.isSuccess && (
+              <>
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                  <StatCardDark label="Clientes" value={dashboard.data.customers.total} />
+                  <StatCardDark
+                    label="Inativos"
+                    value={dashboard.data.customers.inactiveByRule}
+                    hint="sem contato há tempo demais"
+                  />
+                  <StatCardDark label="Tarefas" value={dashboard.data.tasks.total} />
+                  <StatCardDark label="Em aberto" value={dashboard.data.tasks.byStatus.OPEN} />
+                </div>
+
+                <DarkCard title="Atividade recente">
+                  {dashboard.data.recentActivity.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Nenhuma atividade registrada ainda.
+                    </p>
+                  ) : (
+                    <ul className="flex flex-col gap-2">
+                      {dashboard.data.recentActivity.map((activity) => (
+                        <li key={activity.id} className="flex justify-between text-sm">
+                          <span className="text-foreground/80">{activity.type}</span>
+                          <span className="text-muted-foreground">
+                            {new Date(activity.createdAt).toLocaleString('pt-BR')}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </DarkCard>
+              </>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }
