@@ -534,7 +534,15 @@ describe('OutreachService', () => {
       serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
       gateway.sendMessage.mockResolvedValue(mockGatewayResponse('rascunho'));
 
-      const draft = { id: 'msg-1', leadId: 'lead-1', channel: 'EMAIL', serviceOfferingId: 'offering-1', status: 'DRAFT' };
+      const draft = {
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'EMAIL',
+        serviceOfferingId: 'offering-1',
+        status: 'DRAFT',
+        body: 'texto de rascunho limpo pro portão de aprovação',
+        subject: null,
+      };
       prisma.outreachMessage.create.mockResolvedValue(draft);
       const generated = await service.generateDraft(
         'org-1',
@@ -587,6 +595,64 @@ describe('OutreachService', () => {
         data: expect.objectContaining({ status: 'REPLIED' }),
       });
       expect(prisma.lead.update).toHaveBeenCalledWith({ where: { id: 'lead-1' }, data: { status: 'REPLIED' } });
+    });
+  });
+
+  describe('approve — portão determinístico (checkOutreachGate)', () => {
+    it('bloqueia a aprovação com BadRequestException quando o corpo viola uma regra, e nunca chega a chamar updateMany', async () => {
+      const { service, prisma, auditService } = buildDeps();
+      const draft = {
+        id: 'msg-1',
+        leadId: 'lead-1',
+        status: 'DRAFT',
+        body: 'Temos a solução completa pro seu negócio!',
+        subject: null,
+      };
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce(draft);
+
+      await expect(service.approve('org-1', 'msg-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(prisma.outreachMessage.updateMany).not.toHaveBeenCalled();
+      expect(prisma.lead.update).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'outreach.approve' }),
+      );
+    });
+
+    it('a mensagem de erro cita a violação específica encontrada', async () => {
+      const { service, prisma } = buildDeps();
+      const draft = {
+        id: 'msg-1',
+        leadId: 'lead-1',
+        status: 'DRAFT',
+        body: 'Isso é imperdível, não perca essa oportunidade!',
+        subject: null,
+      };
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce(draft);
+
+      await expect(service.approve('org-1', 'msg-1', 'user-1')).rejects.toThrow(/imperdível/);
+    });
+
+    it('aprova normalmente quando o corpo passa todas as regras do portão', async () => {
+      const { service, prisma } = buildDeps();
+      const draft = {
+        id: 'msg-1',
+        leadId: 'lead-1',
+        status: 'DRAFT',
+        body: 'Vi que sua clínica não tem site. Topa uma call rápida de 10 minutos essa semana?',
+        subject: 'ideia rápida',
+      };
+      prisma.outreachMessage.findFirst
+        .mockResolvedValueOnce(draft)
+        .mockResolvedValueOnce({ ...draft, status: 'APPROVED' });
+      prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      const result = await service.approve('org-1', 'msg-1', 'user-1');
+
+      expect(result.status).toBe('APPROVED');
+      expect(prisma.outreachMessage.updateMany).toHaveBeenCalledWith({
+        where: { id: 'msg-1', organizationId: 'org-1', status: 'DRAFT' },
+        data: expect.objectContaining({ status: 'APPROVED' }),
+      });
     });
   });
 
@@ -800,7 +866,7 @@ describe('OutreachService', () => {
 
     it('approve duas vezes: a segunda chamada (mensagem já APPROVED) lança BadRequestException', async () => {
       const { service, prisma } = buildDeps();
-      const approved = { id: 'msg-1', leadId: 'lead-1', status: 'APPROVED' };
+      const approved = { id: 'msg-1', leadId: 'lead-1', status: 'APPROVED', body: 'texto limpo', subject: null };
       prisma.outreachMessage.findFirst.mockResolvedValueOnce(approved).mockResolvedValueOnce(approved);
       prisma.outreachMessage.updateMany.mockResolvedValueOnce({ count: 0 });
 
@@ -850,7 +916,7 @@ describe('OutreachService', () => {
   describe('condição de corrida (TOCTOU) — o status de origem entra no WHERE do UPDATE, não numa checagem em memória', () => {
     it('approve e reject concorrentes no mesmo DRAFT: quem commita por último no banco perde, nunca sobrescreve incondicionalmente', async () => {
       const { service, prisma, auditService } = buildDeps();
-      const draft = { id: 'msg-1', leadId: 'lead-1', status: 'DRAFT' };
+      const draft = { id: 'msg-1', leadId: 'lead-1', status: 'DRAFT', body: 'texto limpo', subject: null };
 
       // approve "vence a corrida": lê DRAFT, o UPDATE (com status=DRAFT no
       // WHERE) casa a linha porque, no banco real, ainda ninguém tinha
