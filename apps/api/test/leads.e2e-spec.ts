@@ -528,4 +528,92 @@ describe('Leads/Prospecção (e2e)', () => {
       .send({ scrapeJobId })
       .expect(403);
   });
+
+  // Sinais de investigação de site (docs/planning/2026-11-06-harvey-inteligencia-comercial.md):
+  // o profiler real roda em apps/worker (fora do escopo deste e2e, mesma
+  // decisão já tomada para POST /scrape-jobs) — aqui gravamos um LeadSignal
+  // direto via Prisma pra exercitar GET .../signals e checar isolamento
+  // cross-tenant; POST .../investigate é exercitado só até o ponto de
+  // enfileirar.
+  it('GET .../signals lista sinais só da própria organização; POST .../investigate exige site e respeita WRITE_ROLES', async () => {
+    const ownerA = await registerUser(app, `leads-signals-a-${randomUUID()}@opsmind.test`);
+    const orgA = await createOrg(app, ownerA.accessToken, 'Leads Co Signals A');
+    const authA = { Authorization: `Bearer ${ownerA.accessToken}` };
+
+    const ownerB = await registerUser(app, `leads-signals-b-${randomUUID()}@opsmind.test`);
+    const orgB = await createOrg(app, ownerB.accessToken, 'Leads Co Signals B');
+    const authB = { Authorization: `Bearer ${ownerB.accessToken}` };
+
+    const leadWithWebsite = await prisma.lead.create({
+      data: { organizationId: orgA, name: 'Padaria com site', website: 'https://padaria-exemplo.com.br', status: 'DISCOVERED', actorType: 'USER' },
+    });
+    const leadWithoutWebsite = await prisma.lead.create({
+      data: { organizationId: orgA, name: 'Padaria sem site', status: 'DISCOVERED', actorType: 'USER' },
+    });
+
+    await prisma.leadSignal.create({
+      data: {
+        organizationId: orgA,
+        leadId: leadWithWebsite.id,
+        signalCode: 'website.no_ssl',
+        confidence: '1.0',
+        collector: 'WEBSITE_PROFILER',
+        evidenceUrl: leadWithWebsite.website,
+        runId: randomUUID(),
+      },
+    });
+
+    // Org A vê o próprio sinal.
+    const listRes = await request(app.getHttpServer())
+      .get(`/organizations/${orgA}/leads/${leadWithWebsite.id}/signals`)
+      .set(authA)
+      .expect(200);
+    expect(listRes.body).toHaveLength(1);
+    expect(listRes.body[0].signalCode).toBe('website.no_ssl');
+
+    // Org B pedindo o MESMO leadId pelo próprio path (:organizationId=orgB)
+    // nunca encontra o lead — TenantGuard/findByIdOrThrow já filtram por
+    // organizationId, isolamento valendo antes mesmo de chegar em LeadSignal.
+    await request(app.getHttpServer())
+      .get(`/organizations/${orgB}/leads/${leadWithWebsite.id}/signals`)
+      .set(authB)
+      .expect(404);
+
+    // Investigar um lead sem site conhecido é rejeitado (nada a buscar).
+    await request(app.getHttpServer())
+      .post(`/organizations/${orgA}/leads/${leadWithoutWebsite.id}/investigate`)
+      .set(authA)
+      .expect(404);
+
+    // Investigar um lead com site enfileira (não espera o worker rodar).
+    await request(app.getHttpServer())
+      .post(`/organizations/${orgA}/leads/${leadWithWebsite.id}/investigate`)
+      .set(authA)
+      .expect(201);
+
+    // VIEWER não pode disparar investigação (WRITE_ROLES only), mas pode listar sinais (leitura).
+    const viewer = await registerUser(app, `leads-signals-viewer-${randomUUID()}@opsmind.test`);
+    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    await request(app.getHttpServer())
+      .post(`/organizations/${orgA}/invite`)
+      .set(authA)
+      .send({ email: viewer.email, role: 'VIEWER' })
+      .expect(201);
+    const invitationToken = /token: (\S+)/.exec(logSpy.mock.calls.map((c) => c.join(' ')).join('\n'))?.at(1);
+    logSpy.mockRestore();
+    await request(app.getHttpServer())
+      .post(`/invitations/${invitationToken}/accept`)
+      .set({ Authorization: `Bearer ${viewer.accessToken}` })
+      .expect(201);
+    const viewerAuth = { Authorization: `Bearer ${viewer.accessToken}` };
+
+    await request(app.getHttpServer())
+      .get(`/organizations/${orgA}/leads/${leadWithWebsite.id}/signals`)
+      .set(viewerAuth)
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/organizations/${orgA}/leads/${leadWithWebsite.id}/investigate`)
+      .set(viewerAuth)
+      .expect(403);
+  });
 });
