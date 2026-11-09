@@ -32,6 +32,20 @@ export interface LeadScoringInput {
     employeeCount?: number | null;
     revenueUsd?: number | null;
   } | null;
+  // Sinais do profiler de site (`LeadSignal`, ver docs/planning/2026-11-06-harvey-inteligencia-comercial.md)
+  // JÁ FILTRADOS pelo CHAMADOR para vocabulário `CONFIRMED` e collector
+  // determinístico (`WEBSITE_PROFILER`/`MANUAL`) — nunca `AI_ANALYSIS`.
+  // `scoreLead()` não sabe nada sobre `LeadSignal`/`SignalCode` do banco,
+  // só recebe o já resolvido (mesmo padrão de `firmographics` acima) — isso
+  // é o que garante que uma inferência de IA nunca seja contada como fato
+  // confirmado no cálculo determinístico do score.
+  confirmedSignals?: LeadSignalForScoring[];
+}
+
+export interface LeadSignalForScoring {
+  signalCode: string;
+  // Já resolvido pelo chamador a partir de `SignalCode.defaultServiceOfferingId`.
+  matchedOfferingId: string | null;
 }
 
 /**
@@ -55,9 +69,11 @@ export interface LeadScoreBreakdown {
   icpFitPoints: number;
   activityPoints: number;
   keywordMatchPoints: number;
+  signalFitPoints: number;
   total: number; // clamped 0-100
   matchedOfferingId: string | null;
   matchedSignals: string[]; // trechos que bateram, para exibir "por que esse score" na UI
+  matchedSignalCodes: string[]; // códigos de LeadSignal que contribuíram para signalFitPoints
 }
 
 function normalize(value: string): string {
@@ -193,6 +209,57 @@ function computeKeywordFallback(
   return { points, matchedOfferingId: winner.offering.id, matchedSignals: winner.matchedSignals };
 }
 
+// Até 20 pontos, 5 por sinal confirmado que bate uma oferta ativa —
+// deliberadamente menor que os outros buckets (o sinal já é parcialmente
+// refletido em icpFitPoints/keywordMatchPoints via `ServiceOffering.signals`
+// quando aplicável; este bucket é o incremento por EVIDÊNCIA CONCRETA de
+// investigação de site, não o bucket principal do score).
+const SIGNAL_FIT_POINTS_PER_MATCH = 5;
+const MAX_SIGNAL_FIT_POINTS = 20;
+
+interface SignalFitResult {
+  points: number;
+  matchedSignalCodes: string[];
+  // Oferta com mais sinais confirmados batendo, pra disputar o "vencedor"
+  // geral do lead (ver `scoreLead`) contra o vencedor de icpFit/keywordFallback
+  // — um sinal concreto de investigação de site pode ser evidência mais
+  // forte que um match genérico de ICP/keyword, e sem isso a oferta sugerida
+  // nunca refletia sinais, só firmografia/palavra-chave.
+  bestOffering: { offeringId: string; matchedSignalCodes: string[] } | null;
+}
+
+function computeSignalFit(
+  confirmedSignals: LeadSignalForScoring[] | undefined,
+  offerings: ServiceOfferingIcp[],
+): SignalFitResult {
+  if (!confirmedSignals || confirmedSignals.length === 0) {
+    return { points: 0, matchedSignalCodes: [], bestOffering: null };
+  }
+  const activeOfferingIds = new Set(offerings.map((offering) => offering.id));
+  const matched = confirmedSignals.filter(
+    (signal) => signal.matchedOfferingId !== null && activeOfferingIds.has(signal.matchedOfferingId),
+  );
+  const points = Math.min(MAX_SIGNAL_FIT_POINTS, matched.length * SIGNAL_FIT_POINTS_PER_MATCH);
+
+  const byOffering = new Map<string, string[]>();
+  for (const signal of matched) {
+    const offeringId = signal.matchedOfferingId as string;
+    const codes = byOffering.get(offeringId) ?? [];
+    codes.push(signal.signalCode);
+    byOffering.set(offeringId, codes);
+  }
+  let bestOffering: SignalFitResult['bestOffering'] = null;
+  for (const [offeringId, codes] of byOffering) {
+    // Estritamente maior garante que, em empate, a primeira oferta a
+    // acumular sinais permanece vencedora (mesma convenção de `computeIcpFit`).
+    if (!bestOffering || codes.length > bestOffering.matchedSignalCodes.length) {
+      bestOffering = { offeringId, matchedSignalCodes: codes };
+    }
+  }
+
+  return { points, matchedSignalCodes: matched.map((signal) => signal.signalCode), bestOffering };
+}
+
 /**
  * Calcula o score de qualificação de um lead (0-100). Híbrido e
  * determinístico por design — nunca chama IA (custaria budget sem controle
@@ -224,18 +291,33 @@ export function scoreLead(input: LeadScoringInput, offerings: ServiceOfferingIcp
   const icpFit = hasFirmographics ? computeIcpFit(input, offerings) : NO_MATCH;
   const keywordFallback = hasFirmographics ? NO_MATCH : computeKeywordFallback(input, offerings);
 
-  const rawTotal = hasNoWebsitePoints + icpFit.points + activityPoints + keywordFallback.points;
+  const signalFit = computeSignalFit(input.confirmedSignals, offerings);
+
+  const rawTotal =
+    hasNoWebsitePoints + icpFit.points + activityPoints + keywordFallback.points + signalFit.points;
   const total = Math.max(0, Math.min(100, rawTotal));
 
-  const winner = hasFirmographics ? icpFit : keywordFallback;
+  const baseWinner = hasFirmographics ? icpFit : keywordFallback;
+  // A oferta sugerida ("vencedora") passa a considerar TRÊS fontes de
+  // evidência, não só ICP/keyword: se os sinais confirmados de investigação
+  // de site contribuíram mais pontos que o bucket de ICP/keyword, a oferta
+  // que eles apontam vence — evidência concreta de site (ex.: link de
+  // WhatsApp encontrado) pode ser mais forte que um match genérico de
+  // palavra-chave contra a categoria do negócio.
+  const winner =
+    signalFit.points > baseWinner.points && signalFit.bestOffering
+      ? { matchedOfferingId: signalFit.bestOffering.offeringId, matchedSignals: signalFit.bestOffering.matchedSignalCodes }
+      : baseWinner;
 
   return {
     hasNoWebsitePoints,
     icpFitPoints: icpFit.points,
     activityPoints,
     keywordMatchPoints: keywordFallback.points,
+    signalFitPoints: signalFit.points,
     total,
     matchedOfferingId: winner.matchedOfferingId,
     matchedSignals: winner.matchedSignals,
+    matchedSignalCodes: signalFit.matchedSignalCodes,
   };
 }

@@ -8,6 +8,8 @@ export * from './lead-scoring';
 export * from './lead-routing';
 export * from './market-opportunity.types';
 export * from './outreach-autodraft.types';
+export * from './website-profile.types';
 export * from './social-link.types';
 export * from './safe-url';
+export * from './outreach-guardrails';
 export * from './finance';

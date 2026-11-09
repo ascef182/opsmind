@@ -216,4 +216,121 @@ describe('scoreLead', () => {
     expect(result.keywordMatchPoints).toBeLessThanOrEqual(10); // 1 de 12 signals => round(1/12*60) = 5
     expect(result.total).toBeLessThan(QUALIFICATION_THRESHOLD);
   });
+
+  describe('signalFitPoints (sinais de investigação de site)', () => {
+    const baseInput = {
+      website: 'https://exemplo.com.br',
+      websiteConfirmedAbsent: false,
+      googleCategory: null,
+      rating: null,
+      reviewCount: null,
+      rawContent: null,
+      firmographics: null,
+    };
+
+    it('soma 5 pontos por sinal confirmado batendo uma offering ativa, capado em 20', () => {
+      const result = scoreLead(
+        {
+          ...baseInput,
+          confirmedSignals: [
+            { signalCode: 'website.no_ssl', matchedOfferingId: 'offering-1' },
+            { signalCode: 'website.no_contact_form', matchedOfferingId: 'offering-1' },
+          ],
+        },
+        [restaurantOffering, { ...restaurantOffering, id: 'offering-1' }],
+      );
+
+      expect(result.signalFitPoints).toBe(10);
+      expect(result.matchedSignalCodes).toEqual(['website.no_ssl', 'website.no_contact_form']);
+    });
+
+    it('nunca conta sinal cujo matchedOfferingId não corresponde a nenhuma offering ativa recebida', () => {
+      const result = scoreLead(
+        {
+          ...baseInput,
+          confirmedSignals: [{ signalCode: 'website.no_ssl', matchedOfferingId: 'offering-inativa-ou-inexistente' }],
+        },
+        [restaurantOffering],
+      );
+
+      expect(result.signalFitPoints).toBe(0);
+      expect(result.matchedSignalCodes).toEqual([]);
+    });
+
+    it('é 0 quando confirmedSignals não é passado (compatibilidade retroativa)', () => {
+      const result = scoreLead(baseInput, [restaurantOffering]);
+      expect(result.signalFitPoints).toBe(0);
+      expect(result.matchedSignalCodes).toEqual([]);
+    });
+
+    // Este teste documenta a decisão de design, não testa scoreLead() em si:
+    // scoreLead() confia inteiramente no que o CHAMADOR filtra e passa em
+    // `confirmedSignals` — ela não sabe o que é AI_ANALYSIS vs
+    // WEBSITE_PROFILER. A exclusão de inferência de IA é responsabilidade do
+    // chamador (LeadsService.score()), não desta função pura.
+    it('a oferta sugerida (matchedOfferingId) vem do bucket de sinais quando ele contribui MAIS pontos que o ICP/keyword, não sempre do keyword/ICP', () => {
+      const deskcommOffering: ServiceOfferingIcp = {
+        id: 'offering-deskcomm',
+        signals: [], // sem keyword match nenhum — só o sinal de investigação de site aponta pra cá
+        targetIndustries: [],
+        minEmployees: null,
+        maxEmployees: null,
+        minRevenueUsd: null,
+        maxRevenueUsd: null,
+      };
+      const result = scoreLead(
+        {
+          website: 'https://exemplo.com.br',
+          websiteConfirmedAbsent: false,
+          googleCategory: null,
+          rating: null,
+          reviewCount: null,
+          // Bate 1 de 12 keywords da offering de site institucional =>
+          // round(1/12*60) = 5 pontos, bem menos que o bucket de sinais.
+          rawContent: 'metalúrgica e usinagem de peças',
+          firmographics: null,
+          confirmedSignals: [
+            { signalCode: 'social.has_whatsapp_link', matchedOfferingId: 'offering-deskcomm' },
+          ],
+        },
+        [restaurantOffering, deskcommOffering],
+      );
+
+      // 1 sinal confirmado => 5 pontos de signalFitPoints, maior que os ~5
+      // do keyword match de 1/12 — desempate por estritamente maior garante
+      // que o bucket de sinal só vence quando é de fato mais forte.
+      expect(result.matchedOfferingId).toBe('offering-deskcomm');
+      expect(result.matchedSignals).toEqual(['social.has_whatsapp_link']);
+    });
+
+    it('a oferta sugerida continua vindo do ICP/keyword quando ele contribui MAIS pontos que os sinais', () => {
+      const result = scoreLead(
+        {
+          website: null,
+          websiteConfirmedAbsent: true,
+          googleCategory: 'Restaurante Italiano',
+          rating: null,
+          reviewCount: null,
+          rawContent: null,
+          firmographics: { industry: 'restaurante', employeeCount: 20, revenueUsd: 500_000 },
+          confirmedSignals: [{ signalCode: 'social.has_whatsapp_link', matchedOfferingId: 'offering-fraca' }],
+        },
+        [restaurantOffering, { ...restaurantOffering, id: 'offering-fraca' }],
+      );
+
+      // icpFitPoints (30, offering-restaurant) > signalFitPoints (5, offering-fraca)
+      expect(result.matchedOfferingId).toBe('offering-restaurant');
+    });
+
+    it('conta qualquer entrada recebida em confirmedSignals, sem filtrar por tipo — a exclusão de AI_ANALYSIS é responsabilidade do chamador', () => {
+      const result = scoreLead(
+        {
+          ...baseInput,
+          confirmedSignals: [{ signalCode: 'qualquer.coisa', matchedOfferingId: 'offering-1' }],
+        },
+        [{ ...restaurantOffering, id: 'offering-1' }],
+      );
+      expect(result.signalFitPoints).toBe(5);
+    });
+  });
 });
