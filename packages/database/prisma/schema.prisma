@@ -145,6 +145,22 @@ enum MarketOpportunityStatus {
   DISMISSED
 }
 
+// Distingue fato determinístico (WEBSITE_PROFILER/MANUAL) de inferência de
+// IA (AI_ANALYSIS) por TIPO, não por convenção de nome em String livre —
+// scoreLead() usa isso para nunca contar uma inferência de IA como fato
+// confirmado no cálculo de signalFitPoints.
+enum LeadSignalCollector {
+  WEBSITE_PROFILER
+  AI_ANALYSIS
+  MANUAL
+}
+
+enum SignalCodeStatus {
+  PROPOSED
+  CONFIRMED
+  DEPRECATED
+}
+
 // ── Core tenancy ─────────────────────────────────────────────────────────
 
 model Organization {
@@ -208,6 +224,8 @@ model Organization {
   prospectingTargets    ProspectingTarget[]
   redditWatchTopics     RedditWatchTopic[]
   marketOpportunities   MarketOpportunity[]
+  leadSignals           LeadSignal[]
+  signalCodes           SignalCode[]
   deals                 Deal[]
   meetings              Meeting[]
   dealSignatureRequests DealSignatureRequest[]
@@ -859,6 +877,7 @@ model ServiceOffering {
   suggestedForLeads   Lead[]              @relation("SuggestedOffering")
   outreachMessages    OutreachMessage[]
   marketOpportunities MarketOpportunity[]
+  defaultForSignalCodes SignalCode[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -963,6 +982,7 @@ model Lead {
   assignedTo        User?             @relation("LeadAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
   enrichments       LeadEnrichment[]
   outreachMessages  OutreachMessage[]
+  signals           LeadSignal[]
   deals             Deal[]
   internalNotes     InternalNote[]
 
@@ -1121,10 +1141,90 @@ model MarketOpportunity {
 
   organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   suggestedOffering ServiceOffering? @relation(fields: [suggestedOfferingId], references: [id], onDelete: SetNull)
+  leadSignals       LeadSignal[]
 
   @@unique([organizationId, topicKey])
   @@index([organizationId, status])
   @@map("market_opportunities")
+}
+
+// Sinal estruturado de investigação (observação, não enriquecimento
+// genérico): cada linha é um fato sobre o lead, nunca uma coluna — permite
+// adicionar um tipo de sinal novo sem migration (basta um SignalCode novo) e
+// preserva histórico entre execuções do profiler. Inspirado no modelo de
+// observações do Harvey (ethanplusai/harvey, MIT), reconstruído nativamente
+// — ver docs/planning/2026-11-06-harvey-inteligencia-comercial.md.
+model LeadSignal {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  leadId         String              @map("lead_id")
+  signalCode     String              @map("signal_code")
+  value          String?
+  // 0.00–1.00, sempre atribuída por regra fixa do coletor (nunca um float
+  // livre gerado por IA) — mantém o scoring 100% auditável.
+  confidence     Decimal             @db.Decimal(3, 2)
+  collector      LeadSignalCollector
+  evidenceUrl    String?             @map("evidence_url")
+  // Trecho MÍNIMO que bateu a extração, nunca o texto inteiro da página —
+  // minimização de dado pessoal (PRD-v2 §9.1): truncado na extração (ver
+  // MAX_EVIDENCE_QUOTE_LENGTH em signal-extractors.ts), não cortado depois
+  // de já ter guardado tudo.
+  evidenceQuote  String?             @map("evidence_quote")
+  // Base legal de tratamento (PRD-v2 §9.1) — o profiler só toca o site
+  // público da própria empresa, então o default cobre o caso normal.
+  collectionBasis String             @default("dado_publico") @map("collection_basis")
+  // Agrupa todos os sinais de uma mesma execução do profiler — junto com o
+  // @@unique abaixo, garante que reprocessar a MESMA execução nunca duplica,
+  // enquanto execuções diferentes (runId novo) preservam histórico.
+  runId          String              @map("run_id")
+  observedAt     DateTime            @default(now()) @map("observed_at")
+  marketOpportunityId String?        @map("market_opportunity_id")
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead              Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  marketOpportunity MarketOpportunity? @relation(fields: [marketOpportunityId], references: [id], onDelete: SetNull)
+  // FK real (não só convenção) contra SignalCode.code — rejeita na hora
+  // qualquer INSERT com um signal_code não cadastrado, sem precisar de
+  // trigger (este projeto não tem nenhum): a integridade referencial padrão
+  // do Postgres já cobre "código precisa existir". `onDelete: Restrict`
+  // porque um SignalCode com LeadSignal vinculado nunca deveria ser
+  // apagado — o ciclo de vida é DEPRECATED, nunca DELETE (ver SignalCode).
+  // O que uma FK não cobre (rejeitar um código `DEPRECATED` especificamente,
+  // só "existe ou não existe") continua sendo checado em código de
+  // aplicação, no único caminho de escrita (website-profiler-processor.ts).
+  signalCodeRef     SignalCode         @relation(fields: [signalCode], references: [code], onDelete: Restrict)
+
+  @@unique([leadId, signalCode, runId])
+  @@index([organizationId, leadId])
+  @@index([organizationId, signalCode])
+  @@map("lead_signals")
+}
+
+// Vocabulário governado de signalCode — nenhum valor de LeadSignal.signalCode
+// deve existir fora desta tabela. A validação acontece em código de
+// aplicação, no único caminho de escrita (`LeadSignalsService.record()`),
+// não em trigger de banco — este projeto não tem precedente de trigger (ver
+// seção "Revisão crítica" de docs/planning/2026-11-06-harvey-inteligencia-comercial.md);
+// fica como hardening futuro, não bloqueante.
+// organizationId nulo = código global, semeado por migration, visível para
+// toda organização (ver exceção documentada na política de RLS desta
+// tabela); preenchido = proposto por uma organização específica, nunca
+// CONFIRMED/global automaticamente.
+model SignalCode {
+  code                     String           @id
+  organizationId           String?          @map("organization_id")
+  label                    String
+  category                 String
+  defaultServiceOfferingId String?          @map("default_service_offering_id")
+  status                   SignalCodeStatus @default(PROPOSED)
+  createdAt                DateTime         @default(now()) @map("created_at")
+
+  organization           Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  defaultServiceOffering ServiceOffering? @relation(fields: [defaultServiceOfferingId], references: [id], onDelete: SetNull)
+  leadSignals            LeadSignal[]
+
+  @@index([organizationId])
+  @@map("signal_codes")
 }
 
 // ── Financeiro ───────────────────────────────────────────────────────────
