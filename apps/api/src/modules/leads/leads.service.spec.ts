@@ -16,6 +16,7 @@ describe('LeadsService', () => {
     };
     serviceOffering: { findMany: jest.Mock };
     leadEnrichment: { findFirst: jest.Mock; create: jest.Mock };
+    leadSignal: { findMany: jest.Mock };
     customer: { create: jest.Mock };
     membership: { findMany: jest.Mock; findFirst: jest.Mock };
   };
@@ -35,6 +36,7 @@ describe('LeadsService', () => {
       },
       serviceOffering: { findMany: jest.fn() },
       leadEnrichment: { findFirst: jest.fn(), create: jest.fn() },
+      leadSignal: { findMany: jest.fn().mockResolvedValue([]) },
       customer: { create: jest.fn() },
       membership: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
     };
@@ -464,6 +466,49 @@ describe('LeadsService', () => {
             score: 0,
             scoreBreakdown: expect.objectContaining({ hasNoWebsitePoints: 0 }),
           }),
+        }),
+      );
+    });
+
+    it('inclui signalFitPoints no score, usando só LeadSignal com vocabulário CONFIRMED (filtro já aplicado na query)', async () => {
+      prisma.lead.findFirst.mockResolvedValue({
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'DISCOVERED',
+        sourceType: 'MANUAL',
+        website: 'https://exemplo.com.br',
+        googleCategory: null,
+        rating: null,
+        reviewCount: null,
+        rawContent: null,
+      });
+      prisma.serviceOffering.findMany.mockResolvedValue([
+        {
+          id: 'off-1',
+          signals: [],
+          targetIndustries: [],
+          minEmployees: null,
+          maxEmployees: null,
+          minRevenueUsd: null,
+          maxRevenueUsd: null,
+        },
+      ]);
+      prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+      prisma.leadSignal.findMany.mockResolvedValue([
+        { signalCode: 'website.no_ssl', signalCodeRef: { status: 'CONFIRMED', defaultServiceOfferingId: 'off-1' } },
+      ]);
+      prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ id: 'lead-1', ...data }));
+
+      await service.score('org-1', 'lead-1', 'user-1');
+
+      expect(prisma.leadSignal.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ collector: { in: ['WEBSITE_PROFILER', 'MANUAL'] } }),
+        }),
+      );
+      expect(prisma.lead.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ scoreBreakdown: expect.objectContaining({ signalFitPoints: 5 }) }),
         }),
       );
     });

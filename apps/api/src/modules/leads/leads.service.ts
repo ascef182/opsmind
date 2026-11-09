@@ -12,6 +12,7 @@ import {
   pickRoundRobinAssignee,
   STRUCTURED_WEBSITE_SOURCES,
   type LeadScoringInput,
+  type LeadSignalForScoring,
   type ServiceOfferingIcp,
 } from '@opsmind/shared-types';
 import { EXPLORIUM_GATEWAY, type ExploriumGateway } from '@opsmind/integrations';
@@ -394,6 +395,7 @@ export class LeadsService {
       where: { organizationId, isActive: true },
     });
     const firmographics = await this.getFirmographics(organizationId, id);
+    const confirmedSignals = await this.getConfirmedSignalsForScoring(organizationId, id);
 
     const scoreInput: LeadScoringInput = {
       website: lead.website,
@@ -407,6 +409,7 @@ export class LeadsService {
       reviewCount: lead.reviewCount,
       rawContent: lead.rawContent,
       firmographics,
+      confirmedSignals,
     };
     const breakdown = scoreLead(scoreInput, offerings.map(toOfferingIcp));
     const computedStatus: LeadStatus = breakdown.total >= QUALIFICATION_THRESHOLD ? 'QUALIFIED' : 'DISQUALIFIED';
@@ -625,5 +628,32 @@ export class LeadsService {
       employeeCount: data.employeeCount ?? null,
       revenueUsd: data.revenueUsd ?? null,
     };
+  }
+
+  // Mesma lógica de `loadConfirmedSignalsForScoring`
+  // (apps/worker/src/website-profiler-processor.ts) — duplicada, não
+  // importada: `apps/api` não pode importar `apps/worker`. Carrega só a
+  // observação MAIS RECENTE de cada `signalCode` com collector
+  // determinístico (nunca `AI_ANALYSIS`) e vocabulário ainda `CONFIRMED`.
+  private async getConfirmedSignalsForScoring(
+    organizationId: string,
+    leadId: string,
+  ): Promise<LeadSignalForScoring[]> {
+    const rows = await this.prisma.leadSignal.findMany({
+      where: { organizationId, leadId, collector: { in: ['WEBSITE_PROFILER', 'MANUAL'] } },
+      orderBy: { observedAt: 'desc' },
+      include: { signalCodeRef: { select: { status: true, defaultServiceOfferingId: true } } },
+    });
+
+    const latestByCode = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      if (!latestByCode.has(row.signalCode)) {
+        latestByCode.set(row.signalCode, row);
+      }
+    }
+
+    return Array.from(latestByCode.values())
+      .filter((row) => row.signalCodeRef.status === 'CONFIRMED')
+      .map((row) => ({ signalCode: row.signalCode, matchedOfferingId: row.signalCodeRef.defaultServiceOfferingId }));
   }
 }

@@ -25,6 +25,9 @@ import { FindLeadsTool } from './tools/find-leads.tool';
 import { ScoreLeadTool } from './tools/score-lead.tool';
 import { AnalyzeLeadPotentialTool } from './tools/analyze-lead-potential.tool';
 import { GenerateOutreachMessageTool } from './tools/generate-outreach-message.tool';
+import { InvestigateCompanyWebsiteTool } from './tools/investigate-company-website.tool';
+import { ListLeadSignalsTool } from './tools/list-lead-signals.tool';
+import { MapSignalToOfferingTool } from './tools/map-signal-to-offering.tool';
 import { CreateDealTool } from './tools/create-deal.tool';
 import { MoveDealStageTool } from './tools/move-deal-stage.tool';
 import { ListDealsTool } from './tools/list-deals.tool';
@@ -64,6 +67,9 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     ScoreLeadTool,
     AnalyzeLeadPotentialTool,
     GenerateOutreachMessageTool,
+    InvestigateCompanyWebsiteTool,
+    ListLeadSignalsTool,
+    MapSignalToOfferingTool,
     CreateDealTool,
     MoveDealStageTool,
     ListDealsTool,
@@ -84,6 +90,9 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         scoreLead: ScoreLeadTool,
         analyzeLeadPotential: AnalyzeLeadPotentialTool,
         generateOutreachMessage: GenerateOutreachMessageTool,
+        investigateCompanyWebsite: InvestigateCompanyWebsiteTool,
+        listLeadSignals: ListLeadSignalsTool,
+        mapSignalToOffering: MapSignalToOfferingTool,
         createDeal: CreateDealTool,
         moveDealStage: MoveDealStageTool,
         listDeals: ListDealsTool,
@@ -102,6 +111,9 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         scoreLead,
         analyzeLeadPotential,
         generateOutreachMessage,
+        investigateCompanyWebsite,
+        listLeadSignals,
+        mapSignalToOffering,
         createDeal,
         moveDealStage,
         listDeals,
@@ -121,6 +133,9 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         ScoreLeadTool,
         AnalyzeLeadPotentialTool,
         GenerateOutreachMessageTool,
+        InvestigateCompanyWebsiteTool,
+        ListLeadSignalsTool,
+        MapSignalToOfferingTool,
         CreateDealTool,
         MoveDealStageTool,
         ListDealsTool,

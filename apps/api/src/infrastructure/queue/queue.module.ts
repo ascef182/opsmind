@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { LeadScrapeQueueService } from './lead-scrape-queue.service';
 import { RedditTopicScanQueueService } from './reddit-topic-scan-queue.service';
+import { WebsiteProfileQueueService } from './website-profile-queue.service';
 
 /**
  * Módulo do novo produtor de fila BullMQ `lead-scrape`
@@ -21,7 +22,7 @@ import { RedditTopicScanQueueService } from './reddit-topic-scan-queue.service';
  * por ora, cada produtor vive no módulo que o expõe hoje.
  */
 @Module({
-  providers: [LeadScrapeQueueService, RedditTopicScanQueueService],
-  exports: [LeadScrapeQueueService, RedditTopicScanQueueService],
+  providers: [LeadScrapeQueueService, RedditTopicScanQueueService, WebsiteProfileQueueService],
+  exports: [LeadScrapeQueueService, RedditTopicScanQueueService, WebsiteProfileQueueService],
 })
 export class QueueModule {}

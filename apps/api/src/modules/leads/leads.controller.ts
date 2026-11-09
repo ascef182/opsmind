@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import type { Customer, InternalNote, Lead, LeadEnrichment } from '@opsmind/database';
+import type { Customer, InternalNote, Lead, LeadEnrichment, LeadSignal } from '@opsmind/database';
 import { LeadsService } from './leads.service';
 import { LeadAnalysisService } from './lead-analysis.service';
+import { LeadSignalsService } from './lead-signals.service';
 import { InternalNotesService } from '../internal-notes/internal-notes.service';
 import { CreateNoteDto } from '../internal-notes/dto/create-note.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
@@ -22,6 +23,7 @@ export class LeadsController {
   constructor(
     private readonly leadsService: LeadsService,
     private readonly leadAnalysisService: LeadAnalysisService,
+    private readonly leadSignalsService: LeadSignalsService,
     private readonly internalNotesService: InternalNotesService,
   ) {}
 
@@ -99,6 +101,30 @@ export class LeadsController {
     @CurrentUser() user: { id: string },
   ): Promise<Lead> {
     return this.leadsService.unsubscribe(organizationId, leadId, user.id);
+  }
+
+  @Get(':leadId/signals')
+  listSignals(
+    @Param('organizationId') organizationId: string,
+    @Param('leadId') leadId: string,
+  ): Promise<LeadSignal[]> {
+    return this.leadSignalsService.listForLead(organizationId, leadId);
+  }
+
+  // Gatilho manual (Fase 1 — sem IA ainda) para o profiler de site; a tool
+  // de IA `investigate_company_website` (Fase 3) chama o mesmo
+  // `LeadSignalsService.requestInvestigation`. Só enfileira — quem
+  // efetivamente busca o site e grava `LeadSignal` é
+  // `apps/worker/src/website-profiler-processor.ts`.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post(':leadId/investigate')
+  investigate(
+    @Param('organizationId') organizationId: string,
+    @Param('leadId') leadId: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<void> {
+    return this.leadSignalsService.requestInvestigation(organizationId, leadId, user.id);
   }
 
   @Roles(...WRITE_ROLES)
