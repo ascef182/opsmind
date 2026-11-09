@@ -211,6 +211,22 @@ export interface LeadEnrichment {
   createdAt: string;
 }
 
+export type LeadSignalCollector = 'WEBSITE_PROFILER' | 'AI_ANALYSIS' | 'MANUAL';
+
+export interface LeadSignal {
+  id: string;
+  organizationId: string;
+  leadId: string;
+  signalCode: string;
+  value: string | null;
+  confidence: string; // Decimal do Prisma serializa como string
+  collector: LeadSignalCollector;
+  evidenceUrl: string | null;
+  evidenceQuote: string | null;
+  runId: string;
+  observedAt: string;
+}
+
 export interface OutreachMessage {
   id: string;
   organizationId: string;

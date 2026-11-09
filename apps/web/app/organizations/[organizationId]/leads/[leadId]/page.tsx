@@ -10,6 +10,7 @@ import { isSafeHttpUrl } from '@opsmind/shared-types';
 import { useCurrentMembership, useMembers } from '@/lib/memberships/use-memberships';
 import { useAssignLead, useLead, useConvertLead, useScoreLead } from '@/lib/leads/use-leads';
 import { useEnrichLead, useAnalyzeLeadPotential } from '@/lib/leads/use-lead-enrichment';
+import { useLeadSignals, useInvestigateLeadWebsite } from '@/lib/leads/use-lead-signals';
 import { useServiceOfferings } from '@/lib/leads/use-service-offerings';
 import {
   useApproveOutreach,
@@ -21,7 +22,13 @@ import {
   useRejectOutreach,
   useSendOutreach,
 } from '@/lib/leads/use-outreach-messages';
-import { OUTREACH_CHANNELS, WRITE_ROLES, type LeadEnrichment as LeadEnrichmentDto, type OutreachMessage } from '@/lib/leads/types';
+import {
+  OUTREACH_CHANNELS,
+  WRITE_ROLES,
+  type LeadEnrichment as LeadEnrichmentDto,
+  type LeadSignal,
+  type OutreachMessage,
+} from '@/lib/leads/types';
 import { useCreateLeadNote, useLeadNotes } from '@/lib/collaboration/use-internal-notes';
 import { InternalNotesCard } from '@/components/collaboration/internal-notes-card';
 import { ApiError } from '@/lib/api-client';
@@ -32,6 +39,7 @@ import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { FormError } from '@/components/ui/card';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
+import { LeadSignalsPanel } from '@/components/leads/lead-signals-panel';
 import { SocialBadges } from '@/components/leads/social-badges';
 import {
   Dialog,
@@ -280,6 +288,10 @@ function LeadIntelligencePanel({
   analyzeLoading,
   analyzeError,
   convertSlot,
+  signals,
+  onInvestigate,
+  investigateLoading,
+  investigateError,
 }: {
   data: NonNullable<ReturnType<typeof useLead>['data']>;
   offeringName: string | null;
@@ -294,6 +306,10 @@ function LeadIntelligencePanel({
   analyzeLoading: boolean;
   analyzeError: string | null;
   convertSlot: React.ReactNode;
+  signals: LeadSignal[];
+  onInvestigate: () => void;
+  investigateLoading: boolean;
+  investigateError: string | null;
 }) {
   return (
     <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
@@ -346,6 +362,19 @@ function LeadIntelligencePanel({
         </div>
       </section>
 
+      <section className="rounded-lg border border-border bg-card p-4">
+        <h2 className="mb-3 text-sm font-medium text-foreground">Sinais detectados</h2>
+        <LeadSignalsPanel signals={signals} />
+        {canWrite && data.website && (
+          <div className="mt-3">
+            <Button variant="secondary" size="sm" disabled={investigateLoading} onClick={onInvestigate}>
+              {investigateLoading ? 'Enfileirando…' : 'Investigar site'}
+            </Button>
+            <FormError message={investigateError} />
+          </div>
+        )}
+      </section>
+
       {canWrite && (
         <section className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
           <Button variant="secondary" size="sm" disabled={scoreLoading} onClick={onScore}>
@@ -380,6 +409,8 @@ export default function LeadDetailPage() {
   const scoreLead = useScoreLead(organizationId, leadId);
   const enrichLead = useEnrichLead(organizationId, leadId);
   const analyzeLead = useAnalyzeLeadPotential(organizationId, leadId);
+  const leadSignals = useLeadSignals(organizationId, leadId);
+  const investigateWebsite = useInvestigateLeadWebsite(organizationId, leadId);
   const convertLead = useConvertLead(organizationId, leadId);
   const generateDraft = useGenerateOutreachDraft(organizationId, leadId);
   const leadNotes = useLeadNotes(organizationId, leadId);
@@ -615,6 +646,10 @@ export default function LeadDetailPage() {
           analyzeLoading={analyzeLead.isPending}
           analyzeError={analyzeLead.isError ? (analyzeLead.error as ApiError).message : null}
           convertSlot={convertSlot}
+          signals={leadSignals.data ?? []}
+          onInvestigate={() => investigateWebsite.mutate()}
+          investigateLoading={investigateWebsite.isPending}
+          investigateError={investigateWebsite.isError ? (investigateWebsite.error as ApiError).message : null}
         />
       </div>
     </div>

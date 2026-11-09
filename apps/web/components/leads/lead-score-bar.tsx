@@ -37,6 +37,7 @@ const BREAKDOWN_ROWS: Array<{ key: keyof LeadScoreBreakdown; label: string }> = 
   { key: 'icpFitPoints', label: 'Fit com ICP (firmografia)' },
   { key: 'activityPoints', label: 'Atividade (rating/reviews)' },
   { key: 'keywordMatchPoints', label: 'Match de palavra-chave' },
+  { key: 'signalFitPoints', label: 'Sinais do site (investigação)' },
 ];
 
 // Reaproveita o padrão click-to-expand de `RequestTrace`
