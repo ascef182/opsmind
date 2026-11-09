@@ -1,5 +1,10 @@
 import type { PrismaClient, Prisma, ScrapeJob, ScrapeSourceType, Lead, LeadStatus } from '@opsmind/database';
-import type { LeadScrapeJobData, OutreachAutodraftJobData, OutreachChannel } from '@opsmind/shared-types';
+import type {
+  LeadScrapeJobData,
+  OutreachAutodraftJobData,
+  OutreachChannel,
+  WebsiteProfileJobData,
+} from '@opsmind/shared-types';
 import {
   scoreLead,
   isSafeHttpUrl,
@@ -26,6 +31,7 @@ import type Redis from 'ioredis';
 import * as Sentry from '@sentry/node';
 import { withTenantContext } from './tenant-context';
 import { isOverBudget, recordSpend } from './budget';
+import { loadConfirmedSignalsForScoring } from './website-profiler-processor';
 
 // Duplicada de apps/api/src/shared/constants/roles.constant.ts de propósito
 // (worker não pode importar de apps/api) — mesma regra: todo papel exceto
@@ -902,6 +908,47 @@ async function upsertLead(
   firmographics: LeadScoringInput['firmographics'],
   offeringsIcp: ServiceOfferingIcp[],
 ): Promise<Lead> {
+  // dedupUrl é só normalização de string (sem I/O) — calculado aqui, antes
+  // da pontuação, pra poder achar um lead já existente ANTES de pontuar
+  // (ver `existingId` abaixo), não só no upsert/update mais adiante.
+  const dedupUrl = normalizeUrlForDedup(candidate.url ?? candidate.website ?? null);
+
+  // Acha o lead já existente (se houver) ANTES de pontuar — mesma busca de
+  // dedup que o upsert/update mais abaixo já faria de qualquer forma, só
+  // adiantada, pra poder incluir sinais de investigação de site já
+  // confirmados numa execução anterior (`loadConfirmedSignalsForScoring`,
+  // `website-profiler-processor.ts`) no re-score deste lead. Sem isso, um
+  // lead re-raspado nunca refletia sinais já descobertos até alguém
+  // reinvestigar ou re-pontuar manualmente.
+  const existingLead = candidate.placeId
+    ? await tx.lead.findUnique({
+        where: { organizationId_placeId: { organizationId: data.organizationId, placeId: candidate.placeId } },
+        select: { id: true },
+      })
+    : await (dedupUrl
+        ? tx.lead.findFirst({
+            where: {
+              organizationId: data.organizationId,
+              sourceType,
+              rawSnapshot: { path: ['_dedupUrl'], equals: dedupUrl },
+            },
+            select: { id: true },
+          })
+        : tx.lead.findFirst({
+            where: {
+              organizationId: data.organizationId,
+              sourceType,
+              name: { equals: candidate.name, mode: 'insensitive' },
+              city: candidate.city,
+              state: candidate.state,
+            },
+            select: { id: true },
+          }));
+
+  const confirmedSignals = existingLead
+    ? await loadConfirmedSignalsForScoring(tx, data.organizationId, existingLead.id)
+    : undefined;
+
   const scoreInput: LeadScoringInput = {
     website: candidate.website,
     websiteConfirmedAbsent: candidate.websiteConfirmedAbsent,
@@ -910,6 +957,7 @@ async function upsertLead(
     reviewCount: candidate.reviewCount,
     rawContent: candidate.rawContent,
     firmographics,
+    confirmedSignals,
   };
   const breakdown = scoreLead(scoreInput, offeringsIcp);
   const status: LeadStatus = breakdown.total >= QUALIFICATION_THRESHOLD ? 'QUALIFIED' : 'DISQUALIFIED';
@@ -958,31 +1006,14 @@ async function upsertLead(
     });
   }
 
-  // Sem placeId: ver comentário da estratégia de dedup acima.
-  const dedupUrl = normalizeUrlForDedup(candidate.url ?? candidate.website ?? null);
+  // Sem placeId: ver comentário da estratégia de dedup acima. `dedupUrl` e
+  // `existingLead` já foram calculados no topo da função (precisa deles
+  // antes de pontuar) — reaproveitados aqui, não recalculados.
   const rawSnapshot = { ...candidate.rawSnapshot, _dedupUrl: dedupUrl } as Prisma.InputJsonValue;
   const dataWithSnapshot = { ...baseData, rawSnapshot };
 
-  const existing = dedupUrl
-    ? await tx.lead.findFirst({
-        where: {
-          organizationId: data.organizationId,
-          sourceType,
-          rawSnapshot: { path: ['_dedupUrl'], equals: dedupUrl },
-        },
-      })
-    : await tx.lead.findFirst({
-        where: {
-          organizationId: data.organizationId,
-          sourceType,
-          name: { equals: candidate.name, mode: 'insensitive' },
-          city: candidate.city,
-          state: candidate.state,
-        },
-      });
-
-  if (existing) {
-    return tx.lead.update({ where: { id: existing.id }, data: dataWithSnapshot });
+  if (existingLead) {
+    return tx.lead.update({ where: { id: existingLead.id }, data: dataWithSnapshot });
   }
   return tx.lead.create({ data: dataWithSnapshot });
 }
@@ -1076,6 +1107,13 @@ async function finalizeJob(
  */
 const AUTODRAFT_MAX_PER_ORG_PER_JOB = 10;
 
+// Teto de jobs de investigação de site (`website-profile`) enfileirados POR
+// `ScrapeJob` — mesmo racional de `AUTODRAFT_MAX_PER_ORG_PER_JOB` (evita que
+// um `ScrapeJob` gigante enfileire uma avalanche de jobs de uma vez), ainda
+// que o custo marginal da investigação seja ~$0 (HTTP direto, sem gateway
+// pago) — o teto aqui é sobre capacidade/ritmo do worker, não sobre custo.
+const WEBSITE_PROFILE_MAX_PER_ORG_PER_JOB = 15;
+
 /**
  * Resolve o canal de outreach do gatilho automático (B4/Task 11) por
  * prioridade fixa — WHATSAPP > INSTAGRAM_DM > LINKEDIN_DM > EMAIL > PHONE,
@@ -1087,8 +1125,14 @@ const AUTODRAFT_MAX_PER_ORG_PER_JOB = 10;
  * não há razão pra deixar esses leads de fora. `null` só quando NENHUM dos
  * cinco campos está preenchido — o chamador trata `null` como "sem canal
  * elegível", nunca força um canal fora desta lista.
+ *
+ * Exportada: `website-profiler-processor.ts` reaproveita esta função pra
+ * decidir o canal do autodraft disparado DEPOIS da investigação de site
+ * (ver racional em `website-profiler-processor.ts`), em vez de duplicar a
+ * prioridade de canal — mesmo app (`apps/worker`), importar é a escolha
+ * certa.
  */
-function resolveAutodraftChannel(lead: {
+export function resolveAutodraftChannel(lead: {
   whatsapp: string | null;
   email: string | null;
   phone: string | null;
@@ -1156,6 +1200,7 @@ export async function processLeadScrapeJob(
   redis: Redis,
   data: LeadScrapeJobData,
   enqueueAutodraft: (job: OutreachAutodraftJobData) => Promise<unknown> = async () => undefined,
+  enqueueWebsiteProfile: (job: WebsiteProfileJobData) => Promise<unknown> = async () => undefined,
 ): Promise<ScrapeJob> {
   try {
     // Passo 1 — tx curta: marca RUNNING.
@@ -1311,7 +1356,7 @@ export async function processLeadScrapeJob(
     // Passo 3 — tx curta: persiste os leads (upsert + score + enrichment) e
     // acumula (sem enfileirar ainda — ver Passo 3.5) os jobs de rascunho
     // automático de outreach (B4/Task 11).
-    const { count: leadsFound, autodraftJobs } = await withTenantContext(
+    const { count: leadsFound, autodraftJobs, websiteProfileJobs } = await withTenantContext(
       prisma,
       data.organizationId,
       async (tx) => {
@@ -1353,6 +1398,7 @@ export async function processLeadScrapeJob(
 
         let count = 0;
         const autodraftJobs: OutreachAutodraftJobData[] = [];
+        const websiteProfileJobs: WebsiteProfileJobData[] = [];
         for (const { candidate, firmographics, enrichmentRaw, contactEnrichment } of enriched) {
           let lead = await upsertLead(tx, data, scrapeJob.sourceType, candidate, firmographics, offeringsIcp);
 
@@ -1402,39 +1448,59 @@ export async function processLeadScrapeJob(
           // 11) — dispara no exato momento em que ESTE lead vira QUALIFIED
           // com pelo menos um canal de contato suportado, dentro do mesmo
           // fluxo que já processa o lead (nunca um scan periódico separado,
-          // ver Risks do plano). Três condições, todas exigidas:
+          // ver Risks do plano). Duas condições-base, ambas exigidas:
           //   1. `lead.status === 'QUALIFIED'` (score cruzou o threshold).
           //   2. `lead.suggestedOfferingId` não-nulo — sem oferta sugerida,
           //      `OutreachService.generateDraft` lançaria BadRequestException
           //      (não teria o que promover na mensagem).
-          //   3. `resolveAutodraftChannel` resolve um canal — ver seu
-          //      comentário para a ordem de prioridade fixa.
           // E, adicionalmente: o lead ainda não tem NENHUM `OutreachMessage`
-          // (checado via `count` — nunca reenfileira pra um lead que já
-          // ganhou um rascunho, automático ou manual, numa passada anterior
-          // ou neste mesmo job em caso de o lead já existir), e o teto
-          // `AUTODRAFT_MAX_PER_ORG_PER_JOB` desta execução ainda não foi
-          // atingido.
-          if (
-            lead.status === 'QUALIFIED' &&
-            lead.suggestedOfferingId &&
-            autodraftJobs.length < AUTODRAFT_MAX_PER_ORG_PER_JOB
-          ) {
-            const channel = resolveAutodraftChannel(lead);
-            if (channel) {
-              const existingOutreachCount = await tx.outreachMessage.count({ where: { leadId: lead.id } });
-              if (existingOutreachCount === 0) {
-                autodraftJobs.push({
+          // (checado via `existingOutreachCount` — nunca reenfileira pra um
+          // lead que já ganhou um rascunho, automático ou manual).
+          //
+          // A PARTIR DAQUI, duas rotas (não mais rascunho sempre imediato):
+          // um lead com site conhecido e AINDA NUNCA investigado vai pro
+          // profiler primeiro (`website-profile`), não pro rascunho — assim
+          // o rascunho (gerado depois, por `website-profiler-processor.ts`)
+          // pode citar evidência real do site (ex.: sinal de WhatsApp), não
+          // só firmografia/categoria. Isso é a "Fase 7" que o documento de
+          // arquitetura original deixou pro final de propósito ("só depois
+          // das fases 1-4 validarem qualidade/custo") — já validamos. Lead
+          // SEM site (nada a investigar), ou com site mas que já foi
+          // investigado antes (sinais já existem, já contados na pontuação
+          // acima via `confirmedSignals`), ou que excedeu o teto de
+          // investigação desta rodada, cai no caminho imediato de sempre —
+          // nunca fica "preso" sem nenhum rascunho.
+          if (lead.status === 'QUALIFIED' && lead.suggestedOfferingId) {
+            const existingOutreachCount = await tx.outreachMessage.count({ where: { leadId: lead.id } });
+            if (existingOutreachCount === 0) {
+              const alreadyInvestigated = lead.website
+                ? (await tx.leadSignal.count({ where: { leadId: lead.id } })) > 0
+                : false;
+              const shouldInvestigateFirst =
+                !!lead.website && !alreadyInvestigated && websiteProfileJobs.length < WEBSITE_PROFILE_MAX_PER_ORG_PER_JOB;
+
+              if (shouldInvestigateFirst) {
+                websiteProfileJobs.push({
                   organizationId: data.organizationId,
                   leadId: lead.id,
-                  channel,
-                  serviceOfferingId: lead.suggestedOfferingId,
+                  actorType: data.actorType,
+                  actorId: data.actorId,
                 });
+              } else if (autodraftJobs.length < AUTODRAFT_MAX_PER_ORG_PER_JOB) {
+                const channel = resolveAutodraftChannel(lead);
+                if (channel) {
+                  autodraftJobs.push({
+                    organizationId: data.organizationId,
+                    leadId: lead.id,
+                    channel,
+                    serviceOfferingId: lead.suggestedOfferingId,
+                  });
+                }
               }
             }
           }
         }
-        return { count, autodraftJobs };
+        return { count, autodraftJobs, websiteProfileJobs };
       },
     );
 
@@ -1458,6 +1524,28 @@ export async function processLeadScrapeJob(
         // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
         console.error(
           `[lead-scrape-processor] falha ao enfileirar rascunho automático de outreach para o lead ${autodraftJob.leadId}:`,
+          enqueueError,
+        );
+      }
+    }
+
+    // Mesma disciplina best-effort acima, pros jobs de investigação de site
+    // acumulados (rota "investigar antes de rascunhar", ver comentário do
+    // gatilho no Passo 3).
+    for (const websiteProfileJob of websiteProfileJobs) {
+      try {
+        await enqueueWebsiteProfile(websiteProfileJob);
+      } catch (enqueueError) {
+        Sentry.captureException(enqueueError, {
+          extra: {
+            leadId: websiteProfileJob.leadId,
+            organizationId: data.organizationId,
+            phase: 'website-profile-enqueue',
+          },
+        });
+        // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
+        console.error(
+          `[lead-scrape-processor] falha ao enfileirar investigação de site para o lead ${websiteProfileJob.leadId}:`,
           enqueueError,
         );
       }

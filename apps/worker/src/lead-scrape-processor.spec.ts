@@ -125,6 +125,10 @@ describe('processLeadScrapeJob', () => {
       serviceOffering: { findMany: jest.fn().mockResolvedValue([]) },
       lead: {
         upsert: jest.fn(),
+        // `findUnique` (pré-check de dedup por placeId, antes de pontuar —
+        // ver `upsertLead`) default "não existe ainda", mesmo espírito do
+        // `findFirst` abaixo (dedup sem placeId).
+        findUnique: jest.fn().mockResolvedValue(null),
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
         update: jest.fn(),
@@ -135,6 +139,11 @@ describe('processLeadScrapeJob', () => {
       // simplesmente não faz nada quando a lista vem vazia).
       membership: { findMany: jest.fn().mockResolvedValue([]) },
       leadEnrichment: { create: jest.fn() },
+      // Usado por `loadConfirmedSignalsForScoring` (pré-pontuação, ver
+      // `upsertLead`) e pela checagem de "já foi investigado" do gatilho
+      // de autodraft/investigação — default "nenhum sinal ainda", testes
+      // que não são sobre isso não precisam mockar.
+      leadSignal: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
       // Usado só pelo gatilho automático de outreach (B4/Task 11, ver
       // `resolveAutodraftChannel`/trecho no meio do loop do Passo 3) — default
       // "nenhum OutreachMessage ainda" (0), testes que não são sobre o
@@ -1268,6 +1277,155 @@ describe('processLeadScrapeJob', () => {
       expect(tx.lead.upsert).toHaveBeenCalledTimes(11); // todos os 11 leads são persistidos normalmente
       expect(enqueueAutodraft).toHaveBeenCalledTimes(10); // só os 10 primeiros geram rascunho automático
       expect(result.status).toBe('COMPLETED');
+    });
+
+    describe('investigar site antes de rascunhar (Fase 7)', () => {
+      function apifyCandidateWithWebsite(overrides: Record<string, unknown> = {}) {
+        return apifyCandidateNoWebsite({ website: 'https://padariaautodraft.com.br', ...overrides });
+      }
+
+      // `hasNoWebsitePoints` (os 50 pontos usados pelos outros testes deste
+      // describe) não se aplica a um lead COM site — por isso aqui o match
+      // também bate em employeeCount/revenueUsd (a offering não restringe
+      // faixa: `minEmployees`/`maxEmployees`/`minRevenueUsd`/`maxRevenueUsd`
+      // todos `null`), somando icpFit=30 + activity=20 = 50, o suficiente
+      // pra cruzar `QUALIFICATION_THRESHOLD` sem depender da ausência de site.
+      const matchBusinessResultWithWebsite = {
+        ...matchBusinessResult,
+        employeeCount: 8,
+        revenueUsd: 500_000,
+      };
+
+      it('lead recém-qualificado COM site e nunca investigado → vai pra WEBSITE_PROFILE, não dispara autodraft imediato', async () => {
+        const tx = setupTx();
+        const prisma = buildPrisma();
+        setupQualifyingRun(tx, prisma);
+        prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({ ...baseScrapeJob, onlyWithoutWebsite: false });
+        tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+        tx.leadSignal.count.mockResolvedValue(0); // nunca investigado
+
+        const gateways = fakeGateways();
+        gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateWithWebsite()]);
+        gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResultWithWebsite);
+        gateways.camofox.search.mockResolvedValue([]);
+
+        const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+        const enqueueWebsiteProfile = jest.fn().mockResolvedValue(undefined);
+        const result = await processLeadScrapeJob(
+          prisma as never,
+          gateways as never,
+          fakeRedis as never,
+          jobData,
+          enqueueAutodraft,
+          enqueueWebsiteProfile,
+        );
+
+        expect(enqueueWebsiteProfile).toHaveBeenCalledTimes(1);
+        expect(enqueueWebsiteProfile).toHaveBeenCalledWith({
+          organizationId: 'org-1',
+          leadId: 'lead-place-autodraft',
+          actorType: jobData.actorType,
+          actorId: jobData.actorId,
+        });
+        expect(enqueueAutodraft).not.toHaveBeenCalled();
+        expect(result.status).toBe('COMPLETED');
+      });
+
+      it('lead recém-qualificado SEM site continua indo direto pro autodraft (nada a investigar)', async () => {
+        const tx = setupTx();
+        const prisma = buildPrisma();
+        setupQualifyingRun(tx, prisma);
+        tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+
+        const gateways = fakeGateways();
+        gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateNoWebsite()]);
+        gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResult);
+        gateways.camofox.search.mockResolvedValue([
+          { title: 'WhatsApp', url: 'https://wa.me/5519999999999', textContent: null, raw: {} },
+        ]);
+
+        const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+        const enqueueWebsiteProfile = jest.fn().mockResolvedValue(undefined);
+        await processLeadScrapeJob(
+          prisma as never,
+          gateways as never,
+          fakeRedis as never,
+          jobData,
+          enqueueAutodraft,
+          enqueueWebsiteProfile,
+        );
+
+        expect(enqueueWebsiteProfile).not.toHaveBeenCalled();
+        expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
+        expect(enqueueAutodraft).toHaveBeenCalledWith(
+          expect.objectContaining({ leadId: 'lead-place-autodraft', channel: 'WHATSAPP' }),
+        );
+      });
+
+      it('lead COM site mas já investigado antes (LeadSignal existente) → não reinvestiga, cai no autodraft imediato', async () => {
+        const tx = setupTx();
+        const prisma = buildPrisma();
+        setupQualifyingRun(tx, prisma);
+        prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({ ...baseScrapeJob, onlyWithoutWebsite: false });
+        tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+        tx.leadSignal.count.mockResolvedValue(3); // já tem sinais de uma investigação anterior
+
+        const gateways = fakeGateways();
+        gateways.apify.searchBusinesses.mockResolvedValue([apifyCandidateWithWebsite()]);
+        gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResultWithWebsite);
+        gateways.camofox.search.mockResolvedValue([
+          { title: 'WhatsApp', url: 'https://wa.me/5519999999999', textContent: null, raw: {} },
+        ]);
+
+        const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+        const enqueueWebsiteProfile = jest.fn().mockResolvedValue(undefined);
+        await processLeadScrapeJob(
+          prisma as never,
+          gateways as never,
+          fakeRedis as never,
+          jobData,
+          enqueueAutodraft,
+          enqueueWebsiteProfile,
+        );
+
+        expect(enqueueWebsiteProfile).not.toHaveBeenCalled();
+        expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
+      });
+
+      it('teto de investigação por job (15) respeitado — excedente cai de volta no autodraft imediato', async () => {
+        const tx = setupTx();
+        const prisma = buildPrisma();
+        setupQualifyingRun(tx, prisma);
+        prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({ ...baseScrapeJob, onlyWithoutWebsite: false });
+        tx.serviceOffering.findMany.mockResolvedValue([matchingOffering]);
+        tx.leadSignal.count.mockResolvedValue(0); // nenhum dos 16 foi investigado ainda
+
+        const gateways = fakeGateways();
+        const candidates = Array.from({ length: 16 }, (_, i) =>
+          apifyCandidateWithWebsite({ placeId: `place-${i}` }),
+        );
+        gateways.apify.searchBusinesses.mockResolvedValue(candidates);
+        gateways.explorium.matchBusiness.mockResolvedValue(matchBusinessResultWithWebsite);
+        gateways.camofox.search.mockResolvedValue([
+          { title: 'WhatsApp', url: 'https://wa.me/5519999999999', textContent: null, raw: {} },
+        ]);
+
+        const enqueueAutodraft = jest.fn().mockResolvedValue(undefined);
+        const enqueueWebsiteProfile = jest.fn().mockResolvedValue(undefined);
+        const result = await processLeadScrapeJob(
+          prisma as never,
+          gateways as never,
+          fakeRedis as never,
+          jobData,
+          enqueueAutodraft,
+          enqueueWebsiteProfile,
+        );
+
+        expect(tx.lead.upsert).toHaveBeenCalledTimes(16); // todos os 16 leads são persistidos normalmente
+        expect(enqueueWebsiteProfile).toHaveBeenCalledTimes(15); // teto de investigação por job
+        expect(enqueueAutodraft).toHaveBeenCalledTimes(1); // o 16º, que excedeu o teto, cai no autodraft imediato
+        expect(result.status).toBe('COMPLETED');
+      });
     });
   });
 

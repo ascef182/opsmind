@@ -16,6 +16,7 @@ import { createLogger } from './logger';
 import { createPrismaClient } from './tenant-context';
 import { createAutomationQueue, createAutomationWorker, createRedisConnection } from './queue';
 import { createLeadScrapeQueue, createLeadScrapeWorker } from './lead-scrape-queue';
+import { createWebsiteProfilerQueue, createWebsiteProfilerWorker } from './website-profiler-queue';
 import { createOutreachAutodraftQueue } from './outreach-autodraft-queue';
 import { createRedditClusteringQueue } from './reddit-clustering-queue';
 import { createRedditTopicScanWorker } from './reddit-topic-scan-queue';
@@ -28,6 +29,7 @@ import { scanTaskDueReminders } from './task-due-reminder-scan';
 import { scanMeetingReminders } from './meeting-reminder-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
+import { processWebsiteProfileJob } from './website-profiler-processor';
 
 // Intervalo do scan (trigger) — curto o bastante pra ser responsivo em
 // dev/demo, sem martelar o Postgres à toa em produção real. Fixo por ora;
@@ -171,6 +173,11 @@ async function main(): Promise<void> {
   // enfileira nela logo depois de `upsertLead`, quando um lead qualifica com
   // ao menos um canal de contato (ver comentário no próprio processor).
   const outreachAutodraftQueue = createOutreachAutodraftQueue(connection);
+  // Fila `website-profile`: produtora aqui também (não só em apps/api) —
+  // `processLeadScrapeJob` enfileira nela quando um lead recém-QUALIFIED
+  // tem site e ainda não foi investigado, pra citar evidência real no
+  // rascunho gerado depois (ver comentário no processor).
+  const websiteProfilerQueue = createWebsiteProfilerQueue(connection);
   // Fila `reddit-clustering` (Task 13): só produtora aqui — quem consome é
   // `apps/api` (`reddit-clustering.consumer.ts`, Task 12). `runRedditMiningScan`
   // (abaixo) enfileira nela quando `scanRedditMiningTopics` encontra posts
@@ -196,8 +203,13 @@ async function main(): Promise<void> {
   });
 
   const leadScrapeWorker = createLeadScrapeWorker(connection, (job) =>
-    processLeadScrapeJob(prisma, gateways, connection, job.data, (data) =>
-      outreachAutodraftQueue.add('autodraft', data),
+    processLeadScrapeJob(
+      prisma,
+      gateways,
+      connection,
+      job.data,
+      (data) => outreachAutodraftQueue.add('autodraft', data),
+      (data) => websiteProfilerQueue.add('investigate', data),
     ),
   );
 
@@ -207,6 +219,19 @@ async function main(): Promise<void> {
       'job de scraping de leads falhou',
     );
     Sentry.captureException(error, { extra: { jobId: job?.id, scrapeJobId: job?.data.scrapeJobId } });
+  });
+
+  // Fila `website-profile` — só consumidora aqui; quem produz é `apps/api`
+  // (`POST .../leads/:leadId/investigate`, e mais adiante a tool de IA
+  // `investigate_company_website`). Ver
+  // docs/planning/2026-11-06-harvey-inteligencia-comercial.md §5.
+  const websiteProfilerWorker = createWebsiteProfilerWorker(connection, (job) =>
+    processWebsiteProfileJob(prisma, job.data, (data) => outreachAutodraftQueue.add('autodraft', data)),
+  );
+
+  websiteProfilerWorker.on('failed', (job, error) => {
+    logger.error({ jobId: job?.id, leadId: job?.data.leadId, err: error }, 'job de investigação de site falhou');
+    Sentry.captureException(error, { extra: { jobId: job?.id, leadId: job?.data.leadId } });
   });
 
   async function runScan(): Promise<void> {
