@@ -65,6 +65,22 @@ export class ListLeadsQueryDto {
   @IsBoolean()
   hasContactMethod?: boolean;
 
+  // `Lead.whatsapp` CONFIRMADO (descoberta real) — diferente de
+  // `whatsappCandidate` abaixo.
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean()
+  hasWhatsapp?: boolean;
+
+  // `Lead.isWhatsappCandidate` — sinal de priorização (NUNCA confirmado,
+  // telefone estruturado + ausência de site confirmada). Combinar com
+  // `hasWebsite=false` na UI cobre "candidato a WhatsApp, sem site" sem
+  // precisar de um terceiro filtro.
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean()
+  whatsappCandidate?: boolean;
+
   @IsOptional()
   @IsString()
   search?: string;

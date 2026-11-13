@@ -32,6 +32,8 @@ export interface ListLeadsFilter {
   city?: string;
   state?: string;
   hasWebsite?: boolean;
+  hasWhatsapp?: boolean;
+  whatsappCandidate?: boolean;
   hasContactMethod?: boolean;
   search?: string;
   // "Uma lista pra cada busca" — filtra pelo `ScrapeJob` de origem (ver
@@ -291,6 +293,11 @@ export class LeadsService {
         ...(filter.scrapeJobId ? { scrapeJobId: filter.scrapeJobId } : {}),
         ...(filter.hasWebsite === true ? { website: { not: null } } : {}),
         ...(filter.hasWebsite === false ? { website: null } : {}),
+        ...(filter.hasWhatsapp === true ? { whatsapp: { not: null } } : {}),
+        ...(filter.hasWhatsapp === false ? { whatsapp: null } : {}),
+        ...(filter.whatsappCandidate !== undefined
+          ? { isWhatsappCandidate: filter.whatsappCandidate }
+          : {}),
         ...noContactFilter,
         ...orCombination,
       },

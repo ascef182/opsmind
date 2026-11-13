@@ -305,6 +305,10 @@ export interface Lead {
   website: string | null;
   googleCategory: string | null;
   whatsapp: string | null;
+  // Candidato (NÃO confirmado) a WhatsApp — telefone estruturado + ausência
+  // de site confirmada na fonte (Apify/Explorium). Diferente de `whatsapp`
+  // acima, que só é preenchido por descoberta real.
+  isWhatsappCandidate: boolean;
   contactName: string | null;
   socialLinks: SocialLink[] | null;
   // `Decimal` do Prisma serializa como STRING no JSON de resposta (decimal.js
@@ -367,6 +371,10 @@ export interface ListLeadsFilter {
   city?: string;
   state?: string;
   hasWebsite?: boolean;
+  // Espelha hasWhatsapp/whatsappCandidate de list-leads-query.dto.ts —
+  // confirmado (descoberta real) vs. candidato (sinal de priorização).
+  hasWhatsapp?: boolean;
+  whatsappCandidate?: boolean;
   // Espelha `hasContactMethod` de list-leads-query.dto.ts — pelo menos um
   // canal de contato utilizável (phone/email/whatsapp/socialLinks).
   hasContactMethod?: boolean;

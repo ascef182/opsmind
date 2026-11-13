@@ -262,6 +262,50 @@ describe('LeadsService', () => {
       });
     });
 
+    it('hasWhatsapp: true filtra Lead.whatsapp confirmado (não nulo)', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { hasWhatsapp: true });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', whatsapp: { not: null } },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
+    it('hasWhatsapp: false filtra Lead.whatsapp nulo', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { hasWhatsapp: false });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', whatsapp: null },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
+    it('whatsappCandidate: true filtra Lead.isWhatsappCandidate (sinal não confirmado)', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { whatsappCandidate: true });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isWhatsappCandidate: true },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
+    it('combina whatsappCandidate=true + hasWebsite=false — "candidato a WhatsApp, sem site"', async () => {
+      prisma.lead.findMany.mockResolvedValue([]);
+
+      await service.list('org-1', { whatsappCandidate: true, hasWebsite: false });
+
+      expect(prisma.lead.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', website: null, isWhatsappCandidate: true },
+        orderBy: { discoveredAt: 'desc' },
+      });
+    });
+
     it('hasContactMethod: true gera OR de phone/email/whatsapp/socialLinks quando sozinho', async () => {
       prisma.lead.findMany.mockResolvedValue([]);
 

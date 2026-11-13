@@ -105,6 +105,20 @@ function WebsiteBadge({ website }: { website: string | null }) {
   );
 }
 
+// Sinal de priorização, NUNCA confirmado (ver Lead.isWhatsappCandidate) —
+// só exibido quando ainda não há `whatsapp` confirmado, pra não duplicar
+// informação quando o dado real já existe.
+function WhatsappCandidateBadge({ isCandidate, whatsapp }: { isCandidate: boolean; whatsapp: string | null }) {
+  if (!isCandidate || whatsapp) {
+    return null;
+  }
+  return (
+    <span className="inline-block whitespace-nowrap rounded-full border border-positive-500/40 bg-positive-500/10 px-2 py-0.5 text-xs font-medium text-positive-400">
+      Candidato a WhatsApp
+    </span>
+  );
+}
+
 function ScrapeJobsPanel({
   organizationId,
   activeScrapeJobId,
@@ -204,6 +218,7 @@ export default function LeadsPage() {
   const [sourceType, setSourceType] = useState<ScrapeSourceType | ''>('');
   const [status, setStatus] = useState<LeadStatus | ''>('');
   const [hasWebsite, setHasWebsite] = useState<'' | 'true' | 'false'>('');
+  const [whatsappCandidate, setWhatsappCandidate] = useState<'' | 'true' | 'false'>('');
   const [hasContactMethod, setHasContactMethod] = useState<'' | 'true' | 'false'>('');
   // Filtro de score mínimo — o backend já suportava (`ListLeadsQueryDto
   // .minScore`), só faltava expor na UI. String (não number) pra permitir o
@@ -235,6 +250,7 @@ export default function LeadsPage() {
     sourceType: sourceType || undefined,
     status: status || undefined,
     hasWebsite: hasWebsite === '' ? undefined : hasWebsite === 'true',
+    whatsappCandidate: whatsappCandidate === '' ? undefined : whatsappCandidate === 'true',
     hasContactMethod: hasContactMethod === '' ? undefined : hasContactMethod === 'true',
     minScore: minScore === '' ? undefined : Number(minScore),
     scrapeJobId,
@@ -367,6 +383,15 @@ export default function LeadsPage() {
           <option value="true">Com site</option>
         </Select>
         <Select
+          value={whatsappCandidate}
+          onChange={(e) => setWhatsappCandidate(e.target.value as '' | 'true' | 'false')}
+          className="max-w-[200px]"
+        >
+          <option value="">Candidato a WhatsApp: todos</option>
+          <option value="true">Candidato a WhatsApp</option>
+          <option value="false">Não candidato</option>
+        </Select>
+        <Select
           value={hasContactMethod}
           onChange={(e) => setHasContactMethod(e.target.value as '' | 'true' | 'false')}
           className="max-w-[200px]"
@@ -447,6 +472,8 @@ export default function LeadsPage() {
                         <MessageCircle className="h-3.5 w-3.5 text-positive-500" />
                         {lead.whatsapp}
                       </span>
+                    ) : lead.isWhatsappCandidate ? (
+                      <WhatsappCandidateBadge isCandidate={lead.isWhatsappCandidate} whatsapp={lead.whatsapp} />
                     ) : (
                       '—'
                     )}
