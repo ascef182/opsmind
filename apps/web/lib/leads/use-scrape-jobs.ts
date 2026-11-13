@@ -2,7 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient, type Query } from '@tanstack/react-query';
 import { apiFetch } from '../api-client';
-import type { CreateScrapeJobInput, ListScrapeJobsFilter, ScrapeJob } from './types';
+import type {
+  CreateScrapeJobBatchInput,
+  CreateScrapeJobInput,
+  ListScrapeJobsFilter,
+  ScrapeJob,
+  ScrapeJobBatchResult,
+} from './types';
 
 const ACTIVE_STATUSES = new Set(['QUEUED', 'RUNNING']);
 
@@ -53,6 +59,22 @@ export function useCreateScrapeJob(organizationId: string) {
   return useMutation({
     mutationFn: (input: CreateScrapeJobInput) =>
       apiFetch<ScrapeJob>(`/organizations/${organizationId}/scrape-jobs`, { method: 'POST', body: input }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'scrape-jobs'] }),
+  });
+}
+
+// Mesmo disparo imediato de `useCreateScrapeJob`, só que para uma lista de
+// localidades de uma vez (ver CreateScrapeJobBatchInput) — um POST só, N
+// ScrapeJob criados no backend.
+export function useCreateScrapeJobBatch(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateScrapeJobBatchInput) =>
+      apiFetch<ScrapeJobBatchResult>(`/organizations/${organizationId}/scrape-jobs/batch`, {
+        method: 'POST',
+        body: input,
+      }),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'scrape-jobs'] }),
   });

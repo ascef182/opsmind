@@ -74,6 +74,54 @@ describe('ScrapeJobsService', () => {
     });
   });
 
+  describe('createBatch', () => {
+    it('cria um ScrapeJob por localidade da lista, reaproveitando o resto da config', async () => {
+      prisma.scrapeJob.create
+        .mockResolvedValueOnce({ id: 'job-1' })
+        .mockResolvedValueOnce({ id: 'job-2' });
+
+      const dto = {
+        sourceType: 'APIFY_GOOGLE_MAPS' as const,
+        businessType: 'padaria',
+        locations: [
+          { city: 'São Paulo', state: 'SP' },
+          { city: 'Campinas', state: 'SP' },
+        ],
+      };
+      const result = await service.createBatch('org-1', dto, 'user-1');
+
+      expect(prisma.scrapeJob.create).toHaveBeenCalledTimes(2);
+      expect(prisma.scrapeJob.create).toHaveBeenNthCalledWith(1, {
+        data: expect.objectContaining({ city: 'São Paulo', state: 'SP', businessType: 'padaria' }),
+      });
+      expect(prisma.scrapeJob.create).toHaveBeenNthCalledWith(2, {
+        data: expect.objectContaining({ city: 'Campinas', state: 'SP', businessType: 'padaria' }),
+      });
+      expect(queueService.enqueue).toHaveBeenCalledTimes(2);
+      expect(result.created).toEqual([{ id: 'job-1' }, { id: 'job-2' }]);
+      expect(result.skipped).toEqual([]);
+    });
+
+    it('uma localidade que falha não aborta o lote — segue pras próximas e reporta em skipped', async () => {
+      prisma.scrapeJob.create
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValueOnce({ id: 'job-2' });
+
+      const dto = {
+        sourceType: 'APIFY_GOOGLE_MAPS' as const,
+        businessType: 'padaria',
+        locations: [
+          { city: 'São Paulo', state: 'SP' },
+          { city: 'Campinas', state: 'SP' },
+        ],
+      };
+      const result = await service.createBatch('org-1', dto, 'user-1');
+
+      expect(result.created).toEqual([{ id: 'job-2' }]);
+      expect(result.skipped).toEqual([{ city: 'São Paulo', state: 'SP', reason: 'erro' }]);
+    });
+  });
+
   describe('findByIdOrThrow', () => {
     it('lança 404 quando o job não existe/não pertence à org', async () => {
       prisma.scrapeJob.findFirst.mockResolvedValue(null);
