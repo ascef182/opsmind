@@ -210,6 +210,11 @@ async function main(): Promise<void> {
       job.data,
       (data) => outreachAutodraftQueue.add('autodraft', data),
       (data) => websiteProfilerQueue.add('investigate', data),
+      // Fallback automático Apify→Camofox (ver maybeEnqueueApifyFallback em
+      // lead-scrape-processor.ts) — reaproveita a MESMA fila `leadScrapeQueue`
+      // já instanciada acima (também usada por `runProspectingScan`), não uma
+      // fila nova.
+      (data) => leadScrapeQueue.add('scrape', data),
     ),
   );
 

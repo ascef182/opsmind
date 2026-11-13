@@ -158,6 +158,14 @@ describe('processLeadScrapeJob', () => {
       scrapeJob: {
         findFirstOrThrow: jest.fn(),
         update: jest.fn(),
+        // Usados só pelo fallback automático Apify→Camofox
+        // (`maybeEnqueueApifyFallback`) — default "nenhum fallback existe
+        // ainda" / "cria sem erro". Testes que não são sobre o fallback não
+        // precisam mockar isto; com poucos candidatos de fixture (comum nos
+        // testes abaixo), a condição de fallback frequentemente dispara de
+        // qualquer jeito, então precisa de um default seguro aqui.
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'fallback-job-1' }),
       },
       organization: { findUniqueOrThrow: jest.fn() },
       auditLog: { create: jest.fn() },
@@ -323,6 +331,116 @@ describe('processLeadScrapeJob', () => {
         }),
       }),
     );
+  });
+
+  describe('isWhatsappCandidate (sinal de priorização, não confirmado)', () => {
+    it('Apify: telefone presente + site confirmado ausente => isWhatsappCandidate true', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        {
+          name: 'Padaria Sem Site',
+          address: null,
+          city: 'Campinas',
+          state: 'SP',
+          phone: '+5519999999999',
+          website: null,
+          googleCategory: 'Padaria',
+          rating: 4.5,
+          reviewCount: 20,
+          placeId: 'place-1',
+          raw: {},
+        },
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(tx.lead.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ isWhatsappCandidate: true }) }),
+      );
+    });
+
+    it('Apify: telefone presente mas COM site => isWhatsappCandidate false (não é o segmento-alvo)', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({ ...baseScrapeJob, onlyWithoutWebsite: false });
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        {
+          name: 'Padaria Com Site',
+          address: null,
+          city: 'Campinas',
+          state: 'SP',
+          phone: '+5519999999999',
+          website: 'https://comsite.com',
+          googleCategory: 'Padaria',
+          rating: 4.0,
+          reviewCount: 5,
+          placeId: 'place-2',
+          raw: {},
+        },
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(tx.lead.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ isWhatsappCandidate: false }) }),
+      );
+    });
+
+    it('sem telefone => isWhatsappCandidate false mesmo sem site', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        {
+          name: 'Padaria Sem Telefone',
+          address: null,
+          city: 'Campinas',
+          state: 'SP',
+          phone: null,
+          website: null,
+          googleCategory: 'Padaria',
+          rating: 4.5,
+          reviewCount: 20,
+          placeId: 'place-3',
+          raw: {},
+        },
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(tx.lead.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ isWhatsappCandidate: false }) }),
+      );
+    });
   });
 
   // Fase 2: filtro de ingestão — lote misto (2 portais/listicles + 1 negócio
@@ -1557,6 +1675,182 @@ describe('processLeadScrapeJob', () => {
         (call) => (call[0] as { data: { assignedUserId: string } }).data.assignedUserId,
       );
       expect(assignedTo).toEqual(['user-a', 'user-b']);
+    });
+  });
+
+  describe('fallback automático Apify → Camofox', () => {
+    function fakeEnqueueFallbackScrape() {
+      return jest.fn().mockResolvedValue(undefined);
+    }
+
+    it('Apify retorna poucos resultados brutos => cria e enfileira um ScrapeJob Camofox como fallback', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      prisma.scrapeJob.findFirst.mockResolvedValue(null); // nenhum fallback já existe
+      prisma.scrapeJob.create.mockResolvedValue({ id: 'fallback-job-1' });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      // Só 1 resultado bruto (< limiar de cobertura) — Apify "não cobriu" a
+      // região/tipo de negócio.
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        {
+          name: 'Padaria Sem Site',
+          address: null,
+          city: 'Campinas',
+          state: 'SP',
+          phone: null,
+          website: null,
+          googleCategory: 'Padaria',
+          rating: 4.5,
+          reviewCount: 20,
+          placeId: 'place-1',
+          raw: {},
+        },
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      const enqueueFallbackScrape = fakeEnqueueFallbackScrape();
+
+      await processLeadScrapeJob(
+        prisma as never,
+        gateways as never,
+        fakeRedis as never,
+        jobData,
+        undefined,
+        undefined,
+        enqueueFallbackScrape,
+      );
+
+      expect(prisma.scrapeJob.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            organizationId: 'org-1',
+            sourceType: 'CAMOFOX_GOOGLE_SEARCH',
+            city: 'Campinas',
+            state: 'SP',
+            businessType: 'padaria',
+            fallbackOfScrapeJobId: 'scrape-1',
+          }),
+        }),
+      );
+      expect(enqueueFallbackScrape).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: 'org-1', scrapeJobId: 'fallback-job-1' }),
+      );
+    });
+
+    it('Apify cobre o suficiente => não cria nenhum fallback', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue(
+        ['place-1', 'place-2', 'place-3'].map((placeId) => ({
+          name: `Padaria ${placeId}`,
+          address: null,
+          city: 'Campinas',
+          state: 'SP',
+          phone: null,
+          website: null,
+          googleCategory: 'Padaria',
+          rating: 4.5,
+          reviewCount: 20,
+          placeId,
+          raw: {},
+        })),
+      );
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      const enqueueFallbackScrape = fakeEnqueueFallbackScrape();
+
+      await processLeadScrapeJob(
+        prisma as never,
+        gateways as never,
+        fakeRedis as never,
+        jobData,
+        undefined,
+        undefined,
+        enqueueFallbackScrape,
+      );
+
+      expect(prisma.scrapeJob.create).not.toHaveBeenCalled();
+      expect(enqueueFallbackScrape).not.toHaveBeenCalled();
+    });
+
+    it('já existe um fallback pra este job origem (ex.: retry do BullMQ) => não cria outro', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      prisma.scrapeJob.findFirst.mockResolvedValue({ id: 'ja-existe' });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([]);
+      const enqueueFallbackScrape = fakeEnqueueFallbackScrape();
+
+      await processLeadScrapeJob(
+        prisma as never,
+        gateways as never,
+        fakeRedis as never,
+        jobData,
+        undefined,
+        undefined,
+        enqueueFallbackScrape,
+      );
+
+      expect(prisma.scrapeJob.create).not.toHaveBeenCalled();
+      expect(enqueueFallbackScrape).not.toHaveBeenCalled();
+    });
+
+    it('job que já é ele mesmo um fallback nunca dispara outro fallback (defesa contra encadeamento)', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      // Cenário hipotético defensivo: mesmo que um APIFY_GOOGLE_MAPS algum
+      // dia carregasse fallbackOfScrapeJobId, a checagem explícita no worker
+      // nunca deveria deixar isto encadear um segundo fallback.
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({
+        ...baseScrapeJob,
+        fallbackOfScrapeJobId: 'origem-1',
+      });
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([]);
+      const enqueueFallbackScrape = fakeEnqueueFallbackScrape();
+
+      await processLeadScrapeJob(
+        prisma as never,
+        gateways as never,
+        fakeRedis as never,
+        jobData,
+        undefined,
+        undefined,
+        enqueueFallbackScrape,
+      );
+
+      expect(prisma.scrapeJob.create).not.toHaveBeenCalled();
+      expect(enqueueFallbackScrape).not.toHaveBeenCalled();
     });
   });
 });

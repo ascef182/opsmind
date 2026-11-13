@@ -903,11 +903,22 @@ model ScrapeJob {
   createdAt          DateTime         @default(now()) @map("created_at")
   updatedAt          DateTime         @updatedAt @map("updated_at")
 
+  // Preenchido só quando este job foi criado AUTOMATICAMENTE como fallback
+  // Camofox de um ScrapeJob Apify que não cobriu a região/tipo de negócio
+  // (ver apps/worker/src/lead-scrape-processor.ts, maybeEnqueueApifyFallback).
+  // Serve tanto pra idempotência (nunca criar dois fallbacks pro mesmo job
+  // origem, mesmo em retry do BullMQ) quanto pra nunca encadear um SEGUNDO
+  // fallback a partir de um fallback.
+  fallbackOfScrapeJobId String?     @map("fallback_of_scrape_job_id")
+  fallbackOfScrapeJob   ScrapeJob?  @relation("ScrapeJobFallback", fields: [fallbackOfScrapeJobId], references: [id], onDelete: SetNull)
+  fallbackScrapeJobs    ScrapeJob[] @relation("ScrapeJobFallback")
+
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   leads        Lead[]
 
   @@index([organizationId, status])
   @@index([organizationId, createdAt])
+  @@index([fallbackOfScrapeJobId])
   @@map("scrape_jobs")
 }
 
@@ -954,6 +965,17 @@ model Lead {
   // `OutreachService` injeta este valor no prompt como "Contato WhatsApp:
   // <número>" e `CreateLeadDto` limita a 40 caracteres.
   whatsapp            String?          @map("whatsapp")
+  // Candidato (NÃO confirmado) a WhatsApp — true quando a fonte estruturada
+  // (Apify Google Maps/Explorium) devolveu telefone E confirmou ausência de
+  // site (`websiteConfirmedAbsent`, apps/worker/src/lead-scrape-processor.ts).
+  // No Brasil, o telefone da ficha do Google costuma ser o mesmo número do
+  // WhatsApp Business, mas isto nunca foi verificado de fato — é só um sinal
+  // de priorização/filtro, diferente de `whatsapp` acima (que É confirmado
+  // por descoberta real). Sempre recalculado a cada upsert (derivado do
+  // candidato da passada atual), nunca preservado via `undefined` como
+  // `whatsapp`/`socialLinks` — um rescan sem telefone/sem essa confirmação
+  // deve zerar o sinal, não manter um valor desatualizado.
+  isWhatsappCandidate Boolean          @default(false) @map("is_whatsapp_candidate")
   // Nome do dono/responsável, quando identificável — opcional, sem tensão
   // com a flexibilidade de `socialLinks`.
   contactName         String?          @map("contact_name")
