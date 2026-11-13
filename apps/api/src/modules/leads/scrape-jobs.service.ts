@@ -4,6 +4,12 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { LeadScrapeQueueService } from '../../infrastructure/queue/lead-scrape-queue.service';
 import { CreateScrapeJobDto } from './dto/create-scrape-job.dto';
+import { CreateScrapeJobBatchDto } from './dto/create-scrape-job-batch.dto';
+
+export interface ScrapeJobBatchResult {
+  created: ScrapeJob[];
+  skipped: Array<{ city: string; state: string; reason: string }>;
+}
 
 export interface ListScrapeJobsFilter {
   status?: ScrapeJobStatus;
@@ -71,6 +77,43 @@ export class ScrapeJobsService {
     });
 
     return job;
+  }
+
+  // Sequencial, não `Promise.all` — cada `create()` já enfileira na fila do
+  // worker; disparar N chamadas de rede ao Redis de uma vez só arrisca
+  // sobrecarga sem necessidade real. `ScrapeJob` não tem `@@unique`
+  // (diferente de `ProspectingTarget`), então o único erro esperado por
+  // localidade aqui é algo genuinamente inesperado (ex.: banco fora do ar) —
+  // ainda assim nunca aborta o lote inteiro por uma linha, só reporta e segue.
+  async createBatch(
+    organizationId: string,
+    dto: CreateScrapeJobBatchDto,
+    actorUserId: string,
+  ): Promise<ScrapeJobBatchResult> {
+    const created: ScrapeJob[] = [];
+    const skipped: Array<{ city: string; state: string; reason: string }> = [];
+
+    for (const location of dto.locations) {
+      try {
+        const job = await this.create(
+          organizationId,
+          {
+            sourceType: dto.sourceType,
+            city: location.city,
+            state: location.state,
+            businessType: dto.businessType,
+            onlyWithoutWebsite: dto.onlyWithoutWebsite,
+            limit: dto.limit,
+          },
+          actorUserId,
+        );
+        created.push(job);
+      } catch {
+        skipped.push({ city: location.city, state: location.state, reason: 'erro' });
+      }
+    }
+
+    return { created, skipped };
   }
 
   async findByIdOrThrow(organizationId: string, id: string): Promise<ScrapeJob> {

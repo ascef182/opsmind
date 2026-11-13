@@ -9,12 +9,13 @@ import { z } from 'zod';
 import { MessageCircle } from 'lucide-react';
 import { useCurrentMembership, useMembers } from '@/lib/memberships/use-memberships';
 import { useLeads, useDiscardLeadsByScrapeJob } from '@/lib/leads/use-leads';
-import { useCreateScrapeJob, useScrapeJobs } from '@/lib/leads/use-scrape-jobs';
+import { useCreateScrapeJobBatch, useScrapeJobs } from '@/lib/leads/use-scrape-jobs';
 import { SCRAPE_SOURCE_LABELS, WRITE_ROLES, type LeadStatus, type ScrapeSourceType } from '@/lib/leads/types';
 import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Select } from '@/components/ui/select';
 import { FormError } from '@/components/ui/card';
 import { LeadScoreBar } from '@/components/leads/lead-score-bar';
@@ -54,10 +55,29 @@ const SOURCE_TYPE_OPTIONS: Array<{ value: ScrapeSourceType | ''; label: string }
 
 // Só as 4 fontes automatizáveis entram no formulário de "Nova busca" — MANUAL
 // nunca é uma opção aqui (mesma regra de create-scrape-job.dto.ts).
+// `locations` aceita uma localidade por linha ("Cidade, UF") — disparo em
+// lote via `POST .../scrape-jobs/batch`, um ScrapeJob por linha, reaproveitando
+// o resto da config (mesmo racional de CreateScrapeJobBatchDto no backend).
 const createScrapeJobSchema = z.object({
   sourceType: z.enum(['APIFY_GOOGLE_MAPS', 'EXPLORIUM_BUSINESS_SEARCH', 'CAMOFOX_GOOGLE_SEARCH', 'CAMOFOX_REDDIT_SEARCH']),
-  city: z.string().min(1, 'Informe a cidade').max(120),
-  state: z.string().min(1, 'Informe o estado').max(60),
+  locations: z
+    .string()
+    .min(1, 'Informe ao menos uma localidade')
+    .transform((raw) =>
+      raw
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [city, state] = line.split(',').map((part) => part.trim());
+          return { city: city ?? '', state: state ?? '' };
+        }),
+    )
+    .refine((locations) => locations.length > 0, 'Informe ao menos uma localidade')
+    .refine(
+      (locations) => locations.every((l) => l.city.length > 0 && l.state.length > 0),
+      'Use o formato "Cidade, UF" em cada linha',
+    ),
   businessType: z.string().min(1, 'Informe o tipo de negócio').max(120),
   onlyWithoutWebsite: z.boolean().optional(),
   // Sem `.optional()`: o campo sempre carrega um valor (default 50 via
@@ -67,7 +87,8 @@ const createScrapeJobSchema = z.object({
   // `z.preprocess` introduz no genérico do `zodResolver`.
   limit: z.coerce.number().int().min(1, 'Mínimo 1').max(200, 'Máximo 200'),
 });
-type CreateScrapeJobFormValues = z.infer<typeof createScrapeJobSchema>;
+type CreateScrapeJobFormInput = z.input<typeof createScrapeJobSchema>;
+type CreateScrapeJobFormValues = z.output<typeof createScrapeJobSchema>;
 
 function WebsiteBadge({ website }: { website: string | null }) {
   if (!website) {
@@ -218,20 +239,29 @@ export default function LeadsPage() {
     minScore: minScore === '' ? undefined : Number(minScore),
     scrapeJobId,
   });
-  const createScrapeJob = useCreateScrapeJob(organizationId);
+  const createScrapeJobBatch = useCreateScrapeJobBatch(organizationId);
 
   const {
     register,
     handleSubmit,
     reset,
     formState: { errors },
-  } = useForm<CreateScrapeJobFormValues>({
+  } = useForm<CreateScrapeJobFormInput, unknown, CreateScrapeJobFormValues>({
     resolver: zodResolver(createScrapeJobSchema),
     defaultValues: { onlyWithoutWebsite: true, limit: 50 },
   });
 
   const onSubmit = handleSubmit((values) => {
-    createScrapeJob.mutate(values, { onSuccess: () => { reset(); setDialogOpen(false); } });
+    createScrapeJobBatch.mutate(
+      {
+        sourceType: values.sourceType,
+        businessType: values.businessType,
+        onlyWithoutWebsite: values.onlyWithoutWebsite,
+        limit: values.limit,
+        locations: values.locations,
+      },
+      { onSuccess: () => { reset(); setDialogOpen(false); } },
+    );
   });
 
   return (
@@ -247,7 +277,8 @@ export default function LeadsPage() {
               <DialogHeader>
                 <DialogTitle>Nova busca de leads</DialogTitle>
                 <DialogDescription>
-                  Dispara um `ScrapeJob` numa das fontes automatizáveis. O worker processa em segundo plano.
+                  Dispara um `ScrapeJob` por localidade numa das fontes automatizáveis. O worker processa em
+                  segundo plano.
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={onSubmit} className="flex flex-col gap-4">
@@ -262,17 +293,18 @@ export default function LeadsPage() {
                   </Select>
                   {errors.sourceType && <p className="mt-1 text-xs text-negative-500">{errors.sourceType.message}</p>}
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">Cidade</label>
-                    <Input placeholder="São Paulo" {...register('city')} />
-                    {errors.city && <p className="mt-1 text-xs text-negative-500">{errors.city.message}</p>}
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">Estado</label>
-                    <Input placeholder="SP" {...register('state')} />
-                    {errors.state && <p className="mt-1 text-xs text-negative-500">{errors.state.message}</p>}
-                  </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    Localidades (uma por linha, &quot;Cidade, UF&quot;)
+                  </label>
+                  <Textarea
+                    rows={3}
+                    placeholder={'São Paulo, SP\nCampinas, SP\nSantos, SP'}
+                    {...register('locations')}
+                  />
+                  {errors.locations && (
+                    <p className="mt-1 text-xs text-negative-500">{errors.locations.message}</p>
+                  )}
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Tipo de negócio</label>
@@ -290,10 +322,12 @@ export default function LeadsPage() {
                     Só negócios sem site
                   </label>
                 </div>
-                <FormError message={createScrapeJob.isError ? (createScrapeJob.error as ApiError).message : null} />
+                <FormError
+                  message={createScrapeJobBatch.isError ? (createScrapeJobBatch.error as ApiError).message : null}
+                />
                 <DialogFooter>
-                  <Button type="submit" disabled={createScrapeJob.isPending}>
-                    {createScrapeJob.isPending ? 'Disparando…' : 'Disparar busca'}
+                  <Button type="submit" disabled={createScrapeJobBatch.isPending}>
+                    {createScrapeJobBatch.isPending ? 'Disparando…' : 'Disparar busca'}
                   </Button>
                 </DialogFooter>
               </form>

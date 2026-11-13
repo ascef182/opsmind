@@ -158,6 +158,21 @@ export interface ListScrapeJobsFilter {
   status?: ScrapeJobStatus;
 }
 
+// Espelha CreateScrapeJobBatchDto — mesma config de CreateScrapeJobInput
+// exceto city/state, que vêm como `locations` (uma por disparo imediato).
+export interface CreateScrapeJobBatchInput {
+  sourceType: Exclude<ScrapeSourceType, 'MANUAL'>;
+  businessType: string;
+  onlyWithoutWebsite?: boolean;
+  limit?: number;
+  locations: Array<{ city: string; state: string }>;
+}
+
+export interface ScrapeJobBatchResult {
+  created: ScrapeJob[];
+  skipped: Array<{ city: string; state: string; reason: string }>;
+}
+
 // Espelha `ProspectingTarget` (packages/database/prisma/schema.prisma) — a
 // config recorrente que o worker (Task 7) varre pra disparar um ScrapeJob
 // por alvo respeitando `cooldownDays`. CRUD puro (Task 6, já mergeada), sem
