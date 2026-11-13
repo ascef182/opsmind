@@ -995,6 +995,12 @@ async function upsertLead(
     socialLinks: candidate.socialLinks
       ? (candidate.socialLinks as unknown as Prisma.InputJsonValue)
       : undefined,
+    // Sinal de PRIORIZAÇÃO, não confirmado — sempre recalculado (sem
+    // `undefined`/preservação entre passadas, diferente de `whatsapp`/
+    // `socialLinks` acima): deriva do candidato ATUAL, não de uma descoberta
+    // anterior. Ver comentário completo em `Lead.isWhatsappCandidate`
+    // (schema.prisma).
+    isWhatsappCandidate: !!candidate.phone && candidate.websiteConfirmedAbsent,
   };
 
   if (candidate.placeId) {
@@ -1194,6 +1200,67 @@ export function resolveAutodraftChannel(lead: {
  * este módulo continue puro/testável sem mockar BullMQ; default no-op só
  * para não quebrar os testes/chamadores existentes de antes da Task 11.
  */
+// Mínimo de resultados BRUTOS (antes do filtro `onlyWithoutWebsite`) que o
+// Apify precisa devolver pra considerarmos que ele "cobriu" a região/tipo de
+// negócio — abaixo disso, um ScrapeJob Camofox é enfileirado automaticamente
+// como fallback. Limiar conservador (não zero): 1-2 resultados legítimos
+// ainda é cobertura, só pouca; abaixo de 3 tratamos como "não cobriu de
+// verdade" o suficiente pra justificar tentar outra fonte.
+const APIFY_FALLBACK_MIN_RAW_RESULTS = 3;
+const APIFY_FALLBACK_SOURCE_TYPE: ScrapeSourceType = 'CAMOFOX_GOOGLE_SEARCH';
+
+/**
+ * Fallback automático Apify→Camofox (só decidido DEPOIS de chamar o Apify —
+ * antes disso não há como saber se ele "cobriu" a região/tipo de negócio).
+ * Best-effort: qualquer erro aqui (idempotência, create, enqueue) é
+ * capturado e nunca derruba o `ScrapeJob` Apify original, que já processou
+ * seus próprios candidatos corretamente.
+ */
+async function maybeEnqueueApifyFallback(
+  prisma: PrismaClient,
+  data: LeadScrapeJobData,
+  scrapeJob: ScrapeJob,
+  enqueueFallbackScrape: (job: LeadScrapeJobData) => Promise<unknown>,
+): Promise<void> {
+  try {
+    // Idempotência: nunca cria um segundo fallback pro MESMO job origem
+    // (ex.: retry do BullMQ reprocessando este job do zero).
+    const already = await prisma.scrapeJob.findFirst({
+      where: { fallbackOfScrapeJobId: scrapeJob.id },
+    });
+    if (already) {
+      return;
+    }
+
+    const fallbackJob = await prisma.scrapeJob.create({
+      data: {
+        organizationId: data.organizationId,
+        sourceType: APIFY_FALLBACK_SOURCE_TYPE,
+        city: scrapeJob.city,
+        state: scrapeJob.state,
+        businessType: scrapeJob.businessType,
+        onlyWithoutWebsite: scrapeJob.onlyWithoutWebsite,
+        limit: scrapeJob.limit,
+        status: 'QUEUED',
+        actorType: data.actorType,
+        actorId: data.actorId ?? null,
+        fallbackOfScrapeJobId: scrapeJob.id,
+      },
+    });
+
+    await enqueueFallbackScrape({
+      organizationId: data.organizationId,
+      scrapeJobId: fallbackJob.id,
+      actorType: data.actorType,
+      actorId: data.actorId,
+    });
+  } catch (error) {
+    Sentry.captureException(error, {
+      extra: { scrapeJobId: scrapeJob.id, phase: 'apify-camofox-fallback-enqueue' },
+    });
+  }
+}
+
 export async function processLeadScrapeJob(
   prisma: PrismaClient,
   gateways: LeadScrapeGateways,
@@ -1201,6 +1268,7 @@ export async function processLeadScrapeJob(
   data: LeadScrapeJobData,
   enqueueAutodraft: (job: OutreachAutodraftJobData) => Promise<unknown> = async () => undefined,
   enqueueWebsiteProfile: (job: WebsiteProfileJobData) => Promise<unknown> = async () => undefined,
+  enqueueFallbackScrape: (job: LeadScrapeJobData) => Promise<unknown> = async () => undefined,
 ): Promise<ScrapeJob> {
   try {
     // Passo 1 — tx curta: marca RUNNING.
@@ -1243,6 +1311,14 @@ export async function processLeadScrapeJob(
 
     const handler = SOURCE_REGISTRY[scrapeJob.sourceType];
     const rawCandidates = await handler(scrapeJob, gateways);
+
+    if (
+      scrapeJob.sourceType === 'APIFY_GOOGLE_MAPS' &&
+      rawCandidates.length < APIFY_FALLBACK_MIN_RAW_RESULTS &&
+      !scrapeJob.fallbackOfScrapeJobId
+    ) {
+      await maybeEnqueueApifyFallback(prisma, data, scrapeJob, enqueueFallbackScrape);
+    }
 
     // `onlyWithoutWebsite` só faz sentido pra fontes com campo `website`
     // estruturado (Apify/Explorium) — resultados do Camoufox não têm esse
