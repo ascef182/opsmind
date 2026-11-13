@@ -16,7 +16,7 @@ import type {
   Prisma,
   ServiceOffering,
 } from '@opsmind/database';
-import { checkOutreachGate } from '@opsmind/shared-types';
+import { AI_MODEL_LABEL_UNKNOWN, checkOutreachGate, estimateAiCostUsd } from '@opsmind/shared-types';
 import type { LeadScoreBreakdown, SocialLink, SocialPlatform } from '@opsmind/shared-types';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { PrismaOutOfBandService } from '../../infrastructure/database/prisma-out-of-band.service';
@@ -31,17 +31,6 @@ import { ServiceOfferingsService } from './service-offerings.service';
 import { GenerateOutreachDto } from './dto/generate-outreach.dto';
 import { RejectOutreachDto } from './dto/reject-outreach.dto';
 import { EditOutreachDto } from './dto/edit-outreach.dto';
-
-// Mesma tabela de preço usada em `AiService.estimateCost` — mantida
-// duplicada (não extraída para um util compartilhado) porque `LeadsModule`
-// não pode importar `AiModule`: `AiModule` importa `LeadsModule` (Task 6),
-// nunca o inverso, para evitar dependência circular entre os módulos (por
-// isso `AI_GATEWAY`/`BudgetService` são re-registrados como providers
-// próprios deste módulo — ver `leads.module.ts`).
-const INPUT_COST_PER_MILLION_TOKENS = 5;
-const OUTPUT_COST_PER_MILLION_TOKENS = 25;
-
-const MODEL_NAME = 'claude-opus-5';
 
 // Status de Lead anteriores a OUTREACH_DRAFTED — só nesses casos
 // `generateDraft` avança `lead.status`, nunca regride um lead que já passou
@@ -203,7 +192,16 @@ export class OutreachService {
     const organization = await this.organizationsService.findById(organizationId);
     const monthlyBudget = organization?.aiMonthlyBudget ? Number(organization.aiMonthlyBudget) : null;
     if (await this.budgetService.isOverBudget(organizationId, monthlyBudget)) {
-      await this.persistAiRequest(organizationId, actor, 'BUDGET_EXCEEDED', 0, 0, 0, 0);
+      await this.persistAiRequest(
+        organizationId,
+        actor,
+        'BUDGET_EXCEEDED',
+        AI_MODEL_LABEL_UNKNOWN,
+        0,
+        0,
+        0,
+        0,
+      );
       throw new ForbiddenException('Orçamento mensal de IA desta organização foi atingido.');
     }
 
@@ -224,7 +222,17 @@ export class OutreachService {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      await this.persistAiRequest(organizationId, actor, 'ERROR', 0, 0, Date.now() - startedAt, 0, errorMessage);
+      await this.persistAiRequest(
+        organizationId,
+        actor,
+        'ERROR',
+        AI_MODEL_LABEL_UNKNOWN,
+        0,
+        0,
+        Date.now() - startedAt,
+        0,
+        errorMessage,
+      );
       throw error;
     }
 
@@ -237,7 +245,11 @@ export class OutreachService {
     // sempre caía no fallback genérico `Contato — ${lead.name}`, mesmo
     // quando o rascunho já tinha um assunto específico ao negócio.
     const { subject, body } = this.parseGeneratedMessage(rawText, dto.channel);
-    const cost = this.estimateCost(response.usage.input_tokens, response.usage.output_tokens);
+    const cost = estimateAiCostUsd(
+      response.model,
+      response.usage.input_tokens,
+      response.usage.output_tokens,
+    );
 
     // Cria o AIRequest ANTES do OutreachMessage para poder linkar
     // `OutreachMessage.aiRequestId` já na criação (observabilidade de custo
@@ -246,6 +258,7 @@ export class OutreachService {
       organizationId,
       actor,
       'SUCCESS',
+      response.model,
       response.usage.input_tokens,
       response.usage.output_tokens,
       latencyMs,
@@ -262,7 +275,7 @@ export class OutreachService {
         body,
         evidenceQuotes: evidenceQuotes as unknown as Prisma.InputJsonValue,
         status: 'DRAFT',
-        generatedByModel: MODEL_NAME,
+        generatedByModel: response.model,
         aiRequestId: aiRequest.id,
         actorType: 'AI',
         actorId: null,
@@ -874,13 +887,6 @@ export class OutreachService {
     return { subject: subject.trim(), body: body.trim() };
   }
 
-  private estimateCost(inputTokens: number, outputTokens: number): number {
-    return (
-      (inputTokens / 1_000_000) * INPUT_COST_PER_MILLION_TOKENS +
-      (outputTokens / 1_000_000) * OUTPUT_COST_PER_MILLION_TOKENS
-    );
-  }
-
   // Mesmo formato de `AIRequest` que `AiService.persistRequest` grava — sem
   // `AIRequestToolCall` (este fluxo nunca chama tools) e sem envolver
   // explicitamente `runInTransaction`: já roda dentro da transação
@@ -907,6 +913,7 @@ export class OutreachService {
     organizationId: string,
     actor: OutreachDraftActor,
     status: AIRequestStatus,
+    model: string,
     inputTokens: number,
     outputTokens: number,
     latencyMs: number,
@@ -920,7 +927,7 @@ export class OutreachService {
           userId: actor.type === 'USER' ? actor.userId : null,
           actorType: actor.type,
           actorId: actor.type === 'SYSTEM' ? null : actor.userId,
-          model: MODEL_NAME,
+          model,
           inputTokens,
           outputTokens,
           latencyMs,

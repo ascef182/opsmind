@@ -41,10 +41,11 @@ function buildBudgetService(isOverBudget = false) {
   };
 }
 
-function buildGateway(text: string) {
+function buildGateway(text: string, model = 'claude-opus-5') {
   return {
     sendMessage: jest.fn().mockResolvedValue({
       id: 'msg_1',
+      model,
       stop_reason: 'end_turn',
       content: [{ type: 'text', text }],
       usage: { input_tokens: 100, output_tokens: 50 },
@@ -166,6 +167,19 @@ describe('RedditClusteringConsumer', () => {
         errorMessage: undefined,
       },
     });
+  });
+
+  it('grava o AIRequest com o modelo que a API de fato respondeu, não uma constante fixa', async () => {
+    const { prisma } = buildConsumer({
+      gateway: buildGateway('[]', 'claude-sonnet-5'),
+    });
+
+    const processor = getRegisteredProcessor();
+    await processor({ data: jobData });
+
+    expect(prisma.aIRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ model: 'claude-sonnet-5' }) }),
+    );
   });
 
   it('cluster com distinctAuthorCount < 10 (mesmo com mentionCount alto, um autor só) não cria nada', async () => {
@@ -363,7 +377,8 @@ describe('RedditClusteringConsumer', () => {
         userId: null,
         actorType: 'AI',
         actorId: null,
-        model: 'claude-opus-5',
+        // Nunca houve resposta real da API aqui — sem modelo pra gravar.
+        model: 'unknown',
         inputTokens: 0,
         outputTokens: 0,
         latencyMs: 0,
@@ -388,7 +403,8 @@ describe('RedditClusteringConsumer', () => {
         userId: null,
         actorType: 'AI',
         actorId: null,
-        model: 'claude-opus-5',
+        // Nunca houve resposta real da API aqui — sem modelo pra gravar.
+        model: 'unknown',
         inputTokens: 0,
         outputTokens: 0,
         latencyMs: expect.any(Number),

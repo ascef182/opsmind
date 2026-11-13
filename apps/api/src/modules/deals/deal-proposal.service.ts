@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { AIRequest, AIRequestStatus, Deal } from '@opsmind/database';
+import { AI_MODEL_LABEL_UNKNOWN, estimateAiCostUsd } from '@opsmind/shared-types';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -8,15 +9,6 @@ import { BudgetService } from '../ai/services/budget.service';
 import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
 import { DealsService } from './deals.service';
 import { buildProposalPdf } from './utils/build-proposal-pdf';
-
-// Mesma tabela de preço/modelo duplicada em `OutreachService` — mesmo motivo
-// documentado lá: `DealsModule` não pode importar `AiModule` (ciclo, já que
-// `AiModule` importa `DealsModule` para expor as AI tools de deal), então
-// re-registra `AI_GATEWAY`/`BudgetService` como providers próprios (ver
-// `deals.module.ts`).
-const INPUT_COST_PER_MILLION_TOKENS = 5;
-const OUTPUT_COST_PER_MILLION_TOKENS = 25;
-const MODEL_NAME = 'claude-opus-5';
 
 const PROPOSAL_SYSTEM_PROMPT = [
   'Você escreve minutas de proposta/contrato comercial B2B para o OpsMind, um CRM para pequenas equipes.',
@@ -56,7 +48,16 @@ export class DealProposalService {
     const organization = await this.organizationsService.findById(organizationId);
     const monthlyBudget = organization?.aiMonthlyBudget ? Number(organization.aiMonthlyBudget) : null;
     if (await this.budgetService.isOverBudget(organizationId, monthlyBudget)) {
-      await this.persistAiRequest(organizationId, userId, 'BUDGET_EXCEEDED', 0, 0, 0, 0);
+      await this.persistAiRequest(
+        organizationId,
+        userId,
+        'BUDGET_EXCEEDED',
+        AI_MODEL_LABEL_UNKNOWN,
+        0,
+        0,
+        0,
+        0,
+      );
       throw new ForbiddenException('Orçamento mensal de IA desta organização foi atingido.');
     }
 
@@ -72,17 +73,32 @@ export class DealProposalService {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      await this.persistAiRequest(organizationId, userId, 'ERROR', 0, 0, Date.now() - startedAt, 0, errorMessage);
+      await this.persistAiRequest(
+        organizationId,
+        userId,
+        'ERROR',
+        AI_MODEL_LABEL_UNKNOWN,
+        0,
+        0,
+        Date.now() - startedAt,
+        0,
+        errorMessage,
+      );
       throw error;
     }
 
     const latencyMs = Date.now() - startedAt;
     const draft = this.extractText(response);
-    const cost = this.estimateCost(response.usage.input_tokens, response.usage.output_tokens);
+    const cost = estimateAiCostUsd(
+      response.model,
+      response.usage.input_tokens,
+      response.usage.output_tokens,
+    );
     await this.persistAiRequest(
       organizationId,
       userId,
       'SUCCESS',
+      response.model,
       response.usage.input_tokens,
       response.usage.output_tokens,
       latencyMs,
@@ -166,17 +182,11 @@ export class DealProposalService {
       .trim();
   }
 
-  private estimateCost(inputTokens: number, outputTokens: number): number {
-    return (
-      (inputTokens / 1_000_000) * INPUT_COST_PER_MILLION_TOKENS +
-      (outputTokens / 1_000_000) * OUTPUT_COST_PER_MILLION_TOKENS
-    );
-  }
-
   private persistAiRequest(
     organizationId: string,
     userId: string,
     status: AIRequestStatus,
+    model: string,
     inputTokens: number,
     outputTokens: number,
     latencyMs: number,
@@ -189,7 +199,7 @@ export class DealProposalService {
         userId,
         actorType: 'USER',
         actorId: userId,
-        model: MODEL_NAME,
+        model,
         inputTokens,
         outputTokens,
         latencyMs,

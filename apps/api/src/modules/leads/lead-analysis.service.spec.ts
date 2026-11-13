@@ -49,9 +49,15 @@ const baseLead = {
   rawContent: null,
 };
 
-function mockGatewayResponse(text: string, inputTokens = 100, outputTokens = 50) {
+function mockGatewayResponse(
+  text: string,
+  inputTokens = 100,
+  outputTokens = 50,
+  model = 'claude-opus-5',
+) {
   return {
     id: 'msg_1',
+    model,
     stop_reason: 'end_turn',
     content: [{ type: 'text', text }],
     usage: { input_tokens: inputTokens, output_tokens: outputTokens },
@@ -124,6 +130,21 @@ describe('LeadAnalysisService', () => {
         }),
       );
       expect(result).toBe(enrichment);
+    });
+
+    it('grava o AIRequest com o modelo que a API de fato respondeu, não uma constante fixa', async () => {
+      const { service, prisma, gateway } = buildDeps();
+      prisma.lead.findFirst.mockResolvedValue(baseLead);
+      gateway.sendMessage.mockResolvedValue(
+        mockGatewayResponse('ok', 1_000_000, 1_000_000, 'claude-sonnet-5'),
+      );
+      prisma.leadEnrichment.create.mockResolvedValue({ id: 'enr-2', type: 'ai_analysis' });
+
+      await service.analyzeLeadPotential('org-1', 'lead-1', 'user-1');
+
+      expect(prisma.aIRequest.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ model: 'claude-sonnet-5', estimatedCost: 12 }),
+      });
     });
 
     it('gateway falha: persiste AIRequest ERROR e propaga o erro, sem gravar LeadEnrichment nem auditar', async () => {
