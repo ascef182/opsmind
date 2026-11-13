@@ -124,6 +124,44 @@ describe('CamofoxGatewayService', () => {
       ]);
     });
 
+    it('descarta links cujo texto é lixo de paginação/navegação da página de busca, mesmo em host externo legítimo', async () => {
+      global.fetch = jest.fn(async (input: string) => {
+        const url = String(input);
+        if (url.endsWith('/tabs')) return jsonResponse({ id: 'tab-1' });
+        if (url.includes('/navigate')) return jsonResponse({ ok: true });
+        if (url.includes('/links')) {
+          return jsonResponse({
+            links: [
+              // Caso real reportado em produção: texto de "Próximo" colado
+              // sem separador ao número da página e ao trecho do próximo
+              // resultado (bug de concatenação na própria página de busca,
+              // não um host de busca — por isso isUsefulResultLink sozinho
+              // não descartava isto).
+              {
+                url: 'https://www.doctoralia.com.br/dentista/campo-belo',
+                text: 'Próximo|2Os mais recomendados dentistas de Campo Belo: veja opiniões',
+              },
+              { url: 'https://www.exemplo.com.br/next', text: 'Próxima' },
+              { url: 'https://www.exemplo.com.br/prev', text: 'Anterior' },
+              { url: 'https://www.exemplo.com.br/more', text: 'Ver mais' },
+              { url: 'https://www.exemplo.com.br/arrow', text: '›' },
+              { url: 'https://www.exemplo.com.br/x', text: 'ab' }, // curto demais pra ser nome real
+              {
+                url: 'https://www.clinicasoraldents.com.br/',
+                text: 'Clínica Oral Dents — Odontologia em Campo Belo',
+              },
+            ],
+          });
+        }
+        return jsonResponse(null, { status: 204 });
+      }) as unknown as typeof fetch;
+
+      const gateway = new CamofoxGatewayService('http://localhost:9377', undefined, undefined, undefined, 0);
+      const results = await gateway.search({ macro: '@google_search', query: 'dentista campo belo', limit: 10 });
+
+      expect(results.map((r) => r.url)).toEqual(['https://www.clinicasoraldents.com.br/']);
+    });
+
     it('NÃO filtra por host em @yelp_search (resultado real mora no próprio domínio yelp.com)', async () => {
       global.fetch = jest.fn(async (input: string) => {
         const url = String(input);

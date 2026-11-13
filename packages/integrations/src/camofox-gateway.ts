@@ -378,12 +378,39 @@ function isUsefulResultLink(link: CamofoxLink): boolean {
   return !SEARCH_ENGINE_CHROME_HOSTS.has(host);
 }
 
+// Tamanho mínimo pra um texto de link ser considerado um nome/trecho real —
+// abaixo disso é lixo de "chrome" de página de busca (setas de paginação,
+// ícones, labels de 1-2 caracteres) que nunca deveria virar `Lead.name`.
+const MIN_LINK_TEXT_LENGTH = 3;
+
+// Boilerplate de navegação/paginação PT-BR e EN — ancorado no INÍCIO do
+// texto trimado (não um match exato da string inteira), porque o caso real
+// que motivou este filtro vem colado sem separador ao início do próximo
+// trecho (ex.: "Próximo|2Os mais recomendados dentistas..." — a palavra de
+// paginação e o número da página glued ao snippet do resultado seguinte,
+// achado em produção). Lista curta e deliberadamente não-exaustiva, mesma
+// disciplina de `looksLikeDirectoryOrListicle` no worker (que resolve um
+// problema diferente — domínio/título de página-de-categoria — e continua
+// intocado; os dois filtros são complementares).
+const PAGINATION_BOILERPLATE_PATTERN =
+  /^(próxim[ao]s?|anterior(?:es)?|ver mais|veja mais|mostrar mais|mais resultados|next|previous|prev|more results|see more|show more|load more|página\s*\d+|page\s*\d+|›|»|«|‹|\.\.\.)/i;
+
+function isUsefulResultText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < MIN_LINK_TEXT_LENGTH) {
+    return false;
+  }
+  return !PAGINATION_BOILERPLATE_PATTERN.test(trimmed);
+}
+
 /**
  * Converte os links de `GET .../links` em `CamofoxSearchResult[]`, filtrando
- * links de "chrome" do próprio motor de busca (ver `SEARCH_ENGINE_CHROME_HOSTS`).
- * Mesma disciplina de `toStructuredResult`: nunca fabrica `url: ''` — os
- * links já vêm com URL absoluta resolvida pelo próprio camofox-browser, então
- * aqui só filtramos, não inventamos nada.
+ * links de "chrome" do próprio motor de busca (ver `SEARCH_ENGINE_CHROME_HOSTS`)
+ * e links cujo TEXTO é lixo de paginação/navegação (ver `isUsefulResultText`)
+ * — um host externo legítimo não significa que o texto associado é um nome
+ * de negócio real. Mesma disciplina de `toStructuredResult`: nunca fabrica
+ * `url: ''` — os links já vêm com URL absoluta resolvida pelo próprio
+ * camofox-browser, então aqui só filtramos, não inventamos nada.
  */
 function toLinkResults(links: CamofoxLink[], limit: number): CamofoxSearchResult[] {
   const results: CamofoxSearchResult[] = [];
@@ -391,7 +418,7 @@ function toLinkResults(links: CamofoxLink[], limit: number): CamofoxSearchResult
     if (results.length >= limit) {
       break;
     }
-    if (!isUsefulResultLink(link)) {
+    if (!isUsefulResultLink(link) || !isUsefulResultText(link.text)) {
       continue;
     }
     results.push({
