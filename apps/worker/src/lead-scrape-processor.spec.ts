@@ -816,8 +816,12 @@ describe('processLeadScrapeJob', () => {
       const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
 
       expect(gateways.contactEnrichment.scrapeContactInfo).toHaveBeenCalled();
-      // Lookup de Instagram nunca roda no fallback (só existe no caminho primário).
-      expect(gateways.contactEnrichment.lookupInstagramProfile).not.toHaveBeenCalled();
+      // Achou um Instagram via busca genérica no fallback → chama o mesmo
+      // lookup de perfil que o caminho primário já chamava (antes só
+      // guardava o link crú, sem extrair telefone/e-mail de dentro do
+      // perfil — gap real pro segmento sem site, onde o fallback é o
+      // ÚNICO caminho que roda).
+      expect(gateways.contactEnrichment.lookupInstagramProfile).toHaveBeenCalledWith('padariacontato');
       expect(gateways.camofox.search).toHaveBeenCalledWith(
         expect.objectContaining({ macro: '@google_search', limit: 5 }),
       );
@@ -840,9 +844,59 @@ describe('processLeadScrapeJob', () => {
           }),
         }),
       );
-      // Custo do fallback = mesma taxa de CAMOFOX_GOOGLE_SEARCH (é literalmente a mesma chamada).
-      expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', 0.001);
+      // Custo do fallback = CAMOFOX_GOOGLE_SEARCH (0,001) + lookup de
+      // Instagram (0,05), já que um perfil foi encontrado e consultado.
+      // `closeTo` por causa de imprecisão de ponto flutuante na soma
+      // (0.001 + 0.05 !== 0.051 exatamente em IEEE754).
+      expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', expect.closeTo(0.051, 5));
       expect(result.status).toBe('COMPLETED');
+    });
+
+    it('sem website (segmento-alvo): fallback é o ÚNICO caminho, e o perfil do Instagram encontrado preenche e-mail + WhatsApp', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(contactJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...contactJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-sem-site', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      // SEM website desde a origem — `runPrimaryContactDiscovery` nunca
+      // chega a rodar (retorna null de cara), então o fallback é o ÚNICO
+      // caminho de descoberta de contato pra este lead.
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        apifyCandidateWithWebsite({ placeId: 'place-sem-site', website: null }),
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      gateways.camofox.search.mockResolvedValue([
+        { title: 'Perfil Instagram', url: 'https://instagram.com/padariasemsite', textContent: null, raw: {} },
+      ]);
+      gateways.contactEnrichment.lookupInstagramProfile.mockResolvedValue({
+        bio: 'Padaria artesanal',
+        whatsappLink: 'https://wa.me/5519987654321',
+        email: 'contato@padariasemsite.com.br',
+      });
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.contactEnrichment.scrapeContactInfo).not.toHaveBeenCalled();
+      expect(gateways.contactEnrichment.lookupInstagramProfile).toHaveBeenCalledWith('padariasemsite');
+      expect(tx.lead.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            whatsapp: '5519987654321',
+            email: 'contato@padariasemsite.com.br',
+            socialLinks: expect.arrayContaining([
+              { platform: 'INSTAGRAM', url: 'https://instagram.com/padariasemsite' },
+              { platform: 'WHATSAPP', url: 'https://wa.me/5519987654321' },
+            ]),
+          }),
+        }),
+      );
+      expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', expect.closeTo(0.051, 5));
     });
 
     it('(c) caminho primário e fallback ambos sem resultado → lead segue sem contato novo, job principal não falha', async () => {
