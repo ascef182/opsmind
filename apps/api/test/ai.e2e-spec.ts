@@ -29,6 +29,7 @@ async function createOrg(app: INestApplication, accessToken: string) {
 function endTurn(text: string, inputTokens = 100, outputTokens = 50) {
   return {
     id: `msg_${randomUUID()}`,
+    model: 'claude-opus-5',
     stop_reason: 'end_turn',
     content: [{ type: 'text', text }],
     usage: { input_tokens: inputTokens, output_tokens: outputTokens },
@@ -38,6 +39,7 @@ function endTurn(text: string, inputTokens = 100, outputTokens = 50) {
 function toolUse(toolName: string, input: Record<string, unknown>, inputTokens = 100, outputTokens = 50) {
   return {
     id: `msg_${randomUUID()}`,
+    model: 'claude-opus-5',
     stop_reason: 'tool_use',
     content: [{ type: 'tool_use', id: `tool_${randomUUID()}`, name: toolName, input }],
     usage: { input_tokens: inputTokens, output_tokens: outputTokens },

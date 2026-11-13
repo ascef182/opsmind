@@ -20,6 +20,7 @@ async function createOrg(app: INestApplication, accessToken: string, name = 'Lea
 function endTurn(text: string, inputTokens = 100, outputTokens = 50) {
   return {
     id: `msg_${randomUUID()}`,
+    model: 'claude-opus-5',
     stop_reason: 'end_turn',
     content: [{ type: 'text', text }],
     usage: { input_tokens: inputTokens, output_tokens: outputTokens },
@@ -214,7 +215,7 @@ describe('Leads/Prospecção (e2e)', () => {
 
     // 7. Outreach draft — AI_GATEWAY mockado, sem tools.
     gateway.sendMessage.mockResolvedValueOnce(
-      endTurn('Olá! Vi que a Padaria da Esquina ainda não tem site — podemos ajudar.'),
+      endTurn('Olá! Vi que a Padaria da Esquina ainda não tem site, podemos ajudar.'),
     );
     const draftRes = await request(app.getHttpServer())
       .post(`/organizations/${organizationId}/leads/${leadId}/outreach-messages`)

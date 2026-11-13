@@ -42,6 +42,7 @@ async function createOrg(app: INestApplication, accessToken: string) {
 function endTurn(text: string) {
   return {
     id: `msg_${randomUUID()}`,
+    model: 'claude-opus-5',
     stop_reason: 'end_turn',
     content: [{ type: 'text', text }],
     usage: { input_tokens: 100, output_tokens: 50 },
@@ -51,6 +52,7 @@ function endTurn(text: string) {
 function toolUse(toolName: string, input: Record<string, unknown>) {
   return {
     id: `msg_${randomUUID()}`,
+    model: 'claude-opus-5',
     stop_reason: 'tool_use',
     content: [{ type: 'tool_use', id: `tool_${randomUUID()}`, name: toolName, input }],
     usage: { input_tokens: 100, output_tokens: 50 },
