@@ -10,6 +10,7 @@ import {
   processLeadScrapeJob,
   normalizeUrlForDedup,
   extractWhatsappPhone,
+  extractInstagramHandle,
   looksLikeDirectoryOrListicle,
 } from './lead-scrape-processor';
 import { isOverBudget, recordSpend } from './budget';
@@ -31,6 +32,28 @@ describe('extractWhatsappPhone', () => {
     expect(extractWhatsappPhone('https://instagram.com/fulano')).toBeNull();
     expect(extractWhatsappPhone('não é uma url')).toBeNull();
     expect(extractWhatsappPhone(null)).toBeNull();
+  });
+});
+
+describe('extractInstagramHandle', () => {
+  it('extrai o handle de um link de perfil legítimo', () => {
+    expect(extractInstagramHandle('https://instagram.com/padariacontato')).toBe('padariacontato');
+    expect(extractInstagramHandle('https://www.instagram.com/padaria.contato/?hl=pt')).toBe(
+      'padaria.contato',
+    );
+  });
+
+  it('rejeita (null) segmentos reservados do Instagram que não são handle de perfil', () => {
+    // Achado real: links de post/reel/etc. são comuns em resultados de
+    // busca genérica (fallback Camofox) e batiam no mesmo regex de handle.
+    expect(extractInstagramHandle('https://www.instagram.com/p/C1abc123/')).toBeNull();
+    expect(extractInstagramHandle('https://www.instagram.com/reel/XyZ789/')).toBeNull();
+    expect(extractInstagramHandle('https://www.instagram.com/reels/XyZ789/')).toBeNull();
+    expect(extractInstagramHandle('https://www.instagram.com/explore/locations/123/')).toBeNull();
+    expect(extractInstagramHandle('https://www.instagram.com/stories/alguem/123/')).toBeNull();
+    expect(extractInstagramHandle('https://www.instagram.com/tv/XyZ789/')).toBeNull();
+    expect(extractInstagramHandle('https://www.instagram.com/accounts/login/')).toBeNull();
+    expect(extractInstagramHandle('https://www.instagram.com/direct/inbox/')).toBeNull();
   });
 });
 

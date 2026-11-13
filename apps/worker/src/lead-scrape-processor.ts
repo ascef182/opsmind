@@ -488,9 +488,31 @@ export function extractWhatsappPhone(rawUrl: string | null): string | null {
 const CONTACT_FALLBACK_MAX_SOCIAL_LINKS = 6;
 
 /** Extrai o handle cru de uma URL de perfil do Instagram (`.../fulano` → `fulano`), ou `null` se não reconhecível. */
-function extractInstagramHandle(url: string): string | null {
+// Segmentos reservados do Instagram que NUNCA são um handle de perfil —
+// achado real pela revisão final: um link de post/reel/etc. (comum em
+// resultados de busca genérica do fallback Camofox, ver `runCamofoxFallback`)
+// batia no mesmo regex de handle e virava `lookupInstagramProfile('p')`,
+// gravando o e-mail/WhatsApp de uma conta REAL mas ERRADA (qualquer conta
+// que por coincidência se chame "p") no `Lead` — campos documentados no
+// schema como "confirmados", alimentando outreach de verdade.
+const INSTAGRAM_RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  'p',
+  'reel',
+  'reels',
+  'explore',
+  'stories',
+  'tv',
+  'accounts',
+  'direct',
+]);
+
+export function extractInstagramHandle(url: string): string | null {
   const match = url.match(/instagram\.com\/([^/?#]+)/i);
-  return match?.[1] ?? null;
+  const handle = match?.[1] ?? null;
+  if (!handle || INSTAGRAM_RESERVED_PATH_SEGMENTS.has(handle.toLowerCase())) {
+    return null;
+  }
+  return handle;
 }
 
 /**
