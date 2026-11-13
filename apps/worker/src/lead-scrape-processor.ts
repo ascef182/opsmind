@@ -602,17 +602,28 @@ async function runPrimaryContactDiscovery(
  * MUTA `candidate` diretamente quando encontra algo. Devolve `null` (nunca
  * lança pro chamador tratar — mas também não precisa, o chamador já embrulha
  * isto num try/catch) quando nada foi encontrado.
+ *
+ * Quando a busca genérica encontra um Instagram, chama o MESMO
+ * `lookupInstagramProfile` que o caminho primário já chama (ver
+ * `runPrimaryContactDiscovery`) — antes só o link crú era guardado aqui, sem
+ * extrair telefone/e-mail de dentro do perfil. Isso importa especialmente
+ * pro segmento sem site: `runPrimaryContactDiscovery` nunca roda sem
+ * `candidate.website`, então o fallback é o ÚNICO caminho de descoberta de
+ * contato que esses leads passam — sem este lookup, o actor de Instagram já
+ * pago/configurado nunca era usado pra eles.
  */
 async function runCamofoxFallback(
   candidate: RawCandidate,
   camofox: CamofoxGateway,
-): Promise<Record<string, unknown> | null> {
+  contactEnrichment: ContactEnrichmentGateway,
+): Promise<{ data: Record<string, unknown>; costUsd: number } | null> {
   const query = `"${candidate.name}" ${candidate.city ?? ''} instagram OR facebook OR linkedin OR tiktok`.trim();
   const results = await camofox.search({ macro: '@google_search', query, limit: 5 });
 
   const socialLinks: SocialLink[] = [];
   const seenPlatforms = new Set<SocialPlatform>();
   let whatsapp: string | null = null;
+  let costUsd = 0;
 
   for (const result of results) {
     const platform = classifySocialUrl(result.url);
@@ -631,18 +642,46 @@ async function runCamofoxFallback(
     }
   }
 
-  if (!whatsapp && socialLinks.length === 0) {
+  const instagramUrl = socialLinks.find((s) => s.platform === 'INSTAGRAM')?.url ?? null;
+  const instagramHandle = instagramUrl ? extractInstagramHandle(instagramUrl) : null;
+  let email: string | null = null;
+  if (instagramHandle) {
+    try {
+      const profile = await contactEnrichment.lookupInstagramProfile(instagramHandle);
+      costUsd += CONTACT_ENRICHMENT_COST_PER_CALL_USD.APIFY_INSTAGRAM_PROFILE;
+      if (profile?.whatsappLink && isSafeHttpUrl(profile.whatsappLink)) {
+        const profileWhatsapp = extractWhatsappPhone(profile.whatsappLink);
+        if (profileWhatsapp) {
+          whatsapp = profileWhatsapp;
+        }
+        if (!socialLinks.some((s) => s.url === profile.whatsappLink)) {
+          socialLinks.push({ platform: 'WHATSAPP', url: profile.whatsappLink });
+        }
+      }
+      if (profile?.email) {
+        email = profile.email;
+      }
+    } catch {
+      // Best-effort — mesma disciplina do caminho primário: falha aqui
+      // nunca derruba o que a busca genérica do Camofox já achou.
+    }
+  }
+
+  if (!whatsapp && !email && socialLinks.length === 0) {
     return null;
   }
 
   if (whatsapp) {
     candidate.whatsapp = whatsapp;
   }
+  if (email) {
+    candidate.email = email;
+  }
   if (socialLinks.length > 0) {
     candidate.socialLinks = socialLinks;
   }
 
-  return { query, socialLinks, whatsapp };
+  return { data: { query, socialLinks, whatsapp }, costUsd };
 }
 
 /**
@@ -688,10 +727,14 @@ async function discoverContactAndSocials(
 
   // Fallback: sem website, OU caminho primário indisponível/sem resultado/erro.
   try {
-    const fallbackData = await runCamofoxFallback(candidate, camofox);
-    if (fallbackData) {
-      await recordSpend(redis, organizationId, SCRAPING_COST_PER_LEAD_USD.CAMOFOX_GOOGLE_SEARCH);
-      return { source: 'camoufox_fallback', data: fallbackData };
+    const fallbackResult = await runCamofoxFallback(candidate, camofox, contactEnrichment);
+    if (fallbackResult) {
+      await recordSpend(
+        redis,
+        organizationId,
+        SCRAPING_COST_PER_LEAD_USD.CAMOFOX_GOOGLE_SEARCH + fallbackResult.costUsd,
+      );
+      return { source: 'camoufox_fallback', data: fallbackResult.data };
     }
   } catch {
     // Fallback também é best-effort — se falhar, o lead segue sem contato
