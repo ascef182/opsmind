@@ -99,9 +99,15 @@ const baseOffering = {
   description: 'Criamos e mantemos um site simples para negócios locais.',
 };
 
-function mockGatewayResponse(text: string, inputTokens = 100, outputTokens = 50) {
+function mockGatewayResponse(
+  text: string,
+  inputTokens = 100,
+  outputTokens = 50,
+  model = 'claude-opus-5',
+) {
   return {
     id: 'msg_1',
+    model,
     stop_reason: 'end_turn',
     content: [{ type: 'text', text }],
     usage: { input_tokens: inputTokens, output_tokens: outputTokens },
@@ -177,6 +183,31 @@ describe('OutreachService', () => {
         }),
       );
       expect(result).toEqual({ id: 'msg-1', status: 'DRAFT' });
+    });
+
+    it('grava AIRequest.model e OutreachMessage.generatedByModel com o modelo que a API de fato respondeu, não uma constante fixa', async () => {
+      const { service, prisma, gateway, leadsService, serviceOfferingsService } = buildDeps();
+      leadsService.findByIdOrThrow.mockResolvedValue(baseLead);
+      serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
+      gateway.sendMessage.mockResolvedValue(
+        mockGatewayResponse('ok', 1_000_000, 1_000_000, 'claude-sonnet-5'),
+      );
+      prisma.aIRequest.create.mockResolvedValue({ id: 'ai-req-2' });
+      prisma.outreachMessage.create.mockResolvedValue({ id: 'msg-2', status: 'DRAFT' });
+
+      await service.generateDraft(
+        'org-1',
+        'lead-1',
+        { channel: 'EMAIL' },
+        { type: 'USER', userId: 'user-1' },
+      );
+
+      expect(prisma.aIRequest.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ model: 'claude-sonnet-5', estimatedCost: 12 }),
+      });
+      expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ generatedByModel: 'claude-sonnet-5' }),
+      });
     });
 
     // Reescrita do prompt (2026-09-17): persona de SDR sênior + framework de

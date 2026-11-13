@@ -2,9 +2,15 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { DealProposalService } from './deal-proposal.service';
 import type { AiGateway } from '../ai/gateway/ai-gateway.interface';
 
-function mockGatewayResponse(text: string, inputTokens = 100, outputTokens = 50) {
+function mockGatewayResponse(
+  text: string,
+  inputTokens = 100,
+  outputTokens = 50,
+  model = 'claude-opus-5',
+) {
   return {
     id: 'msg_1',
+    model,
     stop_reason: 'end_turn',
     content: [{ type: 'text', text }],
     usage: { input_tokens: inputTokens, output_tokens: outputTokens },
@@ -70,6 +76,24 @@ describe('DealProposalService.generate', () => {
       expect.objectContaining({ action: 'deal.proposal_generated', resource: 'Deal:deal-1' }),
     );
     expect(result.proposalDraft).toBe('Minuta de proposta...');
+  });
+
+  it('grava o AIRequest com o modelo que a API de fato respondeu, não uma constante fixa', async () => {
+    const { service, prisma, gateway, dealsService } = buildDeps();
+    dealsService.findByIdOrThrow.mockResolvedValue(baseDeal);
+    prisma.customer.findFirst.mockResolvedValue(baseCustomer);
+    gateway.sendMessage.mockResolvedValue(
+      mockGatewayResponse('ok', 1_000_000, 1_000_000, 'claude-sonnet-5'),
+    );
+    prisma.deal.update.mockResolvedValue({ ...baseDeal, proposalDraft: 'ok' });
+
+    await service.generate('org-1', 'deal-1', 'user-1');
+
+    expect(prisma.aIRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ model: 'claude-sonnet-5', estimatedCost: 12 }),
+      }),
+    );
   });
 
   it('rejeita quando o cliente vinculado não é encontrado (soft-deletado ou de outra org)', async () => {

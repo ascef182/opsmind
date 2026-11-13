@@ -192,6 +192,30 @@ describe('AiService', () => {
     );
   });
 
+  it('grava o AIRequest com o modelo que a API de fato respondeu, não uma constante fixa (ex.: ANTHROPIC_MODEL=claude-sonnet-5 no eval)', async () => {
+    const { service, gateway, txMock, actor } = buildDeps();
+    gateway.sendMessage.mockResolvedValueOnce({
+      id: 'msg_1',
+      model: 'claude-sonnet-5',
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'Olá! Como posso ajudar?' }],
+      usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+    } as never);
+
+    await service.chat(actor, { message: 'oi' });
+
+    expect(txMock.aIRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          model: 'claude-sonnet-5',
+          // sonnet-5: $2/MTok input + $10/MTok output = $12 para 1M+1M tokens
+          // (seria $30 se o custo fosse calculado a preço de opus-5).
+          estimatedCost: 12,
+        }),
+      }),
+    );
+  });
+
   it('desiste depois de um número máximo de idas e voltas de tool_use, para não rodar para sempre', async () => {
     const { service, gateway, searchCustomersTool, txMock, actor } = buildDeps();
     searchCustomersTool.execute.mockResolvedValue([]);

@@ -32,22 +32,12 @@ import {
 } from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
 import type { AIRequest, AIRequestStatus, MarketOpportunity } from '@opsmind/database';
+import { AI_MODEL_LABEL_UNKNOWN, estimateAiCostUsd } from '@opsmind/shared-types';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { BudgetService } from '../ai/services/budget.service';
 import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
-
-// Mesma tabela de preço de `OutreachService`/`LeadAnalysisService` —
-// duplicada pelo mesmo motivo (módulo standalone, sem import de `AiModule`,
-// ver `market-opportunities.module.ts`).
-const INPUT_COST_PER_MILLION_TOKENS = 5;
-const OUTPUT_COST_PER_MILLION_TOKENS = 25;
-
-// Mesmo nome de modelo de `OutreachService`/`LeadAnalysisService` — grava em
-// `AIRequest.model` (observabilidade/custo por request, mesma trilha que o
-// resto da IA da aplicação usa).
-const MODEL_NAME = 'claude-opus-5';
 
 // Limiar de "muita gente reclamando" — comparado sempre contra
 // `distinctAuthorCount`, nunca contra `mentionCount`/total de posts. Um
@@ -148,7 +138,7 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
       // Usage") nunca saberia que este job foi pulado, e o `monthSpend`
       // do Redis (BudgetService, correto) divergeria silenciosamente da
       // soma que o dashboard mostra a partir de `ai_requests`.
-      await this.persistAiRequest(organizationId, 'BUDGET_EXCEEDED', 0, 0, 0, 0);
+      await this.persistAiRequest(organizationId, 'BUDGET_EXCEEDED', AI_MODEL_LABEL_UNKNOWN, 0, 0, 0, 0);
       this.logger.warn(
         `clustering de Reddit pulado (organizationId=${organizationId}, topicId=${topicId}) — orçamento mensal de IA estourado`,
       );
@@ -175,12 +165,25 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      await this.persistAiRequest(organizationId, 'ERROR', 0, 0, Date.now() - startedAt, 0, errorMessage);
+      await this.persistAiRequest(
+        organizationId,
+        'ERROR',
+        AI_MODEL_LABEL_UNKNOWN,
+        0,
+        0,
+        Date.now() - startedAt,
+        0,
+        errorMessage,
+      );
       throw error;
     }
 
     const latencyMs = Date.now() - startedAt;
-    const cost = this.estimateCost(response.usage.input_tokens, response.usage.output_tokens);
+    const cost = estimateAiCostUsd(
+      response.model,
+      response.usage.input_tokens,
+      response.usage.output_tokens,
+    );
     const text = this.extractText(response);
 
     // A chamada à IA teve sucesso (respondeu, consumiu tokens) — grava
@@ -191,6 +194,7 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
     await this.persistAiRequest(
       organizationId,
       'SUCCESS',
+      response.model,
       response.usage.input_tokens,
       response.usage.output_tokens,
       latencyMs,
@@ -419,13 +423,6 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
       .trim();
   }
 
-  private estimateCost(inputTokens: number, outputTokens: number): number {
-    return (
-      (inputTokens / 1_000_000) * INPUT_COST_PER_MILLION_TOKENS +
-      (outputTokens / 1_000_000) * OUTPUT_COST_PER_MILLION_TOKENS
-    );
-  }
-
   // Mesmo formato de `OutreachService.persistAiRequest`/`LeadAnalysisService
   // .persistAiRequest` — sem essa gravação, `AiUsageService.getSummary`
   // (dailySeries/avgLatencyMs/totalRequests) e `listRecent` (trilha "AI
@@ -438,6 +435,7 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
   private persistAiRequest(
     organizationId: string,
     status: AIRequestStatus,
+    model: string,
     inputTokens: number,
     outputTokens: number,
     latencyMs: number,
@@ -450,7 +448,7 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
         userId: null,
         actorType: 'AI',
         actorId: null,
-        model: MODEL_NAME,
+        model,
         inputTokens,
         outputTokens,
         latencyMs,
