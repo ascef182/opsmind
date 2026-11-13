@@ -1304,6 +1304,54 @@ async function maybeEnqueueApifyFallback(
   }
 }
 
+// `ScrapeJobsService.create()`/`createBatch()` (apps/api) enfileiram no Redis
+// DENTRO da transação Postgres da request (antes do commit) — o worker pode
+// pegar o job e tentar o Passo 1 abaixo antes da linha existir de verdade
+// pra outra conexão, levando `P2025` (achado real pela revisão final;
+// agravado pelo disparo em lote, cuja transação fica aberta por mais tempo).
+// Retry curto e só para esse erro específico: um job que falhasse mais
+// adiante por outro motivo (ex.: já tendo gasto orçamento) NUNCA deveria
+// reiniciar do zero — por isso isto não é `attempts`/`backoff` a nível de
+// job do BullMQ, só uma espera local antes da primeira leitura real do job.
+const SCRAPE_JOB_VISIBILITY_RETRY_ATTEMPTS = 5;
+const SCRAPE_JOB_VISIBILITY_RETRY_DELAY_MS = 150;
+
+function isRecordNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code: unknown }).code === 'P2025'
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function markScrapeJobRunningWithRetry(
+  prisma: PrismaClient,
+  organizationId: string,
+  scrapeJobId: string,
+): Promise<void> {
+  for (let attempt = 1; attempt <= SCRAPE_JOB_VISIBILITY_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      await withTenantContext(prisma, organizationId, (tx) =>
+        tx.scrapeJob.update({
+          where: { id: scrapeJobId },
+          data: { status: 'RUNNING', startedAt: new Date() },
+        }),
+      );
+      return;
+    } catch (error) {
+      if (!isRecordNotFoundError(error) || attempt === SCRAPE_JOB_VISIBILITY_RETRY_ATTEMPTS) {
+        throw error;
+      }
+      await sleep(SCRAPE_JOB_VISIBILITY_RETRY_DELAY_MS);
+    }
+  }
+}
+
 export async function processLeadScrapeJob(
   prisma: PrismaClient,
   gateways: LeadScrapeGateways,
@@ -1314,13 +1362,8 @@ export async function processLeadScrapeJob(
   enqueueFallbackScrape: (job: LeadScrapeJobData) => Promise<unknown> = async () => undefined,
 ): Promise<ScrapeJob> {
   try {
-    // Passo 1 — tx curta: marca RUNNING.
-    await withTenantContext(prisma, data.organizationId, (tx) =>
-      tx.scrapeJob.update({
-        where: { id: data.scrapeJobId },
-        data: { status: 'RUNNING', startedAt: new Date() },
-      }),
-    );
+    // Passo 1 — tx curta: marca RUNNING (com retry — ver comentário acima).
+    await markScrapeJobRunningWithRetry(prisma, data.organizationId, data.scrapeJobId);
 
     // Passo 2 — FORA de qualquer transação: ver comentário da função acima.
     // Lê via `prisma` direto (sem tx/tenant-context) — RLS permite (fallback
@@ -1357,7 +1400,11 @@ export async function processLeadScrapeJob(
 
     if (
       scrapeJob.sourceType === 'APIFY_GOOGLE_MAPS' &&
-      rawCandidates.length < APIFY_FALLBACK_MIN_RAW_RESULTS &&
+      // Nunca compara contra o limiar fixo sozinho — um job com `limit`
+      // menor que `APIFY_FALLBACK_MIN_RAW_RESULTS` nunca teria como "cobrir
+      // o suficiente" por essa métrica, mesmo com cobertura perfeita da
+      // região (achado real pela revisão final).
+      rawCandidates.length < Math.min(APIFY_FALLBACK_MIN_RAW_RESULTS, scrapeJob.limit) &&
       !scrapeJob.fallbackOfScrapeJobId
     ) {
       await maybeEnqueueApifyFallback(prisma, data, scrapeJob, enqueueFallbackScrape);

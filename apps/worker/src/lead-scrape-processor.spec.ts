@@ -1732,6 +1732,83 @@ describe('processLeadScrapeJob', () => {
     });
   });
 
+  describe('Passo 1 tolera lag de commit entre API e worker (retry em P2025)', () => {
+    // Regressão real achada pela revisão final: `ScrapeJobsService.create()`
+    // enfileira no Redis DENTRO da transação Postgres da request (antes do
+    // commit) — o worker pode pegar o job e tentar `tx.scrapeJob.update`
+    // antes da linha existir de verdade, levando P2025. Sem retry, o catch
+    // externo também falhava (mesma linha inexistente) e o job ficava
+    // QUEUED pra sempre.
+    it('P2025 nas primeiras tentativas, depois a linha aparece => retry absorve e o job completa normalmente', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      let updateCalls = 0;
+      tx.scrapeJob.update.mockImplementation((args: { data: { status?: string } }) => {
+        updateCalls += 1;
+        if (updateCalls <= 2) {
+          return Promise.reject({ code: 'P2025' });
+        }
+        return Promise.resolve({ ...baseScrapeJob, status: args.data.status ?? 'RUNNING' });
+      });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      // 3 candidatos — cobre o suficiente, sem disparar o fallback
+      // Apify→Camofox (não é o que este teste investiga).
+      gateways.apify.searchBusinesses.mockResolvedValue(
+        ['place-1', 'place-2', 'place-3'].map((placeId) => ({
+          name: `Padaria ${placeId}`,
+          address: null,
+          city: 'Campinas',
+          state: 'SP',
+          phone: null,
+          website: null,
+          googleCategory: 'Padaria',
+          rating: 4.5,
+          reviewCount: 20,
+          placeId,
+          raw: {},
+        })),
+      );
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      // 2 tentativas P2025 (Passo 1) + 1 sucesso (Passo 1) + 1 chamada final
+      // (Passo 4, status terminal) = pelo menos 4.
+      expect(updateCalls).toBeGreaterThanOrEqual(4);
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('P2025 persiste em todas as tentativas => desiste e marca FAILED (nunca fica pendurado em QUEUED/RUNNING)', async () => {
+      setupTx();
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'FAILED' });
+      const { withTenantContext } = jest.requireMock('./tenant-context');
+      withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) =>
+        fn({ scrapeJob: { update: jest.fn().mockRejectedValue({ code: 'P2025' }) } }),
+      );
+
+      const result = await processLeadScrapeJob(
+        prisma as never,
+        fakeGateways() as never,
+        fakeRedis as never,
+        jobData,
+      );
+
+      expect(result.status).toBe('FAILED');
+      expect(prisma.scrapeJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'scrape-1' }, data: expect.objectContaining({ status: 'FAILED' }) }),
+      );
+    });
+  });
+
   describe('fallback automático Apify → Camofox', () => {
     function fakeEnqueueFallbackScrape() {
       return jest.fn().mockResolvedValue(undefined);
@@ -1812,6 +1889,53 @@ describe('processLeadScrapeJob', () => {
       const gateways = fakeGateways();
       gateways.apify.searchBusinesses.mockResolvedValue(
         ['place-1', 'place-2', 'place-3'].map((placeId) => ({
+          name: `Padaria ${placeId}`,
+          address: null,
+          city: 'Campinas',
+          state: 'SP',
+          phone: null,
+          website: null,
+          googleCategory: 'Padaria',
+          rating: 4.5,
+          reviewCount: 20,
+          placeId,
+          raw: {},
+        })),
+      );
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      const enqueueFallbackScrape = fakeEnqueueFallbackScrape();
+
+      await processLeadScrapeJob(
+        prisma as never,
+        gateways as never,
+        fakeRedis as never,
+        jobData,
+        undefined,
+        undefined,
+        enqueueFallbackScrape,
+      );
+
+      expect(prisma.scrapeJob.create).not.toHaveBeenCalled();
+      expect(enqueueFallbackScrape).not.toHaveBeenCalled();
+    });
+
+    it('job com limit baixo (ex.: 2) e Apify cobre esse limite por completo => não cria fallback à toa', async () => {
+      // Regressão achada pela revisão final: o limiar fixo de 3 ignorava
+      // `scrapeJob.limit` — um job com limit:2 NUNCA "cobria o suficiente"
+      // pela métrica antiga, mesmo com cobertura perfeita da região.
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({ ...baseScrapeJob, limit: 2 });
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue(
+        ['place-1', 'place-2'].map((placeId) => ({
           name: `Padaria ${placeId}`,
           address: null,
           city: 'Campinas',
