@@ -130,3 +130,71 @@ export async function scanDealStageStaleAutomations(
   }
   return enqueuedCount;
 }
+
+interface DealSilentForConditions {
+  silentForDays?: number;
+}
+const DEFAULT_SILENT_FOR_DAYS = 7;
+
+/**
+ * Trigger DEAL_SILENT_FOR (radar de risco do funil ativo) — mesmo contrato de
+ * `scanCustomerInactiveAutomations`: acha deals abertos cujo cliente está sem
+ * atividade há mais que `silentForDays` (default 7) e enfileira um job por
+ * deal, sem executar a ação aqui.
+ *
+ * Dedup por `customer.lastActivityAt` (não por `stageEnteredAt`): a automação
+ * só reabre quando o cliente teve atividade nova depois da última execução
+ * com sucesso — mesmo sinal de reset que `CUSTOMER_INACTIVE`. Usar
+ * `stageEnteredAt` reabriria só numa mudança de etapa, nunca quando o cliente
+ * volta a interagir e depois fica quieto de novo (a própria causa raiz deste
+ * trigger).
+ */
+export async function scanDealSilentForAutomations(
+  prisma: PrismaClient,
+  enqueue: (data: AutomationExecutionJobData) => Promise<unknown> | void,
+): Promise<number> {
+  const automations = await prisma.automation.findMany({
+    where: { trigger: 'DEAL_SILENT_FOR', enabled: true },
+  });
+  let enqueuedCount = 0;
+
+  for (const automation of automations) {
+    const conditions = automation.conditions as DealSilentForConditions;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - (conditions.silentForDays ?? DEFAULT_SILENT_FOR_DAYS));
+
+    const silentDeals = await prisma.deal.findMany({
+      where: {
+        organizationId: automation.organizationId,
+        deletedAt: null,
+        stage: { notIn: CLOSED_DEAL_STAGES },
+        // NULL (cliente sem nenhuma atividade) nunca casa com "< cutoff" em SQL
+        // — mesma exclusão de CUSTOMER_INACTIVE.
+        customer: { lastActivityAt: { lt: cutoff } },
+      },
+      include: { customer: true },
+    });
+
+    for (const deal of silentDeals) {
+      const alreadyHandled = await prisma.automationRun.findFirst({
+        where: {
+          automationId: automation.id,
+          dealId: deal.id,
+          status: 'SUCCESS',
+          createdAt: { gt: deal.customer.lastActivityAt! },
+        },
+      });
+      if (alreadyHandled) continue;
+
+      await enqueue({
+        organizationId: automation.organizationId,
+        automationId: automation.id,
+        customerId: deal.customerId,
+        dealId: deal.id,
+        actorType: 'SYSTEM',
+      });
+      enqueuedCount += 1;
+    }
+  }
+  return enqueuedCount;
+}

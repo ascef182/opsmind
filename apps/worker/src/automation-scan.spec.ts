@@ -1,4 +1,8 @@
-import { scanCustomerInactiveAutomations, scanDealStageStaleAutomations } from './automation-scan';
+import {
+  scanCustomerInactiveAutomations,
+  scanDealSilentForAutomations,
+  scanDealStageStaleAutomations,
+} from './automation-scan';
 
 describe('scanCustomerInactiveAutomations', () => {
   function buildPrisma() {
@@ -189,6 +193,78 @@ describe('scanDealStageStaleAutomations', () => {
 
     expect(prisma.automationRun.findFirst).toHaveBeenCalledWith({
       where: { automationId: 'auto-1', dealId: 'deal-1', status: 'SUCCESS', createdAt: { gt: staleDeal.stageEnteredAt } },
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(count).toBe(0);
+  });
+});
+
+describe('scanDealSilentForAutomations', () => {
+  function buildPrisma() {
+    return {
+      automation: { findMany: jest.fn() },
+      deal: { findMany: jest.fn() },
+      automationRun: { findFirst: jest.fn() },
+    };
+  }
+
+  it('enfileira um job por deal aberto cujo cliente está quieto há mais que o limiar', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
+    const lastActivityAt = new Date('2000-01-01');
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 'deal-1', customerId: 'cust-1', stage: 'NEGOTIATION', customer: { lastActivityAt } },
+    ]);
+    prisma.automationRun.findFirst.mockResolvedValue(null);
+    const enqueue = jest.fn();
+
+    const count = await scanDealSilentForAutomations(prisma as never, enqueue);
+
+    expect(prisma.deal.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-1',
+          stage: { notIn: ['WON', 'LOST'] },
+          customer: { lastActivityAt: { lt: expect.any(Date) } },
+        }),
+        include: { customer: true },
+      }),
+    );
+    expect(enqueue).toHaveBeenCalledWith({
+      organizationId: 'org-1', automationId: 'auto-1', customerId: 'cust-1', dealId: 'deal-1', actorType: 'SYSTEM',
+    });
+    expect(count).toBe(1);
+  });
+
+  it('usa conditions.silentForDays em vez do default (7 dias) quando configurado', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([
+      { id: 'auto-1', organizationId: 'org-1', conditions: { silentForDays: 30 } },
+    ]);
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    await scanDealSilentForAutomations(prisma as never, jest.fn());
+
+    const cutoffUsed = prisma.deal.findMany.mock.calls[0][0].where.customer.lastActivityAt.lt as Date;
+    const expectedCutoff = new Date();
+    expectedCutoff.setDate(expectedCutoff.getDate() - 30);
+    expect(Math.abs(cutoffUsed.getTime() - expectedCutoff.getTime())).toBeLessThan(5000);
+  });
+
+  it('não enfileira de novo um deal já tratado com sucesso desde a última atividade do cliente (dedup)', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
+    const lastActivityAt = new Date('2000-01-01');
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 'deal-1', customerId: 'cust-1', stage: 'NEGOTIATION', customer: { lastActivityAt } },
+    ]);
+    prisma.automationRun.findFirst.mockResolvedValue({ id: 'run-1' });
+    const enqueue = jest.fn();
+
+    const count = await scanDealSilentForAutomations(prisma as never, enqueue);
+
+    expect(prisma.automationRun.findFirst).toHaveBeenCalledWith({
+      where: { automationId: 'auto-1', dealId: 'deal-1', status: 'SUCCESS', createdAt: { gt: lastActivityAt } },
     });
     expect(enqueue).not.toHaveBeenCalled();
     expect(count).toBe(0);
