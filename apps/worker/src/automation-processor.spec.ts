@@ -213,6 +213,21 @@ describe('processAutomationJob — DEAL_STAGE_STALE', () => {
 
     expect(tx.notification.create).not.toHaveBeenCalled();
   });
+
+  it('marca SKIPPED sem criar task quando o deal já foi fechado (WON/LOST) entre o scan e a execução', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(staleAutomation);
+    tx.deal.findFirst.mockResolvedValue({ ...staleDeal, stage: 'WON' });
+    tx.customer.findFirst.mockResolvedValue(customer);
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SKIPPED' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.task.create).not.toHaveBeenCalled();
+    expect(tx.automationRun.create).toHaveBeenCalledWith({ data: expect.objectContaining({ status: 'SKIPPED' }) });
+  });
 });
 
 describe('processAutomationJob — DEAL_SILENT_FOR', () => {
@@ -254,5 +269,20 @@ describe('processAutomationJob — DEAL_SILENT_FOR', () => {
     await processAutomationJob({} as never, jobData);
 
     expect(tx.task.create).not.toHaveBeenCalled();
+  });
+
+  it('marca SKIPPED sem criar task quando o deal já foi fechado (WON/LOST) entre o scan e a execução, mesmo com o cliente ainda quieto', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(silentAutomation);
+    tx.deal.findFirst.mockResolvedValue({ ...silentDeal, stage: 'LOST' });
+    tx.customer.findFirst.mockResolvedValue({ id: 'cust-1', name: 'Beta', lastActivityAt: new Date('2000-01-01') });
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SKIPPED' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.task.create).not.toHaveBeenCalled();
+    expect(tx.automationRun.create).toHaveBeenCalledWith({ data: expect.objectContaining({ status: 'SKIPPED' }) });
   });
 });

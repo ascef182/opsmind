@@ -358,11 +358,19 @@ export async function processAutomationJob(
 
           // Reconfirma a condição no momento da execução — mesmo cálculo de
           // cutoff que `scanDealSilentForAutomations` (automation-scan.ts),
-          // nunca confia cegamente no scan.
+          // nunca confia cegamente no scan. Reconfere também o estágio: o
+          // scan só enfileira deals abertos (`stage: { notIn: [WON, LOST] }`),
+          // mas o deal pode ter virado WON/LOST entre o enfileiramento e esta
+          // execução (fila atrasada/retry) — sem isto, um deal já
+          // fechado/ganho continuaria gerando tarefa de reativação. Mesma
+          // proteção que `DEAL_STAGE_STALE` já tem de graça via
+          // `computeDealRisk` (que retorna NOT_APPLICABLE para WON/LOST).
+          const dealStillOpen = deal.stage !== 'WON' && deal.stage !== 'LOST';
           const conditions = automation.conditions as DealSilentForConditions;
           const cutoff = new Date();
           cutoff.setDate(cutoff.getDate() - (conditions.silentForDays ?? DEFAULT_SILENT_FOR_DAYS));
-          const stillSilent = customer.lastActivityAt !== null && customer.lastActivityAt < cutoff;
+          const stillSilent =
+            dealStillOpen && customer.lastActivityAt !== null && customer.lastActivityAt < cutoff;
 
           if (!stillSilent) {
             return tx.automationRun.create({
