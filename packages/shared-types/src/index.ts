@@ -14,3 +14,4 @@ export * from './safe-url';
 export * from './outreach-guardrails';
 export * from './finance';
 export * from './ai-model-pricing';
+export * from './deal-risk';
