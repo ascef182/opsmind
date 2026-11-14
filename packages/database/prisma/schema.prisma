@@ -73,9 +73,13 @@ enum AIRequestStatus {
 }
 
 enum AutomationTrigger {
-  // Único trigger do MVP (PRD §17, Fase 5) — mais tipos entram conforme
-  // surgir necessidade real, não especulativamente.
+  // Único trigger do MVP (PRD §17, Fase 5). Os dois seguintes são os
+  // primeiros a entrar conforme necessidade real surgiu (radar de risco do
+  // funil ativo, plano 2026-11-14) — mais tipos entram do mesmo jeito,
+  // nunca especulativamente.
   CUSTOMER_INACTIVE
+  DEAL_STAGE_STALE
+  DEAL_SILENT_FOR
 }
 
 enum AutomationRunStatus {
@@ -521,6 +525,11 @@ model Deal {
   // Soft-delete (padrão de Customer, não de Lead): um Deal é registro
   // financeiro/de negociação, nunca apagado de fato, só marcado.
   deletedAt           DateTime?      @map("deleted_at")
+  // Timestamp de quando o Deal entrou na etapa (`stage`) atual — nunca a
+  // criação do Deal. Atualizado por `DealsService.moveStage` a cada troca
+  // de etapa (task futura); alimenta o radar de risco (dias parado numa
+  // etapa) e o trigger `DEAL_STAGE_STALE`.
+  stageEnteredAt      DateTime       @default(now()) @map("stage_entered_at")
   createdAt           DateTime       @default(now()) @map("created_at")
   updatedAt           DateTime       @updatedAt @map("updated_at")
 
@@ -532,6 +541,7 @@ model Deal {
   signatureRequests DealSignatureRequest[]
   internalNotes     InternalNote[]
   contracts         Contract[]
+  automationRuns    AutomationRun[]
 
   @@index([organizationId, stage])
   @@index([organizationId, customerId])
@@ -767,6 +777,11 @@ model AutomationRun {
   organizationId String              @map("organization_id")
   automationId   String              @map("automation_id")
   customerId     String?             @map("customer_id")
+  // Preenchido só pelos triggers de Deal (`DEAL_STAGE_STALE`/
+  // `DEAL_SILENT_FOR`) — análogo a `customerId` acima, mas para o radar de
+  // risco do funil ativo (plano 2026-11-14), que faz dedup por Deal em vez
+  // de por Customer.
+  dealId         String?             @map("deal_id")
   status         AutomationRunStatus
   actorType      AuditActorType      @map("actor_type")
   actorId        String?             @map("actor_id")
@@ -776,9 +791,11 @@ model AutomationRun {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   automation   Automation   @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  deal         Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, automationId, createdAt])
   @@index([automationId, customerId, status])
+  @@index([automationId, dealId, status])
   @@map("automation_runs")
 }
 

@@ -15,6 +15,10 @@ export interface AutomationExecutionJobData {
   organizationId: string;
   automationId: string;
   customerId: string;
+  // Só preenchido pelos dois triggers de Deal (`DEAL_STAGE_STALE`/
+  // `DEAL_SILENT_FOR`, radar de risco do funil ativo, 2026-11-14) — o
+  // trigger `CUSTOMER_INACTIVE` nunca o preenche.
+  dealId?: string;
   actorType: AuditActorType;
   actorId?: string;
 }
