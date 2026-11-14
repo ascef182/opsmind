@@ -1,5 +1,10 @@
 import type { PrismaClient } from '@opsmind/database';
-import type { AutomationExecutionJobData } from '@opsmind/shared-types';
+import {
+  computeDealRisk,
+  DEFAULT_EXPECTED_STAGE_DURATION_HOURS,
+  type AutomationExecutionJobData,
+  type DealStage,
+} from '@opsmind/shared-types';
 
 interface CustomerInactiveConditions {
   inactiveForDays?: number;
@@ -73,5 +78,55 @@ export async function scanCustomerInactiveAutomations(
     }
   }
 
+  return enqueuedCount;
+}
+
+const CLOSED_DEAL_STAGES: DealStage[] = ['WON', 'LOST'];
+
+interface DealStageStaleConditions {
+  thresholdHoursOverride?: number;
+}
+
+/**
+ * Trigger DEAL_STAGE_STALE (radar de risco do funil ativo) — mesmo contrato de
+ * `scanCustomerInactiveAutomations`: acha deals em AT_RISK (computeDealRisk,
+ * mesma função pura usada pela API e pela UI) e enfileira um job por deal,
+ * sem executar a ação aqui. Dedup por `stageEnteredAt`: só reenfileira se a
+ * última execução com sucesso for anterior à entrada na etapa atual.
+ */
+export async function scanDealStageStaleAutomations(
+  prisma: PrismaClient,
+  enqueue: (data: AutomationExecutionJobData) => Promise<unknown> | void,
+): Promise<number> {
+  const automations = await prisma.automation.findMany({
+    where: { trigger: 'DEAL_STAGE_STALE', enabled: true },
+  });
+  let enqueuedCount = 0;
+  const now = new Date();
+
+  for (const automation of automations) {
+    const conditions = automation.conditions as DealStageStaleConditions;
+    const openDeals = await prisma.deal.findMany({
+      where: { organizationId: automation.organizationId, deletedAt: null, stage: { notIn: CLOSED_DEAL_STAGES } },
+    });
+
+    for (const deal of openDeals) {
+      const expectedHours = conditions.thresholdHoursOverride !== undefined
+        ? { ...DEFAULT_EXPECTED_STAGE_DURATION_HOURS, [deal.stage]: conditions.thresholdHoursOverride }
+        : DEFAULT_EXPECTED_STAGE_DURATION_HOURS;
+      if (computeDealRisk(deal, now, expectedHours) !== 'AT_RISK') continue;
+
+      const alreadyHandled = await prisma.automationRun.findFirst({
+        where: { automationId: automation.id, dealId: deal.id, status: 'SUCCESS', createdAt: { gt: deal.stageEnteredAt } },
+      });
+      if (alreadyHandled) continue;
+
+      await enqueue({
+        organizationId: automation.organizationId, automationId: automation.id,
+        customerId: deal.customerId, dealId: deal.id, actorType: 'SYSTEM',
+      });
+      enqueuedCount += 1;
+    }
+  }
   return enqueuedCount;
 }

@@ -1,4 +1,4 @@
-import { scanCustomerInactiveAutomations } from './automation-scan';
+import { scanCustomerInactiveAutomations, scanDealStageStaleAutomations } from './automation-scan';
 
 describe('scanCustomerInactiveAutomations', () => {
   function buildPrisma() {
@@ -103,6 +103,94 @@ describe('scanCustomerInactiveAutomations', () => {
 
     const count = await scanCustomerInactiveAutomations(prisma as never, jest.fn());
 
+    expect(count).toBe(0);
+  });
+});
+
+describe('scanDealStageStaleAutomations', () => {
+  function buildPrisma() {
+    return {
+      automation: { findMany: jest.fn() },
+      deal: { findMany: jest.fn() },
+      automationRun: { findFirst: jest.fn() },
+    };
+  }
+
+  it('enfileira um job por deal AT_RISK de uma automação habilitada', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([
+      { id: 'auto-1', organizationId: 'org-1', conditions: {} },
+    ]);
+    const staleDeal = {
+      id: 'deal-1', customerId: 'cust-1', stage: 'QUALIFICATION',
+      stageEnteredAt: new Date('2000-01-01'),
+    };
+    prisma.deal.findMany.mockResolvedValue([staleDeal]);
+    prisma.automationRun.findFirst.mockResolvedValue(null);
+    const enqueue = jest.fn();
+
+    const count = await scanDealStageStaleAutomations(prisma as never, enqueue);
+
+    expect(prisma.automation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { trigger: 'DEAL_STAGE_STALE', enabled: true } }),
+    );
+    expect(prisma.deal.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org-1', stage: { notIn: ['WON', 'LOST'] } }),
+      }),
+    );
+    expect(enqueue).toHaveBeenCalledWith({
+      organizationId: 'org-1', automationId: 'auto-1', customerId: 'cust-1', dealId: 'deal-1', actorType: 'SYSTEM',
+    });
+    expect(count).toBe(1);
+  });
+
+  it('não enfileira um deal cujo bucket ainda é ON_TRACK ou COOLING', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 'deal-1', customerId: 'cust-1', stage: 'QUALIFICATION', stageEnteredAt: new Date() },
+    ]);
+    const enqueue = jest.fn();
+
+    const count = await scanDealStageStaleAutomations(prisma as never, enqueue);
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(count).toBe(0);
+  });
+
+  it('usa conditions.thresholdHoursOverride em vez do default quando configurado', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([
+      { id: 'auto-1', organizationId: 'org-1', conditions: { thresholdHoursOverride: 1 } },
+    ]);
+    const stageEnteredAt = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2h atrás
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 'deal-1', customerId: 'cust-1', stage: 'QUALIFICATION', stageEnteredAt },
+    ]);
+    prisma.automationRun.findFirst.mockResolvedValue(null);
+    const enqueue = jest.fn();
+
+    const count = await scanDealStageStaleAutomations(prisma as never, enqueue);
+
+    expect(enqueue).toHaveBeenCalled();
+    expect(count).toBe(1);
+  });
+
+  it('não enfileira de novo um deal já tratado com sucesso desde a última mudança de etapa (dedup)', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
+    const staleDeal = { id: 'deal-1', customerId: 'cust-1', stage: 'QUALIFICATION', stageEnteredAt: new Date('2000-01-01') };
+    prisma.deal.findMany.mockResolvedValue([staleDeal]);
+    prisma.automationRun.findFirst.mockResolvedValue({ id: 'run-1' });
+    const enqueue = jest.fn();
+
+    const count = await scanDealStageStaleAutomations(prisma as never, enqueue);
+
+    expect(prisma.automationRun.findFirst).toHaveBeenCalledWith({
+      where: { automationId: 'auto-1', dealId: 'deal-1', status: 'SUCCESS', createdAt: { gt: staleDeal.stageEnteredAt } },
+    });
+    expect(enqueue).not.toHaveBeenCalled();
     expect(count).toBe(0);
   });
 });
