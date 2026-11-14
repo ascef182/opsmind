@@ -3,7 +3,7 @@ import { validateEnv } from '@opsmind/config/env/schema';
 import { createPrismaClient } from '../src/tenant-context';
 import { createAutomationQueue, createAutomationWorker, createRedisConnection } from '../src/queue';
 import { processAutomationJob } from '../src/automation-processor';
-import { scanCustomerInactiveAutomations } from '../src/automation-scan';
+import { scanCustomerInactiveAutomations, scanDealStageStaleAutomations } from '../src/automation-scan';
 
 // Fase 5 (docs/planning/PRD.md §17): critério de aceitação — "um cliente sem
 // atividade há N dias dispara automaticamente criação de tarefa +
@@ -137,4 +137,99 @@ describe('Automations engine (e2e)', () => {
     const task = await prisma.task.findFirst({ where: { customerId: customer.id } });
     expect(task).toBeNull();
   });
+
+  // Spec (docs/superpowers/specs/2026-11-14-funil-ativo-design.md, seção
+  // "Verificação"): "e2e: criar Deal, forçar stageEnteredAt pro passado,
+  // rodar o scan, confirmar Task criada uma única vez mesmo em duas
+  // passadas." Mesmo padrão de fixtures/helpers de `createFixtures` acima,
+  // mas para DEAL_STAGE_STALE (deal + automação de deal, em vez de cliente
+  // inativo) — reusa o mesmo `prisma`/`queue`/`worker` reais do describe
+  // pai (o worker já despacha por `automation.trigger` dentro de
+  // `processAutomationJob`, nenhum setup adicional de fila necessário).
+  async function createDealStageStaleFixtures(stageEnteredHoursAgo: number) {
+    const suffix = randomUUID();
+    const user = await prisma.user.create({
+      data: { email: `automation-deal-${suffix}@opsmind.test`, passwordHash: 'x', name: 'Deal Owner' },
+    });
+    const organization = await prisma.organization.create({
+      data: { name: 'Automation Deals Co', slug: `automation-deals-co-${suffix}` },
+    });
+    await prisma.membership.create({
+      data: { userId: user.id, organizationId: organization.id, role: 'OWNER' },
+    });
+    const customer = await prisma.customer.create({
+      data: { organizationId: organization.id, name: 'Cliente do Negócio Parado', ownerUserId: user.id },
+    });
+    const stageEnteredAt = new Date();
+    stageEnteredAt.setHours(stageEnteredAt.getHours() - stageEnteredHoursAgo);
+    const deal = await prisma.deal.create({
+      data: {
+        organizationId: organization.id,
+        customerId: customer.id,
+        title: 'Contrato Parado',
+        stage: 'QUALIFICATION', // default threshold de 72h (DEFAULT_EXPECTED_STAGE_DURATION_HOURS)
+        value: 1000,
+        ownerUserId: user.id,
+        actorType: 'USER',
+        actorId: user.id,
+        stageEnteredAt,
+      },
+    });
+    const automation = await prisma.automation.create({
+      data: {
+        organizationId: organization.id,
+        name: 'Negócio parado na etapa',
+        trigger: 'DEAL_STAGE_STALE',
+        actions: { createTask: true, notify: true },
+      },
+    });
+    return { user, organization, customer, deal, automation };
+  }
+
+  it('scan encontra o deal parado na etapa, o worker processa o job de verdade, e cria tarefa + notificação + log', async () => {
+    const { organization, deal, automation, user } = await createDealStageStaleFixtures(100); // 100h > 72h (threshold de QUALIFICATION)
+
+    const enqueued = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    expect(enqueued).toBe(1);
+
+    await waitForJobDone(deal.customerId);
+
+    const task = await prisma.task.findFirst({ where: { organizationId: organization.id, customerId: deal.customerId } });
+    expect(task?.title).toBe('Reativar negócio "Contrato Parado"');
+    expect(task?.actorType).toBe('AUTOMATION');
+    expect(task?.actorId).toBe(automation.id);
+
+    const notification = await prisma.notification.findFirst({
+      where: { organizationId: organization.id, userId: user.id, type: 'automation.deal_stage_stale' },
+    });
+    expect(notification).toBeTruthy();
+
+    const run = await prisma.automationRun.findFirst({
+      where: { automationId: automation.id, dealId: deal.id },
+    });
+    expect(run?.status).toBe('SUCCESS');
+    expect(run?.actorType).toBe('SYSTEM');
+
+    const auditLog = await prisma.auditLog.findFirst({
+      where: { organizationId: organization.id, action: 'automation.executed', resource: `Automation:${automation.id}` },
+    });
+    expect(auditLog).toBeTruthy();
+  }, 15_000);
+
+  it('não dispara de novo pro mesmo deal numa segunda passada do scan (dedup) — Task criada uma única vez', async () => {
+    const { organization, deal, automation } = await createDealStageStaleFixtures(100);
+
+    const firstScan = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    expect(firstScan).toBe(1);
+    await waitForJobDone(deal.customerId);
+
+    const secondScan = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    expect(secondScan).toBe(0);
+
+    const tasks = await prisma.task.findMany({ where: { organizationId: organization.id, customerId: deal.customerId } });
+    expect(tasks).toHaveLength(1);
+
+    const runs = await prisma.automationRun.findMany({ where: { automationId: automation.id, dealId: deal.id } });
+    expect(runs).toHaveLength(1);
+  }, 15_000);
 });
