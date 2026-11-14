@@ -13,11 +13,29 @@ export interface CustomerInactiveActions {
   notify?: boolean;
 }
 
+export interface DealStaleConditions {
+  thresholdHoursOverride?: number;
+}
+
+export interface DealStaleActions {
+  createTask?: boolean;
+  notify?: boolean;
+}
+
+export interface DealSilentForConditions {
+  silentForDays?: number;
+}
+
+export interface DealSilentForActions {
+  createTask?: boolean;
+  notify?: boolean;
+}
+
 export interface CreateAutomationInput {
   name: string;
   trigger: AutomationTrigger;
-  conditions?: CustomerInactiveConditions;
-  actions: CustomerInactiveActions;
+  conditions?: CustomerInactiveConditions | DealStaleConditions | DealSilentForConditions;
+  actions: CustomerInactiveActions | DealStaleActions | DealSilentForActions;
   enabled?: boolean;
 }
 
@@ -93,6 +111,9 @@ export class AutomationsService {
     automationId: string,
   ): Promise<{ enqueued: number }> {
     const automation = await this.findByIdOrThrow(organizationId, automationId);
+    if (automation.trigger !== 'CUSTOMER_INACTIVE') {
+      throw new BadRequestException('Execução manual só suporta automações de cliente inativo');
+    }
     if (!automation.enabled) {
       throw new BadRequestException('Automação está desabilitada');
     }

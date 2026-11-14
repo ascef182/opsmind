@@ -52,6 +52,42 @@ describe('AutomationsService', () => {
     });
   });
 
+  describe('create — triggers de Deal', () => {
+    it('cria uma automação com trigger DEAL_STAGE_STALE e persiste conditions/actions', async () => {
+      prisma.automation.create.mockResolvedValue({ id: 'auto-1', trigger: 'DEAL_STAGE_STALE' });
+
+      await service.create('org-1', 'user-1', {
+        name: 'Negócio parado',
+        trigger: 'DEAL_STAGE_STALE',
+        conditions: { thresholdHoursOverride: 48 },
+        actions: { createTask: true, notify: false },
+      });
+
+      expect(prisma.automation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          trigger: 'DEAL_STAGE_STALE',
+          conditions: { thresholdHoursOverride: 48 },
+          actions: { createTask: true, notify: false },
+        }),
+      });
+    });
+
+    it('cria uma automação com trigger DEAL_SILENT_FOR e persiste conditions/actions', async () => {
+      prisma.automation.create.mockResolvedValue({ id: 'auto-2', trigger: 'DEAL_SILENT_FOR' });
+
+      await service.create('org-1', 'user-1', {
+        name: 'Cliente quieto',
+        trigger: 'DEAL_SILENT_FOR',
+        conditions: { silentForDays: 10 },
+        actions: { createTask: true, notify: true },
+      });
+
+      expect(prisma.automation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ trigger: 'DEAL_SILENT_FOR', conditions: { silentForDays: 10 } }),
+      });
+    });
+  });
+
   describe('findByIdOrThrow', () => {
     it('lança 404 quando a automação não existe ou é de outra organização', async () => {
       prisma.automation.findFirst.mockResolvedValue(null);
@@ -65,6 +101,7 @@ describe('AutomationsService', () => {
       prisma.automation.findFirst.mockResolvedValue({
         id: 'auto-1',
         organizationId: 'org-1',
+        trigger: 'CUSTOMER_INACTIVE',
         enabled: true,
         conditions: {},
       });
@@ -84,8 +121,27 @@ describe('AutomationsService', () => {
       expect(result).toEqual({ enqueued: 2 });
     });
 
+    it('rejeita disparo manual de trigger que runNow não suporta (só CUSTOMER_INACTIVE nesta fase)', async () => {
+      prisma.automation.findFirst.mockResolvedValue({
+        id: 'auto-2',
+        organizationId: 'org-1',
+        trigger: 'DEAL_STAGE_STALE',
+        enabled: true,
+        conditions: {},
+      });
+
+      await expect(service.runNow('org-1', 'user-1', 'auto-2')).rejects.toThrow(BadRequestException);
+      expect(prisma.customer.findMany).not.toHaveBeenCalled();
+      expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+
     it('rejeita disparo manual de automação desabilitada', async () => {
-      prisma.automation.findFirst.mockResolvedValue({ id: 'auto-1', organizationId: 'org-1', enabled: false });
+      prisma.automation.findFirst.mockResolvedValue({
+        id: 'auto-1',
+        organizationId: 'org-1',
+        trigger: 'CUSTOMER_INACTIVE',
+        enabled: false,
+      });
 
       await expect(service.runNow('org-1', 'user-1', 'auto-1')).rejects.toThrow(BadRequestException);
       expect(queueService.enqueue).not.toHaveBeenCalled();

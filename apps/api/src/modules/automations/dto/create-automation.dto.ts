@@ -1,10 +1,17 @@
 import { IsBoolean, IsIn, IsNotEmpty, IsObject, IsOptional, MaxLength } from 'class-validator';
 import type { AutomationTrigger } from '@opsmind/database';
-import type { CustomerInactiveActions, CustomerInactiveConditions } from '../automations.service';
+import type {
+  CustomerInactiveActions,
+  CustomerInactiveConditions,
+  DealSilentForActions,
+  DealSilentForConditions,
+  DealStaleActions,
+  DealStaleConditions,
+} from '../automations.service';
 
-// Único trigger do MVP (schema.prisma, AutomationTrigger) — a lista cresce
+// Triggers aceitos na API (schema.prisma, AutomationTrigger) — a lista cresce
 // junto com o enum, nunca antes dele.
-const AUTOMATION_TRIGGERS: AutomationTrigger[] = ['CUSTOMER_INACTIVE'];
+const AUTOMATION_TRIGGERS: AutomationTrigger[] = ['CUSTOMER_INACTIVE', 'DEAL_STAGE_STALE', 'DEAL_SILENT_FOR'];
 
 export class CreateAutomationDto {
   @IsNotEmpty()
@@ -15,15 +22,15 @@ export class CreateAutomationDto {
   trigger!: AutomationTrigger;
 
   // Forma esperada por trigger (ver automations.service.ts) validada só
-  // estruturalmente (@IsObject) nesta fase — o único trigger existente tem
-  // poucos campos opcionais, uma classe própria com @ValidateNested vale a
-  // pena quando houver um segundo trigger com forma diferente.
+  // estruturalmente (@IsObject) nesta fase — cada trigger tem poucos campos
+  // opcionais, uma classe própria com @ValidateNested por trigger vale a pena
+  // quando a validação de campos precisar de regras mais finas.
   @IsOptional()
   @IsObject()
-  conditions?: CustomerInactiveConditions;
+  conditions?: CustomerInactiveConditions | DealStaleConditions | DealSilentForConditions;
 
   @IsObject()
-  actions!: CustomerInactiveActions;
+  actions!: CustomerInactiveActions | DealStaleActions | DealSilentForActions;
 
   @IsOptional()
   @IsBoolean()
