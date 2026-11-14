@@ -20,7 +20,11 @@ import { createWebsiteProfilerQueue, createWebsiteProfilerWorker } from './websi
 import { createOutreachAutodraftQueue } from './outreach-autodraft-queue';
 import { createRedditClusteringQueue } from './reddit-clustering-queue';
 import { createRedditTopicScanWorker } from './reddit-topic-scan-queue';
-import { scanCustomerInactiveAutomations } from './automation-scan';
+import {
+  scanCustomerInactiveAutomations,
+  scanDealStageStaleAutomations,
+  scanDealSilentForAutomations,
+} from './automation-scan';
 import { scanProspectingTargets } from './prospecting-scan';
 import { scanRedditMiningTopics } from './reddit-mining-scan';
 import { processRedditTopicScanJob } from './reddit-topic-scan-processor';
@@ -253,6 +257,27 @@ async function main(): Promise<void> {
 
   await runScan();
   setInterval(runScan, SCAN_INTERVAL_MS);
+
+  // Scans de automações de deal (DEAL_STAGE_STALE e DEAL_SILENT_FOR) — mesma
+  // fila `queue` e mesmo `SCAN_INTERVAL_MS` de `runScan` acima (nenhuma fila
+  // ou intervalo novo). Se o primeiro scan lançar, o segundo não roda neste
+  // ciclo; o próximo tick (SCAN_INTERVAL_MS) tenta os dois de novo.
+  async function runDealAutomationsScan(): Promise<void> {
+    try {
+      const staleCount = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+      const silentCount = await scanDealSilentForAutomations(prisma, (data) => queue.add('execute', data));
+      const enqueued = staleCount + silentCount;
+      if (enqueued > 0) {
+        logger.info({ enqueued }, 'scan de automações de deal enfileirou execuções');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'scan de automações de deal falhou');
+      Sentry.captureException(error);
+    }
+  }
+
+  await runDealAutomationsScan();
+  setInterval(runDealAutomationsScan, SCAN_INTERVAL_MS);
 
   // Lembrete de vencimento de tarefa (plano
   // pensando-como-empresa-com-agile-beaver.md) — mesmo intervalo fixo
