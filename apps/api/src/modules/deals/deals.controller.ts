@@ -16,6 +16,7 @@ import {
 import type { Response } from 'express';
 import type { Deal, DealSignatureRequest, InternalNote } from '@opsmind/database';
 import { DealsService } from './deals.service';
+import { attachDealRisk, type DealWithRisk } from './deal-risk.util';
 import { DealProposalService } from './deal-proposal.service';
 import { DealSignatureService } from './deal-signature.service';
 import { InternalNotesService } from '../internal-notes/internal-notes.service';
@@ -52,19 +53,21 @@ export class DealsController {
   }
 
   @Get()
-  list(
+  async list(
     @Param('organizationId') organizationId: string,
     @Query() query: ListDealsQueryDto,
-  ): Promise<Deal[]> {
-    return this.dealsService.list(organizationId, query);
+  ): Promise<DealWithRisk[]> {
+    const deals = await this.dealsService.list(organizationId, query);
+    return deals.map((deal) => attachDealRisk(deal));
   }
 
   @Get(':dealId')
-  findOne(
+  async findOne(
     @Param('organizationId') organizationId: string,
     @Param('dealId') dealId: string,
-  ): Promise<Deal> {
-    return this.dealsService.findByIdOrThrow(organizationId, dealId);
+  ): Promise<DealWithRisk> {
+    const deal = await this.dealsService.findByIdOrThrow(organizationId, dealId);
+    return attachDealRisk(deal);
   }
 
   @Roles(...WRITE_ROLES)

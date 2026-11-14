@@ -166,6 +166,7 @@ export class DealsService {
       where: { id, organizationId, stage: deal.stage, deletedAt: null },
       data: {
         stage: dto.stage,
+        stageEnteredAt: new Date(),
         ...(dto.stage === 'LOST' ? { lostReason: dto.lostReason } : {}),
         ...(reopening ? { lostReason: null } : {}),
         ...(closingNow ? { actualCloseDate: new Date() } : {}),

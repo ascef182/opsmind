@@ -221,6 +221,30 @@ describe('DealsService', () => {
         service.moveStage('org-1', 'deal-1', { stage: 'NEGOTIATION' }, 'user-1'),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('atualiza stageEnteredAt para agora em toda transição de etapa bem-sucedida', async () => {
+      const deal = { id: 'deal-1', organizationId: 'org-1', stage: 'QUALIFICATION', stageEnteredAt: new Date('2020-01-01') };
+      prisma.deal.findFirst.mockResolvedValueOnce(deal).mockResolvedValueOnce({ ...deal, stage: 'PROPOSAL' });
+      prisma.deal.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.moveStage('org-1', 'deal-1', { stage: 'PROPOSAL' }, 'user-1');
+
+      expect(prisma.deal.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ stage: 'PROPOSAL', stageEnteredAt: expect.any(Date) }) }),
+      );
+    });
+
+    it('reseta stageEnteredAt também ao reabrir um deal de LOST para QUALIFICATION', async () => {
+      const deal = { id: 'deal-1', organizationId: 'org-1', stage: 'LOST', stageEnteredAt: new Date('2000-01-01') };
+      prisma.deal.findFirst.mockResolvedValueOnce(deal).mockResolvedValueOnce({ ...deal, stage: 'QUALIFICATION' });
+      prisma.deal.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.moveStage('org-1', 'deal-1', { stage: 'QUALIFICATION' }, 'user-1');
+
+      expect(prisma.deal.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ stage: 'QUALIFICATION', stageEnteredAt: expect.any(Date), lostReason: null }) }),
+      );
+    });
   });
 
   describe('remove', () => {
