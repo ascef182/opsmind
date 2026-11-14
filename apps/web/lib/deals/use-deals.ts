@@ -86,6 +86,22 @@ export function useMoveDealStage(organizationId: string, dealId: string) {
   });
 }
 
+// Variante de useMoveDealStage pra uso no Kanban arrastável (page.tsx): um
+// único hook por organização (não por deal), já que `onDragEnd` recebe o
+// `dealId` dinamicamente a partir do `result.draggableId` — ao contrário de
+// useMoveDealStage, que é instanciado por DealCard com o dealId fixo.
+export function useMoveDealStageForDeal(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ dealId, input }: { dealId: string; input: MoveDealStageInput }) =>
+      apiFetch<Deal>(`/organizations/${organizationId}/deals/${dealId}/move-stage`, { method: 'POST', body: input }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'deals'] });
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'dashboard'] });
+    },
+  });
+}
+
 export function useGenerateDealProposal(organizationId: string, dealId: string) {
   const queryClient = useQueryClient();
   return useMutation({

@@ -6,13 +6,13 @@ import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useCustomers } from '@/lib/customers/use-customers';
-import { useCreateDeal, useDeals, useMoveDealStage } from '@/lib/deals/use-deals';
+import { useCreateDeal, useDeals, useMoveDealStageForDeal } from '@/lib/deals/use-deals';
 import {
   DEAL_RISK_LABELS,
   DEAL_STAGES,
-  DEAL_STAGE_LABELS,
   DEAL_STAGE_TRANSITIONS,
   WRITE_ROLES,
   formatCurrency,
@@ -49,63 +49,46 @@ function DealCard({
   customerName,
   organizationId,
   canWrite,
+  index,
 }: {
   deal: Deal;
   customerName: string;
   organizationId: string;
   canWrite: boolean;
+  index: number;
 }) {
-  const moveStage = useMoveDealStage(organizationId, deal.id);
-  const nextStages = DEAL_STAGE_TRANSITIONS[deal.stage];
-
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-border bg-background p-3 text-sm">
-      <div className="flex items-center justify-between gap-2">
-        <Link
-          href={`/organizations/${organizationId}/deals/${deal.id}`}
-          className="truncate font-medium text-foreground hover:text-accent-400"
+    <Draggable draggableId={deal.id} index={index} isDragDisabled={!canWrite}>
+      {(provided) => (
+        <div
+          ref={provided.innerRef}
+          {...provided.draggableProps}
+          {...provided.dragHandleProps}
+          className="flex flex-col gap-2 rounded-md border border-border bg-background p-3 text-sm"
         >
-          {deal.title}
-        </Link>
-        {deal.risk !== 'NOT_APPLICABLE' && (
-          <span className="shrink-0">
-            <Badge value={deal.risk} label={DEAL_RISK_LABELS[deal.risk]} />
-          </span>
-        )}
-      </div>
-      <span className="text-xs text-muted-foreground">{customerName}</span>
-      <span className="font-medium text-foreground">{formatCurrency(deal.value, deal.currency)}</span>
-      {deal.expectedCloseDate && (
-        <span className="text-xs text-muted-foreground">
-          Fecha em {new Date(deal.expectedCloseDate).toLocaleDateString('pt-BR')}
-        </span>
+          <div className="flex items-center justify-between gap-2">
+            <Link
+              href={`/organizations/${organizationId}/deals/${deal.id}`}
+              className="truncate font-medium text-foreground hover:text-accent-400"
+            >
+              {deal.title}
+            </Link>
+            {deal.risk !== 'NOT_APPLICABLE' && (
+              <span className="shrink-0">
+                <Badge value={deal.risk} label={DEAL_RISK_LABELS[deal.risk]} />
+              </span>
+            )}
+          </div>
+          <span className="text-xs text-muted-foreground">{customerName}</span>
+          <span className="font-medium text-foreground">{formatCurrency(deal.value, deal.currency)}</span>
+          {deal.expectedCloseDate && (
+            <span className="text-xs text-muted-foreground">
+              Fecha em {new Date(deal.expectedCloseDate).toLocaleDateString('pt-BR')}
+            </span>
+          )}
+        </div>
       )}
-      {canWrite && nextStages.length > 0 && (
-        <Select
-          value=""
-          disabled={moveStage.isPending}
-          onChange={(e) => {
-            const stage = e.target.value as DealStage;
-            if (!stage) return;
-            if (stage === 'LOST') {
-              const reason = window.prompt('Motivo da perda:');
-              if (!reason) return;
-              moveStage.mutate({ stage, lostReason: reason });
-              return;
-            }
-            moveStage.mutate({ stage });
-          }}
-          className="mt-1"
-        >
-          <option value="">Mover para…</option>
-          {nextStages.map((stage) => (
-            <option key={stage} value={stage}>
-              {DEAL_STAGE_LABELS[stage]}
-            </option>
-          ))}
-        </Select>
-      )}
-    </div>
+    </Draggable>
   );
 }
 
@@ -127,6 +110,7 @@ export default function DealsPage() {
   const deals = useDeals(organizationId);
   const customers = useCustomers(organizationId);
   const createDeal = useCreateDeal(organizationId);
+  const moveStageForDeal = useMoveDealStageForDeal(organizationId);
 
   const customerNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -166,6 +150,28 @@ export default function DealsPage() {
       { onSuccess: () => { reset(); setDialogOpen(false); } },
     );
   });
+
+  // Mesma validação de transição que o Select removido fazia (via
+  // DEAL_STAGE_TRANSITIONS) — aqui reaplicada ao drop em vez de restringir
+  // de antemão quais colunas aceitam o drag; um drop inválido simplesmente
+  // não chama a mutation, e o card volta à coluna original porque
+  // `dealsByStage` não é alterado otimisticamente.
+  const onDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
+    const sourceStage = result.source.droppableId as DealStage;
+    const destinationStage = result.destination.droppableId as DealStage;
+    if (destinationStage === sourceStage) return;
+    if (!DEAL_STAGE_TRANSITIONS[sourceStage].includes(destinationStage)) return;
+
+    if (destinationStage === 'LOST') {
+      const lostReason = window.prompt('Motivo da perda:');
+      if (!lostReason) return;
+      moveStageForDeal.mutate({ dealId: result.draggableId, input: { stage: destinationStage, lostReason } });
+      return;
+    }
+
+    moveStageForDeal.mutate({ dealId: result.draggableId, input: { stage: destinationStage } });
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -233,33 +239,41 @@ export default function DealsPage() {
       {deals.isLoading && <p className="text-muted-foreground">Carregando negócios…</p>}
 
       {deals.isSuccess && (
-        <div className="grid grid-cols-1 gap-4 overflow-x-auto sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          {DEAL_STAGES.map((stage) => {
-            const stageDeals = dealsByStage.get(stage) ?? [];
-            return (
-              <div key={stage} className="flex min-w-[220px] flex-col gap-3 rounded-lg border border-border bg-card p-3">
-                <div className="flex items-center justify-between">
-                  <Badge value={stage} />
-                  <span className="text-xs text-muted-foreground">{stageDeals.length}</span>
+        <DragDropContext onDragEnd={onDragEnd}>
+          <div className="grid grid-cols-1 gap-4 overflow-x-auto sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {DEAL_STAGES.map((stage) => {
+              const stageDeals = dealsByStage.get(stage) ?? [];
+              return (
+                <div key={stage} className="flex min-w-[220px] flex-col gap-3 rounded-lg border border-border bg-card p-3">
+                  <div className="flex items-center justify-between">
+                    <Badge value={stage} />
+                    <span className="text-xs text-muted-foreground">{stageDeals.length}</span>
+                  </div>
+                  <Droppable droppableId={stage}>
+                    {(provided) => (
+                      <div ref={provided.innerRef} {...provided.droppableProps} className="flex flex-col gap-2">
+                        {stageDeals.length === 0 && (
+                          <p className="text-xs text-muted-foreground">Nenhum negócio.</p>
+                        )}
+                        {stageDeals.map((deal, index) => (
+                          <DealCard
+                            key={deal.id}
+                            deal={deal}
+                            customerName={customerNameById.get(deal.customerId) ?? '—'}
+                            organizationId={organizationId}
+                            canWrite={canWrite}
+                            index={index}
+                          />
+                        ))}
+                        {provided.placeholder}
+                      </div>
+                    )}
+                  </Droppable>
                 </div>
-                <div className="flex flex-col gap-2">
-                  {stageDeals.length === 0 && (
-                    <p className="text-xs text-muted-foreground">Nenhum negócio.</p>
-                  )}
-                  {stageDeals.map((deal) => (
-                    <DealCard
-                      key={deal.id}
-                      deal={deal}
-                      customerName={customerNameById.get(deal.customerId) ?? '—'}
-                      organizationId={organizationId}
-                      canWrite={canWrite}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </DragDropContext>
       )}
     </div>
   );
