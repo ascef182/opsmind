@@ -62,9 +62,20 @@ const COLORS: Record<string, string> = {
   MANAGER: 'bg-positive-500/15 text-positive-500',
   MEMBER: 'bg-ink-800 text-ink-300',
   VIEWER: 'bg-ink-800 text-ink-300',
+
+  // DealRiskBucket (packages/shared-types/src/deal-risk.ts) — NOT_APPLICABLE
+  // nunca é exibido (deal fechado), então não precisa de entrada aqui.
+  AT_RISK: 'bg-negative-500/15 text-negative-500',
+  COOLING: 'bg-accent-500/15 text-accent-500',
+  ON_TRACK: 'bg-positive-500/15 text-positive-500',
 };
 
-export function Badge({ value }: { value: string }) {
+// `value` é usado como chave de cor em `COLORS` e, por padrão, também como
+// texto exibido. `label`, quando informado, substitui só o texto exibido —
+// usado quando o texto precisa ser diferente da chave de cor (ex.: bucket de
+// risco cru vs. label em português), sem afetar nenhum dos outros call sites
+// que não passam `label`.
+export function Badge({ value, label }: { value: string; label?: string }) {
   return (
     <span
       className={cn(
@@ -72,7 +83,7 @@ export function Badge({ value }: { value: string }) {
         COLORS[value] ?? 'bg-ink-800 text-ink-300',
       )}
     >
-      {value}
+      {label ?? value}
     </span>
   );
 }

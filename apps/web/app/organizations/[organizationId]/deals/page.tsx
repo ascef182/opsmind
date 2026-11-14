@@ -10,6 +10,7 @@ import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useCustomers } from '@/lib/customers/use-customers';
 import { useCreateDeal, useDeals, useMoveDealStage } from '@/lib/deals/use-deals';
 import {
+  DEAL_RISK_LABELS,
   DEAL_STAGES,
   DEAL_STAGE_LABELS,
   DEAL_STAGE_TRANSITIONS,
@@ -59,12 +60,19 @@ function DealCard({
 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-background p-3 text-sm">
-      <Link
-        href={`/organizations/${organizationId}/deals/${deal.id}`}
-        className="font-medium text-foreground hover:text-accent-400"
-      >
-        {deal.title}
-      </Link>
+      <div className="flex items-center justify-between gap-2">
+        <Link
+          href={`/organizations/${organizationId}/deals/${deal.id}`}
+          className="truncate font-medium text-foreground hover:text-accent-400"
+        >
+          {deal.title}
+        </Link>
+        {deal.risk !== 'NOT_APPLICABLE' && (
+          <span className="shrink-0">
+            <Badge value={deal.risk} label={DEAL_RISK_LABELS[deal.risk]} />
+          </span>
+        )}
+      </div>
       <span className="text-xs text-muted-foreground">{customerName}</span>
       <span className="font-medium text-foreground">{formatCurrency(deal.value, deal.currency)}</span>
       {deal.expectedCloseDate && (

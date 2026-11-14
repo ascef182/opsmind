@@ -27,6 +27,20 @@ export const DEAL_STAGE_LABELS: Record<DealStage, string> = {
   LOST: 'Perdido',
 };
 
+// Espelha DealRiskBucket de packages/shared-types/src/deal-risk.ts —
+// `computeDealRisk()` (função pura) calcula o bucket a partir de
+// `stageEnteredAt`; o campo `risk` chega pronto na resposta de GET .../deals.
+// NOT_APPLICABLE é usado para deals fechados (WON/LOST), que nunca mostram
+// badge de risco na UI.
+export type DealRiskBucket = 'ON_TRACK' | 'COOLING' | 'AT_RISK' | 'NOT_APPLICABLE';
+
+export const DEAL_RISK_LABELS: Record<DealRiskBucket, string> = {
+  ON_TRACK: 'Em dia',
+  COOLING: 'Esfriando',
+  AT_RISK: 'Em risco',
+  NOT_APPLICABLE: '—',
+};
+
 // Espelha ALLOWED_TRANSITIONS de apps/api/src/modules/deals/deals.service.ts
 // — usado só pra desenhar o `<Select>` de "mover para..." com as opções
 // válidas a partir do estágio atual; a validação de verdade continua sendo
@@ -56,6 +70,12 @@ export interface Deal {
   actualCloseDate: string | null;
   ownerUserId: string | null;
   lostReason: string | null;
+  // Timestamp de quando o deal entrou na etapa atual (atualizado em
+  // `moveStage`) — insumo de `computeDealRisk()`, não exibido diretamente.
+  stageEnteredAt: string;
+  // Bucket de risco já calculado pelo backend (`computeDealRisk()`) —
+  // nunca recalculado no front.
+  risk: DealRiskBucket;
   // Minuta gerada por IA (`DealProposalService.generate`) — nulo até a
   // primeira geração. Editável via `UpdateDealInput.proposalDraft`.
   proposalDraft: string | null;
