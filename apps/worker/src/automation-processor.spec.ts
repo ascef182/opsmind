@@ -33,6 +33,7 @@ describe('processAutomationJob', () => {
   const enabledAutomation = {
     id: 'auto-1',
     organizationId: 'org-1',
+    trigger: 'CUSTOMER_INACTIVE',
     conditions: {},
     actions: { createTask: true, notify: true },
   };
@@ -143,5 +144,115 @@ describe('processAutomationJob', () => {
       data: expect.objectContaining({ status: 'FAILED', errorMessage: 'conexão perdida' }),
     });
     expect(run).toEqual({ id: 'run-1', status: 'FAILED' });
+  });
+});
+
+describe('processAutomationJob — DEAL_STAGE_STALE', () => {
+  const jobData = { organizationId: 'org-1', automationId: 'auto-1', customerId: 'cust-1', dealId: 'deal-1', actorType: 'SYSTEM' as const };
+  const staleAutomation = { id: 'auto-1', organizationId: 'org-1', trigger: 'DEAL_STAGE_STALE', conditions: {}, actions: { createTask: true, notify: true } };
+  const staleDeal = { id: 'deal-1', customerId: 'cust-1', title: 'Contrato X', stage: 'QUALIFICATION', stageEnteredAt: new Date('2000-01-01'), ownerUserId: 'user-owner' };
+  const customer = { id: 'cust-1', name: 'Acme' };
+
+  function buildTx() {
+    return {
+      automation: { findFirst: jest.fn() }, deal: { findFirst: jest.fn() }, customer: { findFirst: jest.fn() },
+      task: { create: jest.fn() }, notification: { create: jest.fn() }, auditLog: { create: jest.fn() }, automationRun: { create: jest.fn() },
+    };
+  }
+
+  it('cria task + notificação e registra AutomationRun SUCCESS com dealId quando o deal ainda está AT_RISK', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(staleAutomation);
+    tx.deal.findFirst.mockResolvedValue(staleDeal);
+    tx.customer.findFirst.mockResolvedValue(customer);
+    tx.task.create.mockResolvedValue({ id: 'task-1' });
+    tx.notification.create.mockResolvedValue({ id: 'notif-1' });
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SUCCESS' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.task.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ organizationId: 'org-1', customerId: 'cust-1', actorType: 'AUTOMATION', actorId: 'auto-1' }),
+    });
+    expect(tx.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: 'user-owner', type: 'automation.deal_stage_stale' }),
+    });
+    expect(tx.automationRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ dealId: 'deal-1', customerId: 'cust-1', status: 'SUCCESS' }),
+    });
+  });
+
+  it('marca SKIPPED sem criar task quando o deal já não está mais AT_RISK (mudou de etapa entre o scan e a execução)', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(staleAutomation);
+    tx.deal.findFirst.mockResolvedValue({ ...staleDeal, stageEnteredAt: new Date() });
+    tx.customer.findFirst.mockResolvedValue(customer);
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SKIPPED' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.task.create).not.toHaveBeenCalled();
+    expect(tx.automationRun.create).toHaveBeenCalledWith({ data: expect.objectContaining({ status: 'SKIPPED' }) });
+  });
+
+  it('pula a notificação (sem falhar) quando o deal não tem ownerUserId', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(staleAutomation);
+    tx.deal.findFirst.mockResolvedValue({ ...staleDeal, ownerUserId: null });
+    tx.customer.findFirst.mockResolvedValue(customer);
+    tx.task.create.mockResolvedValue({ id: 'task-1' });
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SUCCESS' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.notification.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('processAutomationJob — DEAL_SILENT_FOR', () => {
+  const jobData = { organizationId: 'org-1', automationId: 'auto-2', customerId: 'cust-1', dealId: 'deal-1', actorType: 'SYSTEM' as const };
+  const silentAutomation = { id: 'auto-2', organizationId: 'org-1', trigger: 'DEAL_SILENT_FOR', conditions: {}, actions: { createTask: true, notify: false } };
+  const silentDeal = { id: 'deal-1', customerId: 'cust-1', title: 'Contrato Y', stage: 'NEGOTIATION', ownerUserId: null };
+
+  function buildTx() {
+    return {
+      automation: { findFirst: jest.fn() }, deal: { findFirst: jest.fn() }, customer: { findFirst: jest.fn() },
+      task: { create: jest.fn() }, notification: { create: jest.fn() }, auditLog: { create: jest.fn() }, automationRun: { create: jest.fn() },
+    };
+  }
+
+  it('cria task quando o cliente do deal ainda está quieto há mais que o limiar', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(silentAutomation);
+    tx.deal.findFirst.mockResolvedValue(silentDeal);
+    tx.customer.findFirst.mockResolvedValue({ id: 'cust-1', name: 'Beta', lastActivityAt: new Date('2000-01-01') });
+    tx.task.create.mockResolvedValue({ id: 'task-1' });
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SUCCESS' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.task.create).toHaveBeenCalled();
+  });
+
+  it('marca SKIPPED quando o cliente teve atividade nova desde o agendamento do job', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(silentAutomation);
+    tx.deal.findFirst.mockResolvedValue(silentDeal);
+    tx.customer.findFirst.mockResolvedValue({ id: 'cust-1', name: 'Beta', lastActivityAt: new Date() });
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SKIPPED' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.task.create).not.toHaveBeenCalled();
   });
 });
