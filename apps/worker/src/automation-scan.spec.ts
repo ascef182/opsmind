@@ -163,6 +163,25 @@ describe('scanDealStageStaleAutomations', () => {
     expect(count).toBe(0);
   });
 
+  it('filtra deals de clientes soft-deletados na própria query (customer.deletedAt: null)', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
+    // Simula o filtro real do Prisma: nenhum deal retornado porque o único
+    // cliente está soft-deletado — a asserção abaixo é o que importa:
+    // garantir que a query inclui o filtro, não o comportamento do mock.
+    prisma.deal.findMany.mockResolvedValue([]);
+    const enqueue = jest.fn();
+
+    await scanDealStageStaleAutomations(prisma as never, enqueue);
+
+    expect(prisma.deal.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ customer: { deletedAt: null } }),
+      }),
+    );
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('usa conditions.thresholdHoursOverride em vez do default quando configurado', async () => {
     const prisma = buildPrisma();
     prisma.automation.findMany.mockResolvedValue([
@@ -213,7 +232,13 @@ describe('scanDealSilentForAutomations', () => {
     prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
     const lastActivityAt = new Date('2000-01-01');
     prisma.deal.findMany.mockResolvedValue([
-      { id: 'deal-1', customerId: 'cust-1', stage: 'NEGOTIATION', customer: { lastActivityAt } },
+      {
+        id: 'deal-1',
+        customerId: 'cust-1',
+        stage: 'NEGOTIATION',
+        stageEnteredAt: new Date('2000-01-01'), // deal também parado há tempo, não só o cliente
+        customer: { lastActivityAt },
+      },
     ]);
     prisma.automationRun.findFirst.mockResolvedValue(null);
     const enqueue = jest.fn();
@@ -225,7 +250,7 @@ describe('scanDealSilentForAutomations', () => {
         where: expect.objectContaining({
           organizationId: 'org-1',
           stage: { notIn: ['WON', 'LOST'] },
-          customer: { lastActivityAt: { lt: expect.any(Date) } },
+          customer: { deletedAt: null, lastActivityAt: { lt: expect.any(Date) } },
         }),
         include: { customer: true },
       }),
@@ -234,6 +259,45 @@ describe('scanDealSilentForAutomations', () => {
       organizationId: 'org-1', automationId: 'auto-1', customerId: 'cust-1', dealId: 'deal-1', actorType: 'SYSTEM',
     });
     expect(count).toBe(1);
+  });
+
+  it('filtra deals de clientes soft-deletados na própria query (customer.deletedAt: null)', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
+    prisma.deal.findMany.mockResolvedValue([]);
+    const enqueue = jest.fn();
+
+    await scanDealSilentForAutomations(prisma as never, enqueue);
+
+    expect(prisma.deal.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          customer: { deletedAt: null, lastActivityAt: { lt: expect.any(Date) } },
+        }),
+      }),
+    );
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('não enfileira um deal recém-criado/recém-movido de etapa, mesmo com o cliente quieto há muito tempo (stageEnteredAt recente é o sinal mais recente)', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
+    const lastActivityAt = new Date('2000-01-01'); // cliente quieto há anos
+    prisma.deal.findMany.mockResolvedValue([
+      {
+        id: 'deal-1',
+        customerId: 'cust-1',
+        stage: 'NEGOTIATION',
+        stageEnteredAt: new Date(), // deal entrou na etapa agora mesmo
+        customer: { lastActivityAt },
+      },
+    ]);
+    const enqueue = jest.fn();
+
+    const count = await scanDealSilentForAutomations(prisma as never, enqueue);
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(count).toBe(0);
   });
 
   it('usa conditions.silentForDays em vez do default (7 dias) quando configurado', async () => {

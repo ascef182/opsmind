@@ -285,4 +285,21 @@ describe('processAutomationJob — DEAL_SILENT_FOR', () => {
     expect(tx.task.create).not.toHaveBeenCalled();
     expect(tx.automationRun.create).toHaveBeenCalledWith({ data: expect.objectContaining({ status: 'SKIPPED' }) });
   });
+
+  it('marca SKIPPED quando o deal entrou na etapa atual recentemente, mesmo com o cliente quieto há mais que o limiar (stageEnteredAt é o sinal mais recente)', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(silentAutomation);
+    tx.deal.findFirst.mockResolvedValue({ ...silentDeal, stageEnteredAt: new Date() });
+    tx.customer.findFirst.mockResolvedValue({ id: 'cust-1', name: 'Beta', lastActivityAt: new Date('2000-01-01') });
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SKIPPED' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.task.create).not.toHaveBeenCalled();
+    expect(tx.automationRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ status: 'SKIPPED', result: { reason: 'Condição não bate mais desde o agendamento do job' } }),
+    });
+  });
 });

@@ -107,7 +107,16 @@ export async function scanDealStageStaleAutomations(
   for (const automation of automations) {
     const conditions = automation.conditions as DealStageStaleConditions;
     const openDeals = await prisma.deal.findMany({
-      where: { organizationId: automation.organizationId, deletedAt: null, stage: { notIn: CLOSED_DEAL_STAGES } },
+      where: {
+        organizationId: automation.organizationId,
+        deletedAt: null,
+        stage: { notIn: CLOSED_DEAL_STAGES },
+        // Cliente soft-deletado nunca pode gerar execução — mesma exclusão
+        // de `scanCustomerInactiveAutomations`. Sem isto, o processor
+        // (automation-processor.ts) devolveria SKIPPED pra sempre, a cada
+        // passada do scan, porque o dedup só olha `status: 'SUCCESS'`.
+        customer: { deletedAt: null },
+      },
     });
 
     for (const deal of openDeals) {
@@ -168,14 +177,27 @@ export async function scanDealSilentForAutomations(
         organizationId: automation.organizationId,
         deletedAt: null,
         stage: { notIn: CLOSED_DEAL_STAGES },
-        // NULL (cliente sem nenhuma atividade) nunca casa com "< cutoff" em SQL
-        // — mesma exclusão de CUSTOMER_INACTIVE.
-        customer: { lastActivityAt: { lt: cutoff } },
+        // Cliente soft-deletado nunca pode gerar execução — mesma exclusão
+        // de `scanCustomerInactiveAutomations` (sem isto, SKIPPED pra
+        // sempre no processor, a cada passada deste scan). NULL (cliente
+        // sem nenhuma atividade) nunca casa com "< cutoff" em SQL — mesma
+        // exclusão de CUSTOMER_INACTIVE.
+        customer: { deletedAt: null, lastActivityAt: { lt: cutoff } },
       },
       include: { customer: true },
     });
 
     for (const deal of silentDeals) {
+      // Reconfere contra o sinal MAIS RECENTE de atividade — não só
+      // `customer.lastActivityAt`, mas também `deal.stageEnteredAt`: um
+      // deal recém-criado (ou recém-movido de etapa) pra um cliente antigo
+      // não está "parado" de verdade, só porque o cliente está quieto há
+      // mais que o limiar. O pré-filtro acima (`customer.lastActivityAt`)
+      // é só um corte grosseiro no SQL; esta é a reconfirmação real em JS.
+      const referenceActivity =
+        deal.stageEnteredAt > deal.customer.lastActivityAt! ? deal.stageEnteredAt : deal.customer.lastActivityAt!;
+      if (referenceActivity >= cutoff) continue;
+
       const alreadyHandled = await prisma.automationRun.findFirst({
         where: {
           automationId: automation.id,

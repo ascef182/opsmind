@@ -369,8 +369,17 @@ export async function processAutomationJob(
           const conditions = automation.conditions as DealSilentForConditions;
           const cutoff = new Date();
           cutoff.setDate(cutoff.getDate() - (conditions.silentForDays ?? DEFAULT_SILENT_FOR_DAYS));
-          const stillSilent =
-            dealStillOpen && customer.lastActivityAt !== null && customer.lastActivityAt < cutoff;
+          // Mesma reconfirmação de `scanDealSilentForAutomations`
+          // (automation-scan.ts): o sinal de "parado" é o MAIS RECENTE
+          // entre `customer.lastActivityAt` e `deal.stageEnteredAt` — um
+          // deal recém-criado/recém-movido pra um cliente antigo não está
+          // parado de verdade só porque o cliente está quieto há mais que
+          // o limiar.
+          const referenceActivity =
+            customer.lastActivityAt !== null && deal.stageEnteredAt > customer.lastActivityAt
+              ? deal.stageEnteredAt
+              : customer.lastActivityAt;
+          const stillSilent = dealStillOpen && referenceActivity !== null && referenceActivity < cutoff;
 
           if (!stillSilent) {
             return tx.automationRun.create({
