@@ -38,10 +38,15 @@ export class AutomationQueueService implements OnModuleDestroy {
   }
 
   enqueue(data: AutomationExecutionJobData): Promise<unknown> {
-    // jobId de dedup (PRD, Task 4) — enquanto o job (automationId, alvo) já
-    // enfileirado não terminar, um novo enqueue do mesmo par é descartado
-    // pelo BullMQ em vez de criar um job duplicado.
-    return this.queue.add('execute', data, { jobId: automationJobId(data) });
+    // `deduplication.id` (não `jobId` — deprecated pra esse fim, ver
+    // types/job-options.d.ts da própria lib) dedup enquanto o job
+    // (automationId, alvo) estiver "em voo": o BullMQ descarta um novo
+    // enqueue do mesmo par em vez de criar um job duplicado, e limpa a
+    // entrada de dedup automaticamente quando o job completa ou falha —
+    // diferente de `jobId`, cuja entrada sobrevive por `removeOnComplete`/
+    // `removeOnFail` (até 500 jobs), o que tornaria o dedup permanente pro
+    // par em vez de só durante a execução em andamento.
+    return this.queue.add('execute', data, { deduplication: { id: automationJobId(data) } });
   }
 
   async onModuleDestroy(): Promise<void> {

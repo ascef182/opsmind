@@ -247,7 +247,7 @@ async function main(): Promise<void> {
   async function runScan(): Promise<void> {
     try {
       const enqueued = await scanCustomerInactiveAutomations(prisma, (data) =>
-        queue.add('execute', data, { jobId: automationJobId(data) }),
+        queue.add('execute', data, { deduplication: { id: automationJobId(data) } }),
       );
       if (enqueued > 0) {
         logger.info({ enqueued }, 'scan enfileirou execuções de automação');
@@ -268,10 +268,10 @@ async function main(): Promise<void> {
   async function runDealAutomationsScan(): Promise<void> {
     try {
       const staleCount = await scanDealStageStaleAutomations(prisma, (data) =>
-        queue.add('execute', data, { jobId: automationJobId(data) }),
+        queue.add('execute', data, { deduplication: { id: automationJobId(data) } }),
       );
       const silentCount = await scanDealSilentForAutomations(prisma, (data) =>
-        queue.add('execute', data, { jobId: automationJobId(data) }),
+        queue.add('execute', data, { deduplication: { id: automationJobId(data) } }),
       );
       const enqueued = staleCount + silentCount;
       if (enqueued > 0) {

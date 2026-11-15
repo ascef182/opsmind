@@ -10,7 +10,7 @@ import { Queue } from 'bullmq';
 import { AutomationQueueService } from './automation-queue.service';
 
 describe('AutomationQueueService', () => {
-  it('enfileira o job na fila automation-execution com o payload recebido e jobId de dedup', async () => {
+  it('enfileira o job na fila automation-execution com o payload recebido e deduplication.id', async () => {
     const configService = { get: jest.fn().mockReturnValue('redis://localhost:6379') };
     const service = new AutomationQueueService(configService as never);
     const data = {
@@ -29,6 +29,6 @@ describe('AutomationQueueService', () => {
         defaultJobOptions: expect.objectContaining({ removeOnComplete: expect.anything(), removeOnFail: expect.anything() }),
       }),
     );
-    expect(queueInstance.add).toHaveBeenCalledWith('execute', data, { jobId: 'auto-1_cust-1' });
+    expect(queueInstance.add).toHaveBeenCalledWith('execute', data, { deduplication: { id: 'auto-1_cust-1' } });
   });
 });

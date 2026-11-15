@@ -133,7 +133,11 @@ describe('Automations engine (e2e)', () => {
   // reconsultando o Postgres): este prova dedup na camada da fila em si —
   // dois `queue.add` de volta a volta pro MESMO par (automação, alvo), antes
   // do primeiro job terminar, devem resultar no MESMO job BullMQ.
-  it('automationJobId faz o BullMQ deduplicar dois enqueues do mesmo par (automação, alvo) antes do primeiro job terminar', async () => {
+  //
+  // Usa `deduplication: { id }`, não `jobId` (deprecated pra esse fim) — ver
+  // comentário em automation-queue.service.ts. No modo simples (sem
+  // `ttl`/`keepLastIfActive`), o dedup só vale enquanto o job está em voo.
+  it('deduplication.id faz o BullMQ deduplicar dois enqueues do mesmo par (automação, alvo) antes do primeiro job terminar', async () => {
     const data = { organizationId: 'org-x', automationId: 'auto-x', customerId: 'cust-x', actorType: 'SYSTEM' as const };
     const jobId = automationJobId(data);
 
@@ -145,11 +149,11 @@ describe('Automations engine (e2e)', () => {
     // dedup no enqueue, não o processamento — pausar não enfraquece a prova.
     await worker.pause();
     try {
-      const job1 = await queue.add('execute', data, { jobId });
-      const job2 = await queue.add('execute', data, { jobId });
+      const job1 = await queue.add('execute', data, { deduplication: { id: jobId } });
+      const job2 = await queue.add('execute', data, { deduplication: { id: jobId } });
 
-      // Mesmo jobId, job ainda não processado (waiting/active) => BullMQ devolve
-      // o MESMO job em vez de criar um segundo — é a prova real de dedup.
+      // Mesmo par ainda em voo (waiting/active) => BullMQ devolve o MESMO job
+      // em vez de criar um segundo — é a prova real de dedup "em voo".
       expect(job2.id).toBe(job1.id);
 
       await job1.remove(); // limpeza — não deixar pendurado pra não interferir nos outros testes do arquivo
@@ -157,6 +161,45 @@ describe('Automations engine (e2e)', () => {
       await worker.resume();
     }
   });
+
+  // Prova que a dedup NÃO é permanente (achado C1 da revisão final): depois
+  // que um job com um dado `deduplication.id` COMPLETA, um novo enqueue do
+  // MESMO par (automação, alvo) precisa criar e processar um job NOVO — ao
+  // contrário do `jobId` antigo, cuja entrada de dedup sobrevivia enquanto o
+  // job ficasse retido por `removeOnComplete`, impedindo pra sempre a
+  // automação de disparar de novo pro mesmo par.
+  it('deduplicação não é permanente: depois do primeiro job completar, um novo enqueue do mesmo par cria e processa um job novo', async () => {
+    const { organization, customer, automation } = await createFixtures(20);
+    const data = {
+      organizationId: organization.id,
+      automationId: automation.id,
+      customerId: customer.id,
+      actorType: 'SYSTEM' as const,
+    };
+    const dedupOptions = { deduplication: { id: automationJobId(data) } };
+
+    const firstJob = await queue.add('execute', data, dedupOptions);
+    await waitForJobDone(customer.id);
+    expect(await firstJob.isCompleted()).toBe(true);
+
+    // O ponto deste teste é a camada da FILA, não a do scan: o cliente
+    // segue "inativo" (nada muda `lastActivityAt` entre as duas chamadas),
+    // então o processor reconfirma a condição e executa de novo — o que só
+    // é possível porque `deduplication.id` liberou o par assim que o
+    // primeiro job completou. Com o `jobId` antigo (retido por
+    // `removeOnComplete`), este segundo `queue.add` teria sido
+    // silenciosamente descartado pelo BullMQ.
+    const secondJob = await queue.add('execute', data, dedupOptions);
+
+    expect(secondJob.id).not.toBe(firstJob.id);
+    await waitForJobDone(customer.id);
+    expect(await secondJob.isCompleted()).toBe(true);
+
+    // Duas tasks criadas (uma por execução), não uma só — era exatamente o
+    // cenário que faltava na prova anterior de dedup.
+    const tasks = await prisma.task.findMany({ where: { organizationId: organization.id, customerId: customer.id } });
+    expect(tasks).toHaveLength(2);
+  }, 20_000);
 
   it('não dispara para um cliente que teve atividade recente (dentro do período de inatividade)', async () => {
     const { customer } = await createFixtures(2);
