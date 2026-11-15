@@ -1,8 +1,15 @@
+jest.mock('@sentry/node', () => ({ captureException: jest.fn() }));
+
+import * as Sentry from '@sentry/node';
 import {
   scanCustomerInactiveAutomations,
   scanDealSilentForAutomations,
   scanDealStageStaleAutomations,
 } from './automation-scan';
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
 describe('scanCustomerInactiveAutomations', () => {
   function buildPrisma() {
@@ -108,6 +115,31 @@ describe('scanCustomerInactiveAutomations', () => {
     const count = await scanCustomerInactiveAutomations(prisma as never, jest.fn());
 
     expect(count).toBe(0);
+  });
+
+  it('uma automação cujo processamento lança não aborta o scan pras demais — captura no Sentry e continua (achado I2)', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([
+      { id: 'auto-broken', organizationId: 'org-1', conditions: {}, organization: { inactiveAfterDays: 14 } },
+      { id: 'auto-2', organizationId: 'org-2', conditions: {}, organization: { inactiveAfterDays: 14 } },
+    ]);
+    prisma.customer.findMany
+      .mockRejectedValueOnce(new Error('falha simulada na automação 1'))
+      .mockResolvedValueOnce([{ id: 'cust-2', name: 'Beta', lastActivityAt: new Date('2020-01-01') }]);
+    prisma.automationRun.findFirst.mockResolvedValue(null);
+    const enqueue = jest.fn();
+
+    const count = await scanCustomerInactiveAutomations(prisma as never, enqueue);
+
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ extra: { automationId: 'auto-broken', organizationId: 'org-1' } }),
+    );
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ automationId: 'auto-2', customerId: 'cust-2' }),
+    );
+    expect(count).toBe(1);
   });
 });
 
@@ -215,6 +247,30 @@ describe('scanDealStageStaleAutomations', () => {
     });
     expect(enqueue).not.toHaveBeenCalled();
     expect(count).toBe(0);
+  });
+
+  it('uma automação cujo processamento lança não aborta o scan pras demais — captura no Sentry e continua (achado I2)', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([
+      { id: 'auto-broken', organizationId: 'org-1', conditions: {} },
+      { id: 'auto-2', organizationId: 'org-2', conditions: {} },
+    ]);
+    const okDeal = { id: 'deal-2', customerId: 'cust-2', stage: 'QUALIFICATION', stageEnteredAt: new Date('2000-01-01') };
+    prisma.deal.findMany
+      .mockRejectedValueOnce(new Error('falha simulada na automação 1'))
+      .mockResolvedValueOnce([okDeal]);
+    prisma.automationRun.findFirst.mockResolvedValue(null);
+    const enqueue = jest.fn();
+
+    const count = await scanDealStageStaleAutomations(prisma as never, enqueue);
+
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ extra: { automationId: 'auto-broken', organizationId: 'org-1' } }),
+    );
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ automationId: 'auto-2', dealId: 'deal-2' }));
+    expect(count).toBe(1);
   });
 });
 
@@ -351,6 +407,31 @@ describe('scanDealSilentForAutomations', () => {
       where: { automationId: 'auto-1', dealId: 'deal-1', status: 'SUCCESS', createdAt: { gt: stageEnteredAt } },
     });
     expect(enqueue).toHaveBeenCalled();
+    expect(count).toBe(1);
+  });
+
+  it('uma automação cujo processamento lança não aborta o scan pras demais — captura no Sentry e continua (achado I2)', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([
+      { id: 'auto-broken', organizationId: 'org-1', conditions: {} },
+      { id: 'auto-2', organizationId: 'org-2', conditions: {} },
+    ]);
+    const lastActivityAt = new Date('2000-01-01');
+    const okDeal = { id: 'deal-2', customerId: 'cust-2', stage: 'NEGOTIATION', stageEnteredAt: lastActivityAt, customer: { lastActivityAt } };
+    prisma.deal.findMany
+      .mockRejectedValueOnce(new Error('falha simulada na automação 1'))
+      .mockResolvedValueOnce([okDeal]);
+    prisma.automationRun.findFirst.mockResolvedValue(null);
+    const enqueue = jest.fn();
+
+    const count = await scanDealSilentForAutomations(prisma as never, enqueue);
+
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ extra: { automationId: 'auto-broken', organizationId: 'org-1' } }),
+    );
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ automationId: 'auto-2', dealId: 'deal-2' }));
     expect(count).toBe(1);
   });
 });

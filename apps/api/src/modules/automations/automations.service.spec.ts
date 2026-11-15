@@ -202,6 +202,36 @@ describe('AutomationsService', () => {
       ).rejects.toThrow(BadRequestException);
       expect(prisma.automation.create).not.toHaveBeenCalled();
     });
+
+    it('rejeita inactiveForDays acima do limite superior (3650 dias)', async () => {
+      await expect(
+        service.create('org-1', 'user-1', {
+          name: 'X', trigger: 'CUSTOMER_INACTIVE', conditions: { inactiveForDays: 3651 }, actions: {},
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.automation.create).not.toHaveBeenCalled();
+    });
+
+    it('rejeita thresholdHoursOverride acima do limite superior (87600 horas) num update de DEAL_STAGE_STALE', async () => {
+      prisma.automation.findFirst.mockResolvedValue({
+        id: 'auto-1', organizationId: 'org-1', trigger: 'DEAL_STAGE_STALE', conditions: {}, actions: {},
+      });
+
+      await expect(
+        service.update('org-1', 'user-1', 'auto-1', { conditions: { thresholdHoursOverride: 87_601 } }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.automation.update).not.toHaveBeenCalled();
+    });
+
+    it('aceita inactiveForDays exatamente no limite superior (3650 dias)', async () => {
+      prisma.automation.create.mockResolvedValue({ id: 'auto-1', organizationId: 'org-1' });
+
+      await service.create('org-1', 'user-1', {
+        name: 'X', trigger: 'CUSTOMER_INACTIVE', conditions: { inactiveForDays: 3650 }, actions: {},
+      });
+
+      expect(prisma.automation.create).toHaveBeenCalled();
+    });
   });
 
   describe('listRuns', () => {

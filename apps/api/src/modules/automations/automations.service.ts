@@ -54,6 +54,17 @@ const CONDITION_NUMERIC_FIELD: Record<AutomationTrigger, string> = {
   DEAL_SILENT_FOR: 'silentForDays',
 };
 
+// Limite superior por trigger, não um valor único: os dois campos em dias
+// usam 3650 (10 anos); o de DEAL_STAGE_STALE é em HORAS, então usa a mesma
+// janela de 10 anos convertida (87600h) — sem isto, um valor absurdamente
+// grande propagado pro `setDate`/`computeDealRisk` do scan (automation-scan.ts)
+// produz `Invalid Date` ou sai do range de timestamp do Postgres.
+const CONDITION_NUMERIC_FIELD_MAX: Record<AutomationTrigger, number> = {
+  CUSTOMER_INACTIVE: 3650,
+  DEAL_STAGE_STALE: 87_600,
+  DEAL_SILENT_FOR: 3650,
+};
+
 /**
  * Sem repository layer (Decisão #12 do blueprint da Fase 1, mantida aqui) —
  * chama `PrismaService` diretamente.
@@ -69,8 +80,11 @@ export class AutomationsService {
   private assertValidConditionsRange(trigger: AutomationTrigger, conditions: object | undefined): void {
     const field = CONDITION_NUMERIC_FIELD[trigger];
     const value = (conditions as Record<string, unknown> | undefined)?.[field];
-    if (value !== undefined && (!Number.isInteger(value) || (value as number) <= 0)) {
-      throw new BadRequestException(`${field} deve ser um inteiro positivo`);
+    if (value === undefined) return;
+
+    const max = CONDITION_NUMERIC_FIELD_MAX[trigger];
+    if (!Number.isInteger(value) || (value as number) <= 0 || (value as number) > max) {
+      throw new BadRequestException(`${field} deve ser um inteiro positivo até ${max}`);
     }
   }
 

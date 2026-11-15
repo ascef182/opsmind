@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@opsmind/database';
+import * as Sentry from '@sentry/node';
 import {
   computeDealRisk,
   DEFAULT_EXPECTED_STAGE_DURATION_HOURS,
@@ -35,46 +36,55 @@ export async function scanCustomerInactiveAutomations(
   let enqueuedCount = 0;
 
   for (const automation of automations) {
-    const conditions = automation.conditions as CustomerInactiveConditions;
-    const inactiveForDays = conditions.inactiveForDays ?? automation.organization.inactiveAfterDays;
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - inactiveForDays);
+    // Try/catch por automação — uma automação mal configurada numa
+    // organização (ex.: condição com valor absurdo) nunca pode interromper
+    // o scan pras demais organizações neste ciclo.
+    try {
+      const conditions = automation.conditions as CustomerInactiveConditions;
+      const inactiveForDays = conditions.inactiveForDays ?? automation.organization.inactiveAfterDays;
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - inactiveForDays);
 
-    const inactiveCustomers = await prisma.customer.findMany({
-      where: {
-        organizationId: automation.organizationId,
-        deletedAt: null,
-        // NULL (LEAD que nunca teve nenhuma atividade) nunca casa com "< cutoff"
-        // em SQL — exclusão automática, mesmo comportamento de
-        // DashboardService/CustomersService.listInactive.
-        lastActivityAt: { lt: cutoff },
-      },
-    });
-
-    for (const customer of inactiveCustomers) {
-      // Dedup: nunca reabrir a mesma automação pro mesmo cliente enquanto
-      // nada de novo aconteceu — só dispara de novo se a última execução com
-      // sucesso for ANTERIOR à atividade mais recente do cliente (ele voltou
-      // a interagir e depois ficou quieto de novo).
-      const alreadyHandled = await prisma.automationRun.findFirst({
+      const inactiveCustomers = await prisma.customer.findMany({
         where: {
-          automationId: automation.id,
-          customerId: customer.id,
-          status: 'SUCCESS',
-          createdAt: { gt: customer.lastActivityAt! },
+          organizationId: automation.organizationId,
+          deletedAt: null,
+          // NULL (LEAD que nunca teve nenhuma atividade) nunca casa com "< cutoff"
+          // em SQL — exclusão automática, mesmo comportamento de
+          // DashboardService/CustomersService.listInactive.
+          lastActivityAt: { lt: cutoff },
         },
       });
-      if (alreadyHandled) {
-        continue;
-      }
 
-      await enqueue({
-        organizationId: automation.organizationId,
-        automationId: automation.id,
-        customerId: customer.id,
-        actorType: 'SYSTEM',
+      for (const customer of inactiveCustomers) {
+        // Dedup: nunca reabrir a mesma automação pro mesmo cliente enquanto
+        // nada de novo aconteceu — só dispara de novo se a última execução com
+        // sucesso for ANTERIOR à atividade mais recente do cliente (ele voltou
+        // a interagir e depois ficou quieto de novo).
+        const alreadyHandled = await prisma.automationRun.findFirst({
+          where: {
+            automationId: automation.id,
+            customerId: customer.id,
+            status: 'SUCCESS',
+            createdAt: { gt: customer.lastActivityAt! },
+          },
+        });
+        if (alreadyHandled) {
+          continue;
+        }
+
+        await enqueue({
+          organizationId: automation.organizationId,
+          automationId: automation.id,
+          customerId: customer.id,
+          actorType: 'SYSTEM',
+        });
+        enqueuedCount += 1;
+      }
+    } catch (error) {
+      Sentry.captureException(error, {
+        extra: { automationId: automation.id, organizationId: automation.organizationId },
       });
-      enqueuedCount += 1;
     }
   }
 
@@ -105,36 +115,43 @@ export async function scanDealStageStaleAutomations(
   const now = new Date();
 
   for (const automation of automations) {
-    const conditions = automation.conditions as DealStageStaleConditions;
-    const openDeals = await prisma.deal.findMany({
-      where: {
-        organizationId: automation.organizationId,
-        deletedAt: null,
-        stage: { notIn: CLOSED_DEAL_STAGES },
-        // Cliente soft-deletado nunca pode gerar execução — mesma exclusão
-        // de `scanCustomerInactiveAutomations`. Sem isto, o processor
-        // (automation-processor.ts) devolveria SKIPPED pra sempre, a cada
-        // passada do scan, porque o dedup só olha `status: 'SUCCESS'`.
-        customer: { deletedAt: null },
-      },
-    });
-
-    for (const deal of openDeals) {
-      const expectedHours = conditions.thresholdHoursOverride !== undefined
-        ? { ...DEFAULT_EXPECTED_STAGE_DURATION_HOURS, [deal.stage]: conditions.thresholdHoursOverride }
-        : DEFAULT_EXPECTED_STAGE_DURATION_HOURS;
-      if (computeDealRisk(deal, now, expectedHours) !== 'AT_RISK') continue;
-
-      const alreadyHandled = await prisma.automationRun.findFirst({
-        where: { automationId: automation.id, dealId: deal.id, status: 'SUCCESS', createdAt: { gt: deal.stageEnteredAt } },
+    // Try/catch por automação — mesmo racional de scanCustomerInactiveAutomations.
+    try {
+      const conditions = automation.conditions as DealStageStaleConditions;
+      const openDeals = await prisma.deal.findMany({
+        where: {
+          organizationId: automation.organizationId,
+          deletedAt: null,
+          stage: { notIn: CLOSED_DEAL_STAGES },
+          // Cliente soft-deletado nunca pode gerar execução — mesma exclusão
+          // de `scanCustomerInactiveAutomations`. Sem isto, o processor
+          // (automation-processor.ts) devolveria SKIPPED pra sempre, a cada
+          // passada do scan, porque o dedup só olha `status: 'SUCCESS'`.
+          customer: { deletedAt: null },
+        },
       });
-      if (alreadyHandled) continue;
 
-      await enqueue({
-        organizationId: automation.organizationId, automationId: automation.id,
-        customerId: deal.customerId, dealId: deal.id, actorType: 'SYSTEM',
+      for (const deal of openDeals) {
+        const expectedHours = conditions.thresholdHoursOverride !== undefined
+          ? { ...DEFAULT_EXPECTED_STAGE_DURATION_HOURS, [deal.stage]: conditions.thresholdHoursOverride }
+          : DEFAULT_EXPECTED_STAGE_DURATION_HOURS;
+        if (computeDealRisk(deal, now, expectedHours) !== 'AT_RISK') continue;
+
+        const alreadyHandled = await prisma.automationRun.findFirst({
+          where: { automationId: automation.id, dealId: deal.id, status: 'SUCCESS', createdAt: { gt: deal.stageEnteredAt } },
+        });
+        if (alreadyHandled) continue;
+
+        await enqueue({
+          organizationId: automation.organizationId, automationId: automation.id,
+          customerId: deal.customerId, dealId: deal.id, actorType: 'SYSTEM',
+        });
+        enqueuedCount += 1;
+      }
+    } catch (error) {
+      Sentry.captureException(error, {
+        extra: { automationId: automation.id, organizationId: automation.organizationId },
       });
-      enqueuedCount += 1;
     }
   }
   return enqueuedCount;
@@ -166,54 +183,61 @@ export async function scanDealSilentForAutomations(
   let enqueuedCount = 0;
 
   for (const automation of automations) {
-    const conditions = automation.conditions as DealSilentForConditions;
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - (conditions.silentForDays ?? DEFAULT_SILENT_FOR_DAYS));
+    // Try/catch por automação — mesmo racional de scanCustomerInactiveAutomations.
+    try {
+      const conditions = automation.conditions as DealSilentForConditions;
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - (conditions.silentForDays ?? DEFAULT_SILENT_FOR_DAYS));
 
-    const silentDeals = await prisma.deal.findMany({
-      where: {
-        organizationId: automation.organizationId,
-        deletedAt: null,
-        stage: { notIn: CLOSED_DEAL_STAGES },
-        // Cliente soft-deletado nunca pode gerar execução — mesma exclusão
-        // de `scanCustomerInactiveAutomations` (sem isto, SKIPPED pra
-        // sempre no processor, a cada passada deste scan). NULL (cliente
-        // sem nenhuma atividade) nunca casa com "< cutoff" em SQL — mesma
-        // exclusão de CUSTOMER_INACTIVE.
-        customer: { deletedAt: null, lastActivityAt: { lt: cutoff } },
-      },
-      include: { customer: true },
-    });
-
-    for (const deal of silentDeals) {
-      // Reconfere contra o sinal MAIS RECENTE de atividade — não só
-      // `customer.lastActivityAt`, mas também `deal.stageEnteredAt`: um
-      // deal recém-criado (ou recém-movido de etapa) pra um cliente antigo
-      // não está "parado" de verdade, só porque o cliente está quieto há
-      // mais que o limiar. O pré-filtro acima (`customer.lastActivityAt`)
-      // é só um corte grosseiro no SQL; esta é a reconfirmação real em JS.
-      const referenceActivity =
-        deal.stageEnteredAt > deal.customer.lastActivityAt! ? deal.stageEnteredAt : deal.customer.lastActivityAt!;
-      if (referenceActivity >= cutoff) continue;
-
-      const alreadyHandled = await prisma.automationRun.findFirst({
+      const silentDeals = await prisma.deal.findMany({
         where: {
-          automationId: automation.id,
-          dealId: deal.id,
-          status: 'SUCCESS',
-          createdAt: { gt: referenceActivity },
+          organizationId: automation.organizationId,
+          deletedAt: null,
+          stage: { notIn: CLOSED_DEAL_STAGES },
+          // Cliente soft-deletado nunca pode gerar execução — mesma exclusão
+          // de `scanCustomerInactiveAutomations` (sem isto, SKIPPED pra
+          // sempre no processor, a cada passada deste scan). NULL (cliente
+          // sem nenhuma atividade) nunca casa com "< cutoff" em SQL — mesma
+          // exclusão de CUSTOMER_INACTIVE.
+          customer: { deletedAt: null, lastActivityAt: { lt: cutoff } },
         },
+        include: { customer: true },
       });
-      if (alreadyHandled) continue;
 
-      await enqueue({
-        organizationId: automation.organizationId,
-        automationId: automation.id,
-        customerId: deal.customerId,
-        dealId: deal.id,
-        actorType: 'SYSTEM',
+      for (const deal of silentDeals) {
+        // Reconfere contra o sinal MAIS RECENTE de atividade — não só
+        // `customer.lastActivityAt`, mas também `deal.stageEnteredAt`: um
+        // deal recém-criado (ou recém-movido de etapa) pra um cliente antigo
+        // não está "parado" de verdade, só porque o cliente está quieto há
+        // mais que o limiar. O pré-filtro acima (`customer.lastActivityAt`)
+        // é só um corte grosseiro no SQL; esta é a reconfirmação real em JS.
+        const referenceActivity =
+          deal.stageEnteredAt > deal.customer.lastActivityAt! ? deal.stageEnteredAt : deal.customer.lastActivityAt!;
+        if (referenceActivity >= cutoff) continue;
+
+        const alreadyHandled = await prisma.automationRun.findFirst({
+          where: {
+            automationId: automation.id,
+            dealId: deal.id,
+            status: 'SUCCESS',
+            createdAt: { gt: referenceActivity },
+          },
+        });
+        if (alreadyHandled) continue;
+
+        await enqueue({
+          organizationId: automation.organizationId,
+          automationId: automation.id,
+          customerId: deal.customerId,
+          dealId: deal.id,
+          actorType: 'SYSTEM',
+        });
+        enqueuedCount += 1;
+      }
+    } catch (error) {
+      Sentry.captureException(error, {
+        extra: { automationId: automation.id, organizationId: automation.organizationId },
       });
-      enqueuedCount += 1;
     }
   }
   return enqueuedCount;
