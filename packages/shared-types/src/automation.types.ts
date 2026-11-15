@@ -22,3 +22,8 @@ export interface AutomationExecutionJobData {
   actorType: AuditActorType;
   actorId?: string;
 }
+
+// dealId tem precedência: um cliente pode ter vários deals sob a mesma automação.
+export function automationJobId(data: AutomationExecutionJobData): string {
+  return `${data.automationId}:${data.dealId ?? data.customerId}`;
+}
