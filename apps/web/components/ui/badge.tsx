@@ -68,6 +68,18 @@ const COLORS: Record<string, string> = {
   AT_RISK: 'bg-negative-500/15 text-negative-500',
   COOLING: 'bg-accent-500/15 text-accent-500',
   ON_TRACK: 'bg-positive-500/15 text-positive-500',
+
+  // AutomationTrigger (apps/web/lib/automations/types.ts)
+  CUSTOMER_INACTIVE: 'bg-negative-500/15 text-negative-500',
+  DEAL_STAGE_STALE: 'bg-accent-500/15 text-accent-500',
+  DEAL_SILENT_FOR: 'bg-info-500/15 text-info-500',
+
+  // AutomationRunStatus (apps/web/lib/automations/types.ts) — FAILED já
+  // mapeado acima (compartilhado com ScrapeJobStatus). SUCCESS reusa a cor
+  // de ACTIVE/DONE, SKIPPED a de INACTIVE/QUEUED (mesmo espírito de
+  // reaproveitamento de cor já usado no arquivo entre enums diferentes).
+  SUCCESS: 'bg-positive-500/15 text-positive-500',
+  SKIPPED: 'bg-ink-800 text-ink-300',
 };
 
 // `value` é usado como chave de cor em `COLORS` e, por padrão, também como
