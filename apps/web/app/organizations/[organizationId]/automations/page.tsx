@@ -193,7 +193,18 @@ export default function AutomationsPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-muted-foreground">{conditionField.label}</label>
-              <Input type="number" {...register('conditionValue')} />
+              <Input
+                type="number"
+                // `setValueAs` trata string vazia (o que o react-hook-form guarda
+                // quando o usuário limpa o campo) como "sem override" antes da
+                // validação zod — sem isto, `z.coerce.number()` recebe `''`,
+                // `Number('')` é `0` (não `NaN`), e o submit enviaria
+                // `{ inactiveForDays: 0 }` em vez de omitir o campo, o que o
+                // backend rejeita ("deve ser um inteiro positivo").
+                {...register('conditionValue', {
+                  setValueAs: (value) => (value === '' ? undefined : Number(value)),
+                })}
+              />
             </div>
             <div className="flex flex-wrap items-center gap-4">
               <label className="flex items-center gap-2 text-sm text-muted-foreground">
