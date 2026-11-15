@@ -228,6 +228,24 @@ describe('processAutomationJob — DEAL_STAGE_STALE', () => {
     expect(tx.task.create).not.toHaveBeenCalled();
     expect(tx.automationRun.create).toHaveBeenCalledWith({ data: expect.objectContaining({ status: 'SKIPPED' }) });
   });
+
+  it('descrição da task cita o rótulo em português da etapa, não o enum cru', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(staleAutomation);
+    tx.deal.findFirst.mockResolvedValue(staleDeal);
+    tx.customer.findFirst.mockResolvedValue(customer);
+    tx.task.create.mockResolvedValue({ id: 'task-1' });
+    tx.notification.create.mockResolvedValue({ id: 'notif-1' });
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SUCCESS' });
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+
+    await processAutomationJob({} as never, jobData);
+
+    expect(tx.task.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ description: 'Negócio parado na etapa Qualificação além do tempo esperado.' }),
+    });
+  });
 });
 
 describe('processAutomationJob — DEAL_SILENT_FOR', () => {

@@ -6,6 +6,11 @@ import {
 } from '@opsmind/shared-types';
 import { withTenantContext } from './tenant-context';
 
+const DEAL_STAGE_LABELS_PT: Record<string, string> = {
+  QUALIFICATION: 'Qualificação', PROPOSAL: 'Proposta', NEGOTIATION: 'Negociação',
+  CONTRACT_SENT: 'Contrato enviado', WON: 'Ganho', LOST: 'Perdido',
+};
+
 interface CustomerInactiveConditions {
   inactiveForDays?: number;
 }
@@ -260,7 +265,7 @@ export async function processAutomationJob(
                 organizationId: data.organizationId,
                 customerId: deal.customerId,
                 title: `Reativar negócio "${deal.title}"`,
-                description: `Negócio parado na etapa ${deal.stage} além do tempo esperado.`,
+                description: `Negócio parado na etapa ${DEAL_STAGE_LABELS_PT[deal.stage] ?? deal.stage} além do tempo esperado.`,
                 actorType: 'AUTOMATION',
                 actorId: automation.id,
               },
