@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import type { Automation, AutomationRun } from '@opsmind/database';
 import { AutomationsService } from './automations.service';
 import { CreateAutomationDto } from './dto/create-automation.dto';
+import { UpdateAutomationDto } from './dto/update-automation.dto';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
@@ -38,6 +39,18 @@ export class AutomationsController {
     @Param('automationId') automationId: string,
   ): Promise<Automation> {
     return this.automationsService.findByIdOrThrow(organizationId, automationId);
+  }
+
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Patch(':automationId')
+  update(
+    @Param('organizationId') organizationId: string,
+    @Param('automationId') automationId: string,
+    @CurrentUser() user: { id: string },
+    @Body() dto: UpdateAutomationDto,
+  ): Promise<Automation> {
+    return this.automationsService.update(organizationId, user.id, automationId, dto);
   }
 
   @Get(':automationId/runs')

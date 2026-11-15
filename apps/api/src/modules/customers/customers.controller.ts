@@ -10,9 +10,10 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import type { ActivityLog, Customer } from '@opsmind/database';
+import type { ActivityLog, Customer, Deal } from '@opsmind/database';
 import { CustomersService } from './customers.service';
 import { ActivityService } from '../activity/activity.service';
+import { DealsService } from '../deals/deals.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { ListCustomersQueryDto } from './dto/list-customers-query.dto';
@@ -32,6 +33,7 @@ export class CustomersController {
   constructor(
     private readonly customersService: CustomersService,
     private readonly activityService: ActivityService,
+    private readonly dealsService: DealsService,
   ) {}
 
   @Roles(...WRITE_ROLES)
@@ -91,6 +93,14 @@ export class CustomersController {
     @Param('customerId') customerId: string,
   ): Promise<ActivityLog[]> {
     return this.activityService.listForCustomer(organizationId, customerId);
+  }
+
+  @Get(':customerId/deals')
+  deals(
+    @Param('organizationId') organizationId: string,
+    @Param('customerId') customerId: string,
+  ): Promise<Deal[]> {
+    return this.dealsService.list(organizationId, { customerId });
   }
 
   @Roles(...WRITE_ROLES)

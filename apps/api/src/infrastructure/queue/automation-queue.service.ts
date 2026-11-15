@@ -2,7 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
-import { AUTOMATION_EXECUTION_QUEUE, type AutomationExecutionJobData } from '@opsmind/shared-types';
+import { AUTOMATION_EXECUTION_QUEUE, automationJobId, type AutomationExecutionJobData } from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
 
 /**
@@ -27,11 +27,26 @@ export class AutomationQueueService implements OnModuleDestroy {
     });
     this.queue = new Queue<AutomationExecutionJobData>(AUTOMATION_EXECUTION_QUEUE, {
       connection: this.connection,
+      // Sem isso o Redis acumula pra sempre um registro por job já concluído/
+      // falho — `count` mantém só os N mais recentes de cada (histórico
+      // suficiente pra debug sem crescimento ilimitado de memória).
+      defaultJobOptions: {
+        removeOnComplete: { count: 500 },
+        removeOnFail: { count: 500 },
+      },
     });
   }
 
   enqueue(data: AutomationExecutionJobData): Promise<unknown> {
-    return this.queue.add('execute', data);
+    // `deduplication.id` (não `jobId` — deprecated pra esse fim, ver
+    // types/job-options.d.ts da própria lib) dedup enquanto o job
+    // (automationId, alvo) estiver "em voo": o BullMQ descarta um novo
+    // enqueue do mesmo par em vez de criar um job duplicado, e limpa a
+    // entrada de dedup automaticamente quando o job completa ou falha —
+    // diferente de `jobId`, cuja entrada sobrevive por `removeOnComplete`/
+    // `removeOnFail` (até 500 jobs), o que tornaria o dedup permanente pro
+    // par em vez de só durante a execução em andamento.
+    return this.queue.add('execute', data, { deduplication: { id: automationJobId(data) } });
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -73,9 +73,13 @@ enum AIRequestStatus {
 }
 
 enum AutomationTrigger {
-  // Único trigger do MVP (PRD §17, Fase 5) — mais tipos entram conforme
-  // surgir necessidade real, não especulativamente.
+  // Único trigger do MVP (PRD §17, Fase 5). Os dois seguintes são os
+  // primeiros a entrar conforme necessidade real surgiu (radar de risco do
+  // funil ativo, plano 2026-11-14) — mais tipos entram do mesmo jeito,
+  // nunca especulativamente.
   CUSTOMER_INACTIVE
+  DEAL_STAGE_STALE
+  DEAL_SILENT_FOR
 }
 
 enum AutomationRunStatus {
@@ -86,6 +90,81 @@ enum AutomationRunStatus {
   SKIPPED
 }
 
+enum DocumentStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum ScrapeSourceType {
+  APIFY_GOOGLE_MAPS
+  EXPLORIUM_BUSINESS_SEARCH
+  CAMOFOX_GOOGLE_SEARCH
+  CAMOFOX_REDDIT_SEARCH
+  MANUAL
+}
+
+enum ScrapeJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum LeadStatus {
+  DISCOVERED
+  QUALIFIED
+  DISQUALIFIED
+  OUTREACH_DRAFTED
+  OUTREACH_APPROVED
+  CONTACTED
+  REPLIED
+  CONVERTED
+  LOST
+}
+
+enum OutreachChannel {
+  EMAIL
+  PHONE
+  WHATSAPP
+  LINKEDIN_DM
+  REDDIT_DM
+  INSTAGRAM_DM
+  OTHER
+}
+
+enum OutreachStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+  SENT
+  REPLIED
+}
+
+enum MarketOpportunityStatus {
+  NEW
+  REVIEWING
+  PURSUING
+  DISMISSED
+}
+
+// Distingue fato determinístico (WEBSITE_PROFILER/MANUAL) de inferência de
+// IA (AI_ANALYSIS) por TIPO, não por convenção de nome em String livre —
+// scoreLead() usa isso para nunca contar uma inferência de IA como fato
+// confirmado no cálculo de signalFitPoints.
+enum LeadSignalCollector {
+  WEBSITE_PROFILER
+  AI_ANALYSIS
+  MANUAL
+}
+
+enum SignalCodeStatus {
+  PROPOSED
+  CONFIRMED
+  DEPRECATED
+}
+
 // ── Core tenancy ─────────────────────────────────────────────────────────
 
 model Organization {
@@ -94,24 +173,71 @@ model Organization {
   slug String @unique
   plan String @default("free")
 
-  aiMonthlyBudget   Decimal? @map("ai_monthly_budget") @db.Decimal(10, 2)
+  // Teto de gasto mensal com IA (Anthropic/OpenAI).
+  // Null = sem limite, BudgetService nunca corta (mesma semântica de
+  // scrapingMonthlyBudget abaixo).
+  // IMPORTANTE: até as Tasks 11/12 todo gasto de IA era iniciado por um humano
+  // (chat, /analyze, geração manual de rascunho), então "sem limite" só podia
+  // ser gasto no ritmo de alguém clicando. Isso deixou de valer: o rascunho
+  // automático de outreach (Task 11) e o clustering de Reddit (Task 12) chamam
+  // a IA sozinhos, disparados por scan/fila. Qualquer organização com esses
+  // caminhos ativos DEVE ter este campo configurado.
+  aiMonthlyBudget         Decimal? @map("ai_monthly_budget") @db.Decimal(10, 2)
   // Regra de negócio (PRD §8): "cliente inativo há mais de N dias, configurável
   // por organização, padrão 14" — sem este campo não há onde configurar o N.
-  inactiveAfterDays Int      @default(14) @map("inactive_after_days")
+  inactiveAfterDays       Int      @default(14) @map("inactive_after_days")
+  // Teto de gasto mensal com scraping (Apify/Explorium/Camoufox) — mesmo
+  // espírito de aiMonthlyBudget, mas orçamento separado: os dois consomem
+  // orçamentos de fornecedores distintos e não devem competir pelo mesmo teto.
+  // Null = sem limite, pipeline nunca corta (apps/worker/src/budget.ts:39).
+  // IMPORTANTE: qualquer organização com scans automáticos ativos (Tasks 7/13)
+  // DEVE ter este campo configurado — sem limite = risco de gasto descontrolado
+  // em scraping automático de alto volume.
+  scrapingMonthlyBudget   Decimal? @map("scraping_monthly_budget") @db.Decimal(10, 2)
+  // Texto livre curto descrevendo tom/estilo de outreach, usado como guia
+  // few-shot no prompt de `generate_outreach_message` (Task 10) — sem isso, o
+  // prompt usa a orientação de tom padrão já escrita em OUTREACH_SYSTEM_PROMPT.
+  outreachVoiceGuide      String?  @map("outreach_voice_guide") @db.Text
+  // Endereço físico de correspondência exigido em TODO e-mail de outreach
+  // (CAN-SPAM/EUA: obrigatório por lei, multa até $53k/e-mail; boa prática
+  // mesmo fora dos EUA) — sem isso preenchido, `OutreachService.send()`
+  // recusa enviar (ver comentário em `renderOutreachHtml`). Null só é
+  // aceitável antes da organização configurar isso pela primeira vez.
+  outreachPhysicalAddress String?  @map("outreach_physical_address") @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships    Membership[]
-  invitations    Invitation[]
-  auditLogs      AuditLog[]
-  customers      Customer[]
-  tasks          Task[]
-  activityLogs   ActivityLog[]
-  notifications  Notification[]
-  aiRequests     AIRequest[]
-  automations    Automation[]
-  automationRuns AutomationRun[]
+  memberships           Membership[]
+  invitations           Invitation[]
+  auditLogs             AuditLog[]
+  customers             Customer[]
+  tasks                 Task[]
+  activityLogs          ActivityLog[]
+  notifications         Notification[]
+  aiRequests            AIRequest[]
+  automations           Automation[]
+  automationRuns        AutomationRun[]
+  documents             Document[]
+  documentChunks        DocumentChunk[]
+  serviceOfferings      ServiceOffering[]
+  scrapeJobs            ScrapeJob[]
+  leads                 Lead[]
+  leadEnrichments       LeadEnrichment[]
+  outreachMessages      OutreachMessage[]
+  prospectingTargets    ProspectingTarget[]
+  redditWatchTopics     RedditWatchTopic[]
+  marketOpportunities   MarketOpportunity[]
+  leadSignals           LeadSignal[]
+  signalCodes           SignalCode[]
+  deals                 Deal[]
+  meetings              Meeting[]
+  dealSignatureRequests DealSignatureRequest[]
+  internalNotes         InternalNote[]
+  contracts             Contract[]
+  financialEntries      FinancialEntry[]
+  financialPayments     FinancialPayment[]
+  recurringEntries      RecurringEntry[]
 
   @@map("organizations")
 }
@@ -125,14 +251,20 @@ model User {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  memberships             Membership[]
-  refreshTokens           RefreshToken[]
-  emailVerificationTokens EmailVerificationToken[]
-  sentInvitations         Invitation[]             @relation("InvitedBy")
-  ownedCustomers          Customer[]               @relation("CustomerOwner")
-  assignedTasks           Task[]                   @relation("TaskAssignee")
-  notifications           Notification[]
-  aiRequests              AIRequest[]
+  memberships              Membership[]
+  refreshTokens            RefreshToken[]
+  emailVerificationTokens  EmailVerificationToken[]
+  sentInvitations          Invitation[]             @relation("InvitedBy")
+  ownedCustomers           Customer[]               @relation("CustomerOwner")
+  assignedTasks            Task[]                   @relation("TaskAssignee")
+  notifications            Notification[]
+  aiRequests               AIRequest[]
+  uploadedDocuments        Document[]
+  approvedOutreachMessages OutreachMessage[]        @relation("OutreachApprovedBy")
+  readOutreachMessages     OutreachMessage[]        @relation("OutreachReadBy")
+  authoredInternalNotes    InternalNote[]           @relation("InternalNoteAuthor")
+  dealsOwned               Deal[]                   @relation("DealOwner")
+  assignedLeads            Lead[]                   @relation("LeadAssignee")
 
   @@map("users")
 }
@@ -271,10 +403,20 @@ model Customer {
   createdAt      DateTime       @default(now()) @map("created_at")
   updatedAt      DateTime       @updatedAt @map("updated_at")
 
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  owner        User?         @relation("CustomerOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  tasks        Task[]
-  activityLogs ActivityLog[]
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner            User?            @relation("CustomerOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  tasks            Task[]
+  activityLogs     ActivityLog[]
+  documents        Document[]
+  // Leads convertidos em cliente (Lead.convertedCustomerId) — permite navegar
+  // de um Customer de volta ao(s) Lead(s) de prospecção que o originaram.
+  originLeads      Lead[]
+  deals            Deal[]
+  // Financeiro: registros de dinheiro nunca somem junto com o cliente (Customer
+  // usa soft-delete), por isso as FKs de contrato/lançamento são RESTRICT.
+  contracts        Contract[]
+  financialEntries FinancialEntry[]
+  recurringEntries RecurringEntry[]
 
   @@index([organizationId, status])
   @@index([organizationId, lastActivityAt])
@@ -283,23 +425,27 @@ model Customer {
 }
 
 model Task {
-  id             String         @id @default(uuid())
-  organizationId String         @map("organization_id")
-  customerId     String?        @map("customer_id")
-  title          String
-  description    String?
-  status         TaskStatus     @default(OPEN)
-  assigneeId     String?        @map("assignee_id")
-  dueDate        DateTime?      @map("due_date")
-  completedAt    DateTime?      @map("completed_at")
+  id                String         @id @default(uuid())
+  organizationId    String         @map("organization_id")
+  customerId        String?        @map("customer_id")
+  title             String
+  description       String?
+  status            TaskStatus     @default(OPEN)
+  assigneeId        String?        @map("assignee_id")
+  dueDate           DateTime?      @map("due_date")
+  completedAt       DateTime?      @map("completed_at")
+  // Dedup do scan de lembrete de vencimento do worker
+  // (`task-due-reminder-scan.ts`) — nunca notifica duas vezes a mesma
+  // tarefa vencida; limpo quando `dueDate` muda (`TasksService.update`).
+  dueDateNotifiedAt DateTime?      @map("due_date_notified_at")
   // Ator polimórfico (database-reviewer-review.md §4.2): substitui o
   // `created_by (user|ai|automation)` do PRD §9 por actor_type/actor_id,
   // replicando o padrão já correto de AuditLog — sem FK rígida, o ator pode
   // ser AI/automation, não só um User.
-  actorType      AuditActorType @map("actor_type")
-  actorId        String?        @map("actor_id")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  updatedAt      DateTime       @updatedAt @map("updated_at")
+  actorType         AuditActorType @map("actor_type")
+  actorId           String?        @map("actor_id")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -334,6 +480,184 @@ model ActivityLog {
   @@map("activity_logs")
 }
 
+enum DealStage {
+  QUALIFICATION
+  PROPOSAL
+  NEGOTIATION
+  CONTRACT_SENT
+  WON
+  LOST
+}
+
+// Negociação em andamento com um Customer (PRD original parava em
+// Customer/Task, sem nenhum objeto de "negócio" — ver plano
+// pensando-como-empresa-com-agile-beaver.md). Ponte entre a prospecção
+// (`Lead`, que termina em CONVERTED) e o fechamento de contrato de verdade:
+// estágio, valor esperado e data de fechamento, coisas que `Customer` nunca
+// teve.
+model Deal {
+  id                  String         @id @default(uuid())
+  organizationId      String         @map("organization_id")
+  customerId          String         @map("customer_id")
+  // Ponte "achar -> fechar": rastreia o Lead de prospecção que originou este
+  // Deal, quando aplicável (ver `LeadsService.convertToCustomer`). Nullable
+  // porque um Deal também pode ser criado manualmente para um Customer que
+  // já existia antes deste pipeline.
+  originLeadId        String?        @map("origin_lead_id")
+  title               String
+  stage               DealStage      @default(QUALIFICATION)
+  value               Decimal        @db.Decimal(12, 2)
+  currency            String         @default("BRL")
+  expectedCloseDate   DateTime?      @map("expected_close_date")
+  actualCloseDate     DateTime?      @map("actual_close_date")
+  ownerUserId         String?        @map("owner_user_id")
+  // Obrigatório quando stage = LOST (validado em DealsService.moveStage, não
+  // no schema — mesmo racional de outros campos condicionais no resto deste
+  // arquivo).
+  lostReason          String?        @map("lost_reason")
+  // Minuta gerada por IA (`DealProposalService.generate`) — editável via
+  // `UpdateDealDto.proposalDraft`, nunca escrita diretamente por uma AI
+  // tool (mesma regra de aprovação/edição humana de `OutreachMessage`).
+  proposalDraft       String?        @map("proposal_draft") @db.Text
+  proposalGeneratedAt DateTime?      @map("proposal_generated_at")
+  actorType           AuditActorType @map("actor_type")
+  actorId             String?        @map("actor_id")
+  // Soft-delete (padrão de Customer, não de Lead): um Deal é registro
+  // financeiro/de negociação, nunca apagado de fato, só marcado.
+  deletedAt           DateTime?      @map("deleted_at")
+  // Timestamp de quando o Deal entrou na etapa (`stage`) atual — nunca a
+  // criação do Deal. Atualizado por `DealsService.moveStage` a cada troca
+  // de etapa (task futura); alimenta o radar de risco (dias parado numa
+  // etapa) e o trigger `DEAL_STAGE_STALE`.
+  stageEnteredAt      DateTime       @default(now()) @map("stage_entered_at")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
+
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer          Customer               @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  originLead        Lead?                  @relation(fields: [originLeadId], references: [id], onDelete: SetNull)
+  owner             User?                  @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  meetings          Meeting[]
+  signatureRequests DealSignatureRequest[]
+  internalNotes     InternalNote[]
+  contracts         Contract[]
+  automationRuns    AutomationRun[]
+
+  @@index([organizationId, stage])
+  @@index([organizationId, customerId])
+  @@index([organizationId, expectedCloseDate])
+  @@index([ownerUserId])
+  @@map("deals")
+}
+
+// Colaboração de equipe (plano pensando-como-empresa-com-agile-beaver.md,
+// trilha B — "parar de depender de Slack/WhatsApp pra time discutir um
+// negócio"). Sempre vinculada a EXATAMENTE um Deal OU um Lead, nunca os
+// dois nem nenhum — validado no service (`InternalNotesService`), não aqui
+// (Prisma não expressa XOR entre colunas nullable sem um `@@check` cru, e o
+// resto do schema já resolve esse mesmo tipo de regra condicional no
+// service — ver `Deal.lostReason`).
+model InternalNote {
+  id               String   @id @default(uuid())
+  organizationId   String   @map("organization_id")
+  dealId           String?  @map("deal_id")
+  leadId           String?  @map("lead_id")
+  body             String   @db.Text
+  // Menção por seleção explícita (não parsing de "@nome" em texto livre —
+  // nomes reais têm espaço/acento/homônimos, tornar a menção uma decisão
+  // explícita do autor é mais confiável do que tentar adivinhar). Dispara
+  // uma Notification (`note.mention`) pra cada um, exceto o próprio autor.
+  mentionedUserIds String[] @map("mentioned_user_ids")
+  authorUserId     String   @map("author_user_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deal         Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  author       User         @relation("InternalNoteAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, dealId])
+  @@index([organizationId, leadId])
+  @@map("internal_notes")
+}
+
+enum SignatureRequestStatus {
+  SENT
+  SIGNED
+  DECLINED
+  CANCELED
+}
+
+// Fechamento via assinatura eletrônica (plano
+// pensando-como-empresa-com-agile-beaver.md, trilha A — Proposta em PDF já
+// existia, isso fecha o loop até o contrato assinado). Um Deal pode ter
+// várias tentativas ao longo do tempo (reenvio após recusa, nova minuta) —
+// nunca atualiza uma linha existente, sempre cria uma nova, mesmo racional
+// de nunca sobrescrever `OutreachMessage`/histórico de tentativas.
+model DealSignatureRequest {
+  id                 String                 @id @default(uuid())
+  organizationId     String                 @map("organization_id")
+  dealId             String                 @map("deal_id")
+  // Único provider suportado por ora (Clicksign, foco PT-BR) — coluna
+  // existe desde já para não forçar uma migration de schema no dia em que
+  // um segundo provider for adicionado (ex.: DocuSign para clientes fora do
+  // Brasil).
+  provider           String                 @default("clicksign")
+  externalEnvelopeId String                 @map("external_envelope_id")
+  externalDocumentId String                 @map("external_document_id")
+  status             SignatureRequestStatus @default(SENT)
+  signerName         String                 @map("signer_name")
+  signerEmail        String                 @map("signer_email")
+  // URL assinada do documento final — só populada quando `status = SIGNED`
+  // (webhook `document_closed`, ver `ClicksignWebhookService`).
+  documentUrl        String?                @map("document_url")
+  signedAt           DateTime?              @map("signed_at")
+  canceledAt         DateTime?              @map("canceled_at")
+  actorType          AuditActorType         @map("actor_type")
+  actorId            String?                @map("actor_id")
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deal         Deal         @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, dealId])
+  @@index([externalEnvelopeId])
+  @@map("deal_signature_requests")
+}
+
+// Agenda/reuniões (plano pensando-como-empresa-com-agile-beaver.md, item
+// "lembretes e agenda" do roadmap) — sempre vinculada a um Deal, nunca solta
+// (uma reunião existe no contexto de uma negociação em andamento).
+model Meeting {
+  id                 String         @id @default(uuid())
+  organizationId     String         @map("organization_id")
+  dealId             String         @map("deal_id")
+  title              String
+  scheduledAt        DateTime       @map("scheduled_at")
+  durationMinutes    Int            @default(30) @map("duration_minutes")
+  location           String?
+  notes              String?
+  // Dedup do scan de lembrete de reunião do worker
+  // (`meeting-reminder-scan.ts`) — limpo quando `scheduledAt` muda
+  // (`MeetingsService.update`), mesmo racional de `Task.dueDateNotifiedAt`.
+  reminderNotifiedAt DateTime?      @map("reminder_notified_at")
+  // Cancelamento é soft (nunca deletado) — mantém histórico da negociação.
+  canceledAt         DateTime?      @map("canceled_at")
+  actorType          AuditActorType @map("actor_type")
+  actorId            String?        @map("actor_id")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deal         Deal         @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, dealId])
+  @@index([scheduledAt, reminderNotifiedAt])
+  @@map("meetings")
+}
+
 model Notification {
   id             String    @id @default(uuid())
   organizationId String    @map("organization_id")
@@ -362,7 +686,11 @@ model Notification {
 model AIRequest {
   id             String          @id @default(uuid())
   organizationId String          @map("organization_id")
-  userId         String          @map("user_id")
+  // Nullable (era obrigatório): scans automáticos de prospecção (Task 10)
+  // geram AIRequest sem um humano por trás do pedido — actorType/actorId
+  // carregam quem/o-que disparou, replicando o padrão já usado em
+  // AuditLog/Task/Lead, em vez de forçar um userId artificial.
+  userId         String?         @map("user_id")
   // Agrupa múltiplas mensagens da mesma conversa — nulo no MVP (cada chat()
   // é uma troca isolada); passa a ser preenchido quando a UI de chat
   // (apps/web) mantiver uma sessão entre mensagens.
@@ -377,10 +705,12 @@ model AIRequest {
   estimatedCost  Decimal         @default(0) @map("estimated_cost") @db.Decimal(10, 4)
   status         AIRequestStatus
   errorMessage   String?         @map("error_message")
+  actorType      AuditActorType  @default(USER) @map("actor_type")
+  actorId        String?         @map("actor_id")
   createdAt      DateTime        @default(now()) @map("created_at")
 
   organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
   toolCalls    AIRequestToolCall[]
 
   @@index([organizationId, createdAt])
@@ -447,6 +777,11 @@ model AutomationRun {
   organizationId String              @map("organization_id")
   automationId   String              @map("automation_id")
   customerId     String?             @map("customer_id")
+  // Preenchido só pelos triggers de Deal (`DEAL_STAGE_STALE`/
+  // `DEAL_SILENT_FOR`) — análogo a `customerId` acima, mas para o radar de
+  // risco do funil ativo (plano 2026-11-14), que faz dedup por Deal em vez
+  // de por Customer.
+  dealId         String?             @map("deal_id")
   status         AutomationRunStatus
   actorType      AuditActorType      @map("actor_type")
   actorId        String?             @map("actor_id")
@@ -456,8 +791,738 @@ model AutomationRun {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   automation   Automation   @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  deal         Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, automationId, createdAt])
   @@index([automationId, customerId, status])
+  @@index([automationId, dealId, status])
   @@map("automation_runs")
+}
+
+// ── Documentos + RAG (Fase 4) ────────────────────────────────────────────
+// PRD §17, critério de aceitação: "perguntar sobre o conteúdo de um contrato
+// enviado retorna resposta correta citando o trecho/documento de origem."
+// Pipeline (PRD §13): upload → extração de texto (pdf-parse) → chunking
+// (parágrafo, com fallback de janela fixa + overlap para parágrafos longos)
+// → embeddings (OpenAI, 1536 dims) → DocumentChunk → busca por similaridade
+// de cosseno no momento da pergunta (tool `search_documents`) → resposta com
+// citação. Roda síncrono dentro do próprio request de upload — o worker
+// BullMQ (fila `document-processing`, seção 12 do PRD) só chega na Fase 5;
+// antecipar essa infra aqui seria puxar escopo de fase errada.
+
+model Document {
+  id               String         @id @default(uuid())
+  organizationId   String         @map("organization_id")
+  customerId       String?        @map("customer_id")
+  filename         String
+  mimeType         String         @map("mime_type")
+  sizeBytes        Int            @map("size_bytes")
+  // Nome espelha o esboço do PRD §12 ("storage_url"), mesmo o provider
+  // `local` (dev) guardando um caminho relativo, não uma URL de verdade —
+  // quando `gcs` existir (Fase 6), aqui vai a URL assinada. Nunca é servido
+  // como link direto: download sempre passa por
+  // GET .../documents/:id/download, atrás do TenantGuard.
+  storageUrl       String         @map("storage_url")
+  status           DocumentStatus @default(PROCESSING)
+  errorMessage     String?        @map("error_message")
+  uploadedByUserId String         @map("uploaded_by_user_id")
+  // Soft-delete (mesmo padrão de Customer) — preserva trilha de auditoria;
+  // não apaga o arquivo físico nem os chunks imediatamente.
+  deletedAt        DateTime?      @map("deleted_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  uploadedBy   User            @relation(fields: [uploadedByUserId], references: [id])
+  chunks       DocumentChunk[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+  @@map("documents")
+}
+
+// `embedding` é `Unsupported("vector(1536)")` — Prisma não tem tipo nativo
+// pra pgvector; a coluna e seu índice HNSW são criados via SQL cru na
+// migration, e só são lidos/escritos via $queryRaw/$executeRaw
+// (DocumentsService/SearchDocumentsTool), nunca pelo client gerado.
+// `organizationId` denormalizado (não só `documentId`) por decisão já
+// tomada na Fase 1 — ver comentário no topo deste arquivo — porque a busca
+// por similaridade roda direto nesta tabela e precisa filtrar por tenant
+// sem JOIN (RLS aplicada diretamente aqui, não herdada de Document).
+model DocumentChunk {
+  id             String                       @id @default(uuid())
+  organizationId String                       @map("organization_id")
+  documentId     String                       @map("document_id")
+  chunkIndex     Int                          @map("chunk_index")
+  content        String
+  embedding      Unsupported("vector(1536)")?
+  createdAt      DateTime                     @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, chunkIndex])
+  @@map("document_chunks")
+}
+
+// ── Leads & Prospecting ──────────────────────────────────────────────────
+// Prospecção outbound: ScrapeJob dispara uma busca (Apify Google Maps,
+// Explorium, ou Camoufox como fallback de scraping direto) que produz Leads;
+// cada Lead pode ser enriquecido (LeadEnrichment), pontuado contra um
+// ServiceOffering da organização, e vira rascunho de OutreachMessage
+// aprovado por um humano antes de ser enviado — nunca enviado
+// automaticamente sem aprovação (status DRAFT -> APPROVED é sempre uma ação
+// humana).
+
+model ServiceOffering {
+  id               String   @id @default(uuid())
+  organizationId   String   @map("organization_id")
+  name             String
+  description      String?
+  signals          String[] @default([])
+  targetIndustries String[] @default([]) @map("target_industries")
+  minEmployees     Int?     @map("min_employees")
+  maxEmployees     Int?     @map("max_employees")
+  minRevenueUsd    Int?     @map("min_revenue_usd")
+  maxRevenueUsd    Int?     @map("max_revenue_usd")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  suggestedForLeads   Lead[]              @relation("SuggestedOffering")
+  outreachMessages    OutreachMessage[]
+  marketOpportunities MarketOpportunity[]
+  defaultForSignalCodes SignalCode[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("service_offerings")
+}
+
+model ScrapeJob {
+  id                 String           @id @default(uuid())
+  organizationId     String           @map("organization_id")
+  sourceType         ScrapeSourceType @map("source_type")
+  city               String
+  state              String
+  businessType       String           @map("business_type")
+  onlyWithoutWebsite Boolean          @default(true) @map("only_without_website")
+  limit              Int              @default(50)
+  status             ScrapeJobStatus  @default(QUEUED)
+  leadsFound         Int              @default(0) @map("leads_found")
+  errorMessage       String?          @map("error_message")
+  actorType          AuditActorType   @map("actor_type")
+  actorId            String?          @map("actor_id")
+  startedAt          DateTime?        @map("started_at")
+  finishedAt         DateTime?        @map("finished_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  // Preenchido só quando este job foi criado AUTOMATICAMENTE como fallback
+  // Camofox de um ScrapeJob Apify que não cobriu a região/tipo de negócio
+  // (ver apps/worker/src/lead-scrape-processor.ts, maybeEnqueueApifyFallback).
+  // Serve tanto pra idempotência (nunca criar dois fallbacks pro mesmo job
+  // origem, mesmo em retry do BullMQ) quanto pra nunca encadear um SEGUNDO
+  // fallback a partir de um fallback.
+  fallbackOfScrapeJobId String?     @map("fallback_of_scrape_job_id")
+  fallbackOfScrapeJob   ScrapeJob?  @relation("ScrapeJobFallback", fields: [fallbackOfScrapeJobId], references: [id], onDelete: SetNull)
+  fallbackScrapeJobs    ScrapeJob[] @relation("ScrapeJobFallback")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads        Lead[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+  @@index([fallbackOfScrapeJobId])
+  @@map("scrape_jobs")
+}
+
+model Lead {
+  id                  String           @id @default(uuid())
+  organizationId      String           @map("organization_id")
+  scrapeJobId         String?          @map("scrape_job_id")
+  sourceType          ScrapeSourceType @default(MANUAL) @map("source_type")
+  name                String
+  address             String?
+  city                String?
+  state               String?
+  phone               String?
+  email               String?
+  website             String?
+  googleCategory      String?          @map("google_category")
+  rating              Decimal?         @db.Decimal(2, 1)
+  reviewCount         Int?             @map("review_count")
+  placeId             String?          @map("place_id")
+  // Texto livre usado pelo fallback de keyword-match do fonte Camoufox —
+  // scoring textual sobre leads não-estruturados quando não há campos
+  // normalizados suficientes (ex.: Camoufox não devolve google_category).
+  rawContent          String?          @map("raw_content") @db.Text
+  rawSnapshot         Json?            @map("raw_snapshot")
+  status              LeadStatus       @default(DISCOVERED)
+  score               Int?
+  scoreBreakdown      Json?            @map("score_breakdown")
+  suggestedOfferingId String?          @map("suggested_offering_id")
+  convertedCustomerId String?          @map("converted_customer_id")
+  // Atribuição de dono (plano pensando-como-empresa-com-agile-beaver.md,
+  // trilha B — roteamento) — round-robin por carga (`pickRoundRobinAssignee`,
+  // packages/shared-types) na criação do Lead, nunca automático depois: uma
+  // reatribuição manual sempre vence e nunca é sobrescrita por um scan
+  // futuro.
+  assignedUserId      String?          @map("assigned_user_id")
+  // Número confirmado como WhatsApp — nem sempre igual a `phone`. Promovido a
+  // coluna própria (não fica só dentro de `socialLinks`) porque é o canal de
+  // maior prioridade no outreach (Task 10/11) e precisa ser filtrável direto
+  // (`hasContactMethod`, Task 4), sem parsear JSON.
+  // SÓ o número (dígitos), NUNCA um link `wa.me`/`api.whatsapp.com`: o link
+  // completo fica em `socialLinks` como entrada de plataforma WHATSAPP. Quem
+  // ingere extrai os dígitos do link antes de gravar aqui
+  // (`extractWhatsappPhone`, apps/worker/src/lead-scrape-processor.ts) —
+  // `OutreachService` injeta este valor no prompt como "Contato WhatsApp:
+  // <número>" e `CreateLeadDto` limita a 40 caracteres.
+  whatsapp            String?          @map("whatsapp")
+  // Candidato (NÃO confirmado) a WhatsApp — true quando a fonte estruturada
+  // (Apify Google Maps/Explorium) devolveu telefone E confirmou ausência de
+  // site (`websiteConfirmedAbsent`, apps/worker/src/lead-scrape-processor.ts).
+  // No Brasil, o telefone da ficha do Google costuma ser o mesmo número do
+  // WhatsApp Business, mas isto nunca foi verificado de fato — é só um sinal
+  // de priorização/filtro, diferente de `whatsapp` acima (que É confirmado
+  // por descoberta real). Sempre recalculado a cada upsert (derivado do
+  // candidato da passada atual), nunca preservado via `undefined` como
+  // `whatsapp`/`socialLinks` — um rescan sem telefone/sem essa confirmação
+  // deve zerar o sinal, não manter um valor desatualizado.
+  isWhatsappCandidate Boolean          @default(false) @map("is_whatsapp_candidate")
+  // Nome do dono/responsável, quando identificável — opcional, sem tensão
+  // com a flexibilidade de `socialLinks`.
+  contactName         String?          @map("contact_name")
+  // Perfis sociais descobertos por enrichment (ex.: Instagram/LinkedIn) —
+  // continua flexível (JSON livre) porque a forma varia por fonte, "o que for
+  // encontrado" — não uma lista fixa de colunas por rede.
+  socialLinks         Json?            @map("social_links")
+  // Opt-out de outreach (CAN-SPAM/LGPD) — ortogonal a `status` (pipeline de
+  // venda): um lead pode pedir pra não ser mais contatado em qualquer etapa.
+  // Setado manualmente por um humano (`LeadsController POST :leadId/unsubscribe`)
+  // depois de ver um pedido de descadastro (reply de e-mail, mensagem de
+  // WhatsApp) — nenhum fluxo automático seta isto ainda, ver comentário de
+  // `LeadsService.unsubscribe`. Checado por `OutreachService.send()` ANTES de
+  // todo envio real; nunca apagado depois de setado.
+  unsubscribedAt      DateTime?        @map("unsubscribed_at")
+  actorType           AuditActorType   @map("actor_type")
+  actorId             String?          @map("actor_id")
+  discoveredAt        DateTime         @default(now()) @map("discovered_at")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  scrapeJob         ScrapeJob?        @relation(fields: [scrapeJobId], references: [id], onDelete: SetNull)
+  suggestedOffering ServiceOffering?  @relation("SuggestedOffering", fields: [suggestedOfferingId], references: [id], onDelete: SetNull)
+  convertedCustomer Customer?         @relation(fields: [convertedCustomerId], references: [id], onDelete: SetNull)
+  assignedTo        User?             @relation("LeadAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  enrichments       LeadEnrichment[]
+  outreachMessages  OutreachMessage[]
+  signals           LeadSignal[]
+  deals             Deal[]
+  internalNotes     InternalNote[]
+
+  @@unique([organizationId, placeId])
+  @@index([organizationId, status])
+  @@index([organizationId, city, state])
+  @@index([organizationId, discoveredAt])
+  @@index([scrapeJobId])
+  @@index([convertedCustomerId])
+  @@index([organizationId, assignedUserId])
+  @@map("leads")
+}
+
+model LeadEnrichment {
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
+  leadId         String         @map("lead_id")
+  type           String
+  data           Json
+  sourceUrl      String?        @map("source_url")
+  actorType      AuditActorType @map("actor_type")
+  actorId        String?        @map("actor_id")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, leadId])
+  @@map("lead_enrichments")
+}
+
+model OutreachMessage {
+  id                 String          @id @default(uuid())
+  organizationId     String          @map("organization_id")
+  leadId             String          @map("lead_id")
+  serviceOfferingId  String?         @map("service_offering_id")
+  channel            OutreachChannel
+  subject            String?
+  body               String          @db.Text
+  evidenceQuotes     Json            @map("evidence_quotes")
+  status             OutreachStatus  @default(DRAFT)
+  generatedByModel   String?         @map("generated_by_model")
+  aiRequestId        String?         @map("ai_request_id")
+  approvedByUserId   String?         @map("approved_by_user_id")
+  approvedAt         DateTime?       @map("approved_at")
+  rejectedReason     String?         @map("rejected_reason")
+  sentAt             DateTime?       @map("sent_at")
+  repliedAt          DateTime?       @map("replied_at")
+  // Id retornado pelo Resend no envio real (`OutreachService.send`) —
+  // correlaciona uma resposta recebida via webhook inbound de volta a esta
+  // linha, sem adivinhar organização/lead por endereço de email (evita
+  // ambiguidade cross-tenant). Ver migration `outreach_reply_tracking`.
+  providerMessageId  String?         @map("provider_message_id")
+  // Dedup do scan de follow-up do worker (`outreach-followup-scan.ts`) —
+  // nunca notifica duas vezes a mesma mensagem sem resposta.
+  followUpNotifiedAt DateTime?       @map("follow_up_notified_at")
+  // Leitura COMPARTILHADA de equipe (plano
+  // pensando-como-empresa-com-agile-beaver.md, trilha B — inbox
+  // compartilhada), não por usuário: uma vez que alguém do time marca como
+  // lida, fica lida pra todo mundo — mesmo espírito de uma caixa de entrada
+  // compartilhada de verdade, deliberadamente diferente de
+  // `Notification.readAt` (que é por usuário). `readByUserId` só registra
+  // quem foi.
+  readAt             DateTime?       @map("read_at")
+  readByUserId       String?         @map("read_by_user_id")
+  actorType          AuditActorType  @map("actor_type")
+  actorId            String?         @map("actor_id")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead            Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  serviceOffering ServiceOffering? @relation(fields: [serviceOfferingId], references: [id], onDelete: SetNull)
+  approvedBy      User?            @relation("OutreachApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  readBy          User?            @relation("OutreachReadBy", fields: [readByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@index([leadId])
+  @@index([status, sentAt])
+  @@index([organizationId, status, readAt])
+  @@map("outreach_messages")
+}
+
+// Alvo de prospecção recorrente (Task 6/7/8): em vez de o usuário disparar um
+// ScrapeJob manualmente toda vez, cadastra "cidade/estado/tipo de negócio" uma
+// vez e o worker re-executa a busca periodicamente (respeitando cooldownDays,
+// pra não reprocessar a mesma área toda hora).
+model ProspectingTarget {
+  id                 String           @id @default(uuid())
+  organizationId     String           @map("organization_id")
+  city               String
+  state              String
+  businessType       String           @map("business_type")
+  sourceType         ScrapeSourceType @default(APIFY_GOOGLE_MAPS) @map("source_type")
+  onlyWithoutWebsite Boolean          @default(true) @map("only_without_website")
+  limit              Int              @default(50)
+  isActive           Boolean          @default(true) @map("is_active")
+  cooldownDays       Int              @default(7) @map("cooldown_days")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, city, state, businessType, sourceType])
+  @@index([organizationId, isActive])
+  @@map("prospecting_targets")
+}
+
+// Termo/subreddit monitorado (Task 12/13/14) — a partir daqui o worker busca
+// menções recorrentes de um problema e agrupa em MarketOpportunity.
+model RedditWatchTopic {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  query          String
+  subreddit      String?
+  isActive       Boolean   @default(true) @map("is_active")
+  // Histórico da última tentativa de scan (`scanRedditMiningTopics`,
+  // apps/worker/src/reddit-mining-scan.ts) — sem isso o monitoramento parecia
+  // "não funcionar" silenciosamente sempre que o Camofox estivesse
+  // indisponível/mal configurado ou o orçamento de scraping estourado: nada
+  // no banco/UI distinguia "nunca rodou", "rodou e não achou nada" e "rodou
+  // e falhou". `lastScanStatus` é 'OK' | 'ERROR' | 'SKIPPED_BUDGET' (não é
+  // enum Prisma — mesmo padrão de texto livre curto que outros status
+  // "internos" deste schema, evita migration extra pra adicionar um valor).
+  lastScannedAt  DateTime? @map("last_scanned_at")
+  lastScanStatus String?   @map("last_scan_status")
+  lastScanError  String?   @map("last_scan_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, isActive])
+  @@map("reddit_watch_topics")
+}
+
+// Cluster de menções recorrentes de um mesmo problema, descoberto a partir de
+// RedditWatchTopic — um sinal de demanda de mercado ainda não atendida.
+model MarketOpportunity {
+  id                  String                  @id @default(uuid())
+  organizationId      String                  @map("organization_id")
+  title               String
+  // Chave de dedup estável (ex.: slug do label do cluster) — `title` sozinho
+  // não serve pra dedup porque é texto gerado por IA e varia a cada execução,
+  // mesmo quando o cluster de menções é essencialmente o mesmo problema.
+  topicKey            String                  @map("topic_key")
+  problemDescription  String                  @map("problem_description") @db.Text
+  mentionCount        Int                     @default(0) @map("mention_count")
+  sourceUrls          String[]                @default([]) @map("source_urls")
+  sampleQuotes        Json                    @map("sample_quotes")
+  status              MarketOpportunityStatus @default(NEW)
+  suggestedOfferingId String?                 @map("suggested_offering_id")
+  discoveredAt        DateTime                @default(now()) @map("discovered_at")
+  createdAt           DateTime                @default(now()) @map("created_at")
+  updatedAt           DateTime                @updatedAt @map("updated_at")
+
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  suggestedOffering ServiceOffering? @relation(fields: [suggestedOfferingId], references: [id], onDelete: SetNull)
+  leadSignals       LeadSignal[]
+
+  @@unique([organizationId, topicKey])
+  @@index([organizationId, status])
+  @@map("market_opportunities")
+}
+
+// Sinal estruturado de investigação (observação, não enriquecimento
+// genérico): cada linha é um fato sobre o lead, nunca uma coluna — permite
+// adicionar um tipo de sinal novo sem migration (basta um SignalCode novo) e
+// preserva histórico entre execuções do profiler. Inspirado no modelo de
+// observações do Harvey (ethanplusai/harvey, MIT), reconstruído nativamente
+// — ver docs/planning/2026-11-06-harvey-inteligencia-comercial.md.
+model LeadSignal {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  leadId         String              @map("lead_id")
+  signalCode     String              @map("signal_code")
+  value          String?
+  // 0.00–1.00, sempre atribuída por regra fixa do coletor (nunca um float
+  // livre gerado por IA) — mantém o scoring 100% auditável.
+  confidence     Decimal             @db.Decimal(3, 2)
+  collector      LeadSignalCollector
+  evidenceUrl    String?             @map("evidence_url")
+  // Trecho MÍNIMO que bateu a extração, nunca o texto inteiro da página —
+  // minimização de dado pessoal (PRD-v2 §9.1): truncado na extração (ver
+  // MAX_EVIDENCE_QUOTE_LENGTH em signal-extractors.ts), não cortado depois
+  // de já ter guardado tudo.
+  evidenceQuote  String?             @map("evidence_quote")
+  // Base legal de tratamento (PRD-v2 §9.1) — o profiler só toca o site
+  // público da própria empresa, então o default cobre o caso normal.
+  collectionBasis String             @default("dado_publico") @map("collection_basis")
+  // Agrupa todos os sinais de uma mesma execução do profiler — junto com o
+  // @@unique abaixo, garante que reprocessar a MESMA execução nunca duplica,
+  // enquanto execuções diferentes (runId novo) preservam histórico.
+  runId          String              @map("run_id")
+  observedAt     DateTime            @default(now()) @map("observed_at")
+  marketOpportunityId String?        @map("market_opportunity_id")
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead              Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  marketOpportunity MarketOpportunity? @relation(fields: [marketOpportunityId], references: [id], onDelete: SetNull)
+  // FK real (não só convenção) contra SignalCode.code — rejeita na hora
+  // qualquer INSERT com um signal_code não cadastrado, sem precisar de
+  // trigger (este projeto não tem nenhum): a integridade referencial padrão
+  // do Postgres já cobre "código precisa existir". `onDelete: Restrict`
+  // porque um SignalCode com LeadSignal vinculado nunca deveria ser
+  // apagado — o ciclo de vida é DEPRECATED, nunca DELETE (ver SignalCode).
+  // O que uma FK não cobre (rejeitar um código `DEPRECATED` especificamente,
+  // só "existe ou não existe") continua sendo checado em código de
+  // aplicação, no único caminho de escrita (website-profiler-processor.ts).
+  signalCodeRef     SignalCode         @relation(fields: [signalCode], references: [code], onDelete: Restrict)
+
+  @@unique([leadId, signalCode, runId])
+  @@index([organizationId, leadId])
+  @@index([organizationId, signalCode])
+  @@map("lead_signals")
+}
+
+// Vocabulário governado de signalCode — nenhum valor de LeadSignal.signalCode
+// deve existir fora desta tabela. A validação acontece em código de
+// aplicação, no único caminho de escrita (`LeadSignalsService.record()`),
+// não em trigger de banco — este projeto não tem precedente de trigger (ver
+// seção "Revisão crítica" de docs/planning/2026-11-06-harvey-inteligencia-comercial.md);
+// fica como hardening futuro, não bloqueante.
+// organizationId nulo = código global, semeado por migration, visível para
+// toda organização (ver exceção documentada na política de RLS desta
+// tabela); preenchido = proposto por uma organização específica, nunca
+// CONFIRMED/global automaticamente.
+model SignalCode {
+  code                     String           @id
+  organizationId           String?          @map("organization_id")
+  label                    String
+  category                 String
+  defaultServiceOfferingId String?          @map("default_service_offering_id")
+  status                   SignalCodeStatus @default(PROPOSED)
+  createdAt                DateTime         @default(now()) @map("created_at")
+
+  organization           Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  defaultServiceOffering ServiceOffering? @relation(fields: [defaultServiceOfferingId], references: [id], onDelete: SetNull)
+  leadSignals            LeadSignal[]
+
+  @@index([organizationId])
+  @@map("signal_codes")
+}
+
+// ── Financeiro ───────────────────────────────────────────────────────────
+// Módulo financeiro integrado ao CRM (Customer -> Deal -> Contract ->
+// FinancialEntry -> FinancialPayment). Decisões que valem para as quatro
+// tabelas abaixo (detalhes e raciocínio na migration
+// 20261106120000_finance_module):
+//
+//  1. DINHEIRO EM CENTAVOS INTEIROS (`*_cents`, Int) — nunca Decimal/float.
+//     Soma exata, serialização JSON segura (Decimal vira string). Teto de
+//     ~R$ 21,4 milhões por lançamento, folgado para uma operação deste porte.
+//  2. NADA É APAGADO. Lançamento é CANCELADO (status + motivo), pagamento é
+//     ESTORNADO (`reversed_at`). `delete` em linha de dinheiro reescreve o
+//     passado — por isso também as FKs para Customer são RESTRICT.
+//  3. CONTRATADO != FATURADO != RECEBIDO. Contract guarda o que foi
+//     combinado; FinancialEntry (status PLANNED/PENDING...) o que foi/será
+//     cobrado; FinancialPayment o dinheiro que realmente entrou/saiu. Os
+//     relatórios nunca misturam as três coisas.
+//  4. "ATRASADO" É DERIVADO, nunca gravado: vencimento < hoje e ainda não
+//     quitado. Um status gravado ficaria errado na virada do dia sem job.
+//  5. DATAS DE NEGÓCIO SÃO `DATE` (sem hora/fuso): vencimento e pagamento
+//     são dias do calendário brasileiro, não instantes.
+
+enum FinancialDirection {
+  INCOME
+  EXPENSE
+}
+
+// Dono do lançamento: empresa (CNPJ) ou pessoa física. Default BUSINESS —
+// todo o histórico existente antes deste campo é da empresa. Ver
+// FinancialScope em packages/shared-types/src/finance.ts.
+enum FinancialScope {
+  BUSINESS
+  PERSONAL
+}
+
+// Uma lista só para entradas e saídas; a coerência direção <-> categoria é
+// validada no service (packages/shared-types/src/finance.ts, CATEGORY_DIRECTION).
+enum FinancialCategory {
+  // Receitas
+  IMPLEMENTATION
+  PROJECT
+  DEVELOPMENT
+  CONSULTING
+  MONTHLY_FEE
+  SAAS
+  RECURRING_CONTRACT
+  ADDITIONAL_SERVICE
+  OTHER_INCOME
+  PRODUCT_SALE
+  PERSONAL_ASSET_SALE
+  // Despesas
+  INFRASTRUCTURE
+  DOMAINS
+  APIS
+  AI
+  WHATSAPP
+  TOOLS
+  MARKETING
+  TAXES
+  SUPPLIERS
+  OPERATIONAL
+  OTHER_EXPENSE
+}
+
+// PLANNED = previsto (ainda não cobrado/emitido); PENDING = cobrado, nada
+// recebido; PARTIAL = parte quitada; PAID = quitado; CANCELLED = anulado.
+// OVERDUE não existe aqui de propósito (ver decisão 4 acima).
+enum FinancialEntryStatus {
+  PLANNED
+  PENDING
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+// Moeda estrangeira nominal de uma despesa/receita cotada fora do real (ex.:
+// assinatura cobrada em USD). Nunca inclui BRL — BRL é o padrão implícito de
+// amountCents, "estrangeira" só existe quando é de fato outra moeda. Apenas
+// USD por ora; estende-se com ALTER TYPE ... ADD VALUE se precisar de outra.
+enum FinancialCurrency {
+  USD
+}
+
+enum ContractBilling {
+  ONE_TIME
+  MONTHLY
+}
+
+enum ContractStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+// O que foi combinado com o cliente (receita CONTRATADA) — também faz o
+// papel de "projeto" na rentabilidade: cada contrato é uma frente de
+// trabalho com receitas e custos próprios.
+model Contract {
+  id             String            @id @default(uuid())
+  organizationId String            @map("organization_id")
+  customerId     String            @map("customer_id")
+  // Ponte "ganhar -> faturar": Deal que originou o contrato, quando houver.
+  dealId         String?           @map("deal_id")
+  title          String
+  // Sempre uma categoria de RECEITA (validado no service).
+  category       FinancialCategory
+  billing        ContractBilling
+  // ONE_TIME: valor total do contrato. MONTHLY: valor de cada mensalidade.
+  valueCents     Int               @map("value_cents")
+  startDate      DateTime          @map("start_date") @db.Date
+  // Nulo em MONTHLY = vigência indeterminada.
+  endDate        DateTime?         @map("end_date") @db.Date
+  // Dia do mês da cobrança (1-31; dia inexistente cai no último dia do mês).
+  billingDay     Int?              @map("billing_day")
+  status         ContractStatus    @default(ACTIVE)
+  notes          String?           @db.Text
+  actorType      AuditActorType    @map("actor_type")
+  actorId        String?           @map("actor_id")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  deal             Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  entries          FinancialEntry[]
+  recurringEntries RecurringEntry[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+  @@index([dealId])
+  @@map("contracts")
+}
+
+// MOLDE de lançamento que se repete todo mês (mensalidade, VPS, domínio).
+// Nunca movimenta dinheiro: gera FinancialEntry PENDING, idempotente por
+// (recurring_entry_id, reference_month) — ver unique em FinancialEntry.
+model RecurringEntry {
+  id                 String             @id @default(uuid())
+  organizationId     String             @map("organization_id")
+  direction          FinancialDirection
+  category           FinancialCategory
+  scope              FinancialScope     @default(BUSINESS)
+  description        String
+  supplierName       String?            @map("supplier_name")
+  amountCents        Int                @map("amount_cents")
+  // Taxas/custos de cada lançamento gerado (só faz sentido em receitas).
+  feesCents          Int                @default(0) @map("fees_cents")
+  // Valor nominal de referência em moeda estrangeira (ex.: Railway = US$
+  // 5,00/mês). Só informativo: amountCents continua sendo a estimativa em
+  // reais usada para gerar os lançamentos — a cotação/IOF reais de cada mês
+  // ficam em FinancialEntry, nunca aqui (variam mês a mês, o molde não).
+  foreignCurrency    FinancialCurrency? @map("foreign_currency")
+  foreignAmountCents Int?               @map("foreign_amount_cents")
+  dayOfMonth         Int                @map("day_of_month")
+  // 'YYYY-MM' — primeiro e (opcional) último mês de geração.
+  startMonth         String             @map("start_month")
+  endMonth           String?            @map("end_month")
+  active             Boolean            @default(true)
+  customerId         String?            @map("customer_id")
+  contractId         String?            @map("contract_id")
+  actorType          AuditActorType     @map("actor_type")
+  actorId            String?            @map("actor_id")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contract     Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  entries      FinancialEntry[]
+
+  @@index([organizationId, active])
+  @@map("recurring_entries")
+}
+
+// Conta a receber (INCOME) ou a pagar (EXPENSE) — e a receita/despesa
+// FATURADA. O dinheiro que de fato entrou/saiu está em FinancialPayment.
+model FinancialEntry {
+  id                 String               @id @default(uuid())
+  organizationId     String               @map("organization_id")
+  direction          FinancialDirection
+  category           FinancialCategory
+  scope              FinancialScope       @default(BUSINESS)
+  description        String
+  // Fornecedor (despesas); nulo em receitas.
+  supplierName       String?              @map("supplier_name")
+  customerId         String?              @map("customer_id")
+  contractId         String?              @map("contract_id")
+  recurringEntryId   String?              @map("recurring_entry_id")
+  // 'YYYY-MM' do lançamento gerado por molde — chave de idempotência.
+  referenceMonth     String?              @map("reference_month")
+  // Valor bruto cobrado.
+  amountCents        Int                  @map("amount_cents")
+  // Taxas e custos de recebimento (gateway, imposto retido...). Reconhecidos
+  // no resultado quando o lançamento é totalmente quitado (`settled_at`).
+  feesCents          Int                  @default(0) @map("fees_cents")
+  // Valor nominal em moeda estrangeira deste lançamento específico (herdado
+  // do molde na geração, ou informado manualmente num lançamento avulso).
+  foreignCurrency    FinancialCurrency?   @map("foreign_currency")
+  foreignAmountCents Int?                 @map("foreign_amount_cents")
+  // Cotação do dia e IOF reais — preenchidos quando o usuário reconcilia
+  // este mês contra e-mail/extrato (nunca calculados automaticamente).
+  exchangeRate       Decimal?             @map("exchange_rate") @db.Decimal(10, 4)
+  iofCents           Int?                 @map("iof_cents")
+  // Soma dos pagamentos não estornados — denormalizado e mantido na MESMA
+  // transação que grava/estorna o pagamento (a fonte da verdade continua
+  // sendo financial_payments).
+  paidCents          Int                  @default(0) @map("paid_cents")
+  status             FinancialEntryStatus @default(PENDING)
+  issueDate          DateTime             @map("issue_date") @db.Date
+  dueDate            DateTime             @map("due_date") @db.Date
+  // Dia em que paid_cents alcançou amount_cents; nulo enquanto em aberto.
+  settledAt          DateTime?            @map("settled_at") @db.Date
+  cancelledAt        DateTime?            @map("cancelled_at")
+  cancelReason       String?              @map("cancel_reason")
+  notes              String?              @db.Text
+  actorType          AuditActorType       @map("actor_type")
+  actorId            String?              @map("actor_id")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer?          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contract       Contract?          @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  recurringEntry RecurringEntry?    @relation(fields: [recurringEntryId], references: [id], onDelete: SetNull)
+  payments       FinancialPayment[]
+
+  // Idempotência do gerador de recorrência: o mesmo molde nunca gera dois
+  // lançamentos para o mesmo mês (NULLs são distintos em Postgres, então
+  // lançamentos avulsos não colidem).
+  @@unique([recurringEntryId, referenceMonth])
+  @@index([organizationId, direction, status])
+  @@index([organizationId, scope])
+  @@index([organizationId, dueDate])
+  @@index([organizationId, customerId])
+  @@index([organizationId, contractId])
+  @@map("financial_entries")
+}
+
+// Dinheiro que efetivamente entrou (INCOME) ou saiu (EXPENSE). Parcial é só
+// mais de uma linha para o mesmo lançamento. Estorno marca `reversed_at`.
+model FinancialPayment {
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
+  entryId        String         @map("entry_id")
+  amountCents    Int            @map("amount_cents")
+  paidAt         DateTime       @map("paid_at") @db.Date
+  method         String?
+  note           String?
+  reversedAt     DateTime?      @map("reversed_at")
+  reverseReason  String?        @map("reverse_reason")
+  actorType      AuditActorType @map("actor_type")
+  actorId        String?        @map("actor_id")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entry        FinancialEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, paidAt])
+  @@index([entryId])
+  @@map("financial_payments")
 }

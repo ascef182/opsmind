@@ -30,8 +30,12 @@ function buildDeps() {
     aIRequest: { create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }) },
     aIRequestToolCall: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
-  const prisma = {
-    runInTransaction: jest.fn((fn: (tx: typeof txMock) => unknown) => fn(txMock)),
+  const prismaOutOfBand = {
+    // Ver comentário em `PrismaOutOfBandService`: `persistRequest` precisa
+    // escrever fora da transação da request pra um `AIRequest`
+    // ERROR/BUDGET_EXCEEDED sobreviver ao rollback quando `chat()` relança o
+    // erro logo depois. Mock simplificado invoca `fn` com o mesmo `txMock`.
+    runOutsideTransaction: jest.fn((_organizationId: string, fn: (tx: typeof txMock) => unknown) => fn(txMock)),
   };
 
   const actor = { organizationId: 'org-1', userId: 'user-1', role: 'MEMBER' as const };
@@ -42,7 +46,7 @@ function buildDeps() {
     budgetService as never,
     organizationsService as never,
     auditService as never,
-    prisma as never,
+    prismaOutOfBand as never,
   );
 
   return { service, gateway, searchCustomersTool, budgetService, organizationsService, auditService, txMock, actor };
@@ -184,6 +188,30 @@ describe('AiService', () => {
     expect(txMock.aIRequest.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'ERROR', errorMessage: 'Anthropic API indisponível' }),
+      }),
+    );
+  });
+
+  it('grava o AIRequest com o modelo que a API de fato respondeu, não uma constante fixa (ex.: ANTHROPIC_MODEL=claude-sonnet-5 no eval)', async () => {
+    const { service, gateway, txMock, actor } = buildDeps();
+    gateway.sendMessage.mockResolvedValueOnce({
+      id: 'msg_1',
+      model: 'claude-sonnet-5',
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'Olá! Como posso ajudar?' }],
+      usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+    } as never);
+
+    await service.chat(actor, { message: 'oi' });
+
+    expect(txMock.aIRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          model: 'claude-sonnet-5',
+          // sonnet-5: $2/MTok input + $10/MTok output = $12 para 1M+1M tokens
+          // (seria $30 se o custo fosse calculado a preço de opus-5).
+          estimatedCost: 12,
+        }),
       }),
     );
   });

@@ -1,9 +1,10 @@
 import { randomUUID } from 'crypto';
 import { validateEnv } from '@opsmind/config/env/schema';
+import { automationJobId } from '@opsmind/shared-types';
 import { createPrismaClient } from '../src/tenant-context';
 import { createAutomationQueue, createAutomationWorker, createRedisConnection } from '../src/queue';
 import { processAutomationJob } from '../src/automation-processor';
-import { scanCustomerInactiveAutomations } from '../src/automation-scan';
+import { scanCustomerInactiveAutomations, scanDealStageStaleAutomations } from '../src/automation-scan';
 
 // Fase 5 (docs/planning/PRD.md §17): critério de aceitação — "um cliente sem
 // atividade há N dias dispara automaticamente criação de tarefa +
@@ -128,6 +129,78 @@ describe('Automations engine (e2e)', () => {
     expect(runs).toHaveLength(1);
   }, 15_000);
 
+  // Complementa o teste de dedup acima (que prova dedup na camada do scan,
+  // reconsultando o Postgres): este prova dedup na camada da fila em si —
+  // dois `queue.add` de volta a volta pro MESMO par (automação, alvo), antes
+  // do primeiro job terminar, devem resultar no MESMO job BullMQ.
+  //
+  // Usa `deduplication: { id }`, não `jobId` (deprecated pra esse fim) — ver
+  // comentário em automation-queue.service.ts. No modo simples (sem
+  // `ttl`/`keepLastIfActive`), o dedup só vale enquanto o job está em voo.
+  it('deduplication.id faz o BullMQ deduplicar dois enqueues do mesmo par (automação, alvo) antes do primeiro job terminar', async () => {
+    const data = { organizationId: 'org-x', automationId: 'auto-x', customerId: 'cust-x', actorType: 'SYSTEM' as const };
+    const jobId = automationJobId(data);
+
+    // Pausa local do worker real do describe — sem isso ele pega o job
+    // (dados fake, nunca existiram no Postgres) quase instantaneamente e
+    // trava o lock antes do `job1.remove()` de limpeza abaixo
+    // ("Job ... could not be removed because it is locked by another
+    // worker", confirmado rodando contra Redis real). O ponto do teste é a
+    // dedup no enqueue, não o processamento — pausar não enfraquece a prova.
+    await worker.pause();
+    try {
+      const job1 = await queue.add('execute', data, { deduplication: { id: jobId } });
+      const job2 = await queue.add('execute', data, { deduplication: { id: jobId } });
+
+      // Mesmo par ainda em voo (waiting/active) => BullMQ devolve o MESMO job
+      // em vez de criar um segundo — é a prova real de dedup "em voo".
+      expect(job2.id).toBe(job1.id);
+
+      await job1.remove(); // limpeza — não deixar pendurado pra não interferir nos outros testes do arquivo
+    } finally {
+      await worker.resume();
+    }
+  });
+
+  // Prova que a dedup NÃO é permanente (achado C1 da revisão final): depois
+  // que um job com um dado `deduplication.id` COMPLETA, um novo enqueue do
+  // MESMO par (automação, alvo) precisa criar e processar um job NOVO — ao
+  // contrário do `jobId` antigo, cuja entrada de dedup sobrevivia enquanto o
+  // job ficasse retido por `removeOnComplete`, impedindo pra sempre a
+  // automação de disparar de novo pro mesmo par.
+  it('deduplicação não é permanente: depois do primeiro job completar, um novo enqueue do mesmo par cria e processa um job novo', async () => {
+    const { organization, customer, automation } = await createFixtures(20);
+    const data = {
+      organizationId: organization.id,
+      automationId: automation.id,
+      customerId: customer.id,
+      actorType: 'SYSTEM' as const,
+    };
+    const dedupOptions = { deduplication: { id: automationJobId(data) } };
+
+    const firstJob = await queue.add('execute', data, dedupOptions);
+    await waitForJobDone(customer.id);
+    expect(await firstJob.isCompleted()).toBe(true);
+
+    // O ponto deste teste é a camada da FILA, não a do scan: o cliente
+    // segue "inativo" (nada muda `lastActivityAt` entre as duas chamadas),
+    // então o processor reconfirma a condição e executa de novo — o que só
+    // é possível porque `deduplication.id` liberou o par assim que o
+    // primeiro job completou. Com o `jobId` antigo (retido por
+    // `removeOnComplete`), este segundo `queue.add` teria sido
+    // silenciosamente descartado pelo BullMQ.
+    const secondJob = await queue.add('execute', data, dedupOptions);
+
+    expect(secondJob.id).not.toBe(firstJob.id);
+    await waitForJobDone(customer.id);
+    expect(await secondJob.isCompleted()).toBe(true);
+
+    // Duas tasks criadas (uma por execução), não uma só — era exatamente o
+    // cenário que faltava na prova anterior de dedup.
+    const tasks = await prisma.task.findMany({ where: { organizationId: organization.id, customerId: customer.id } });
+    expect(tasks).toHaveLength(2);
+  }, 20_000);
+
   it('não dispara para um cliente que teve atividade recente (dentro do período de inatividade)', async () => {
     const { customer } = await createFixtures(2);
 
@@ -137,4 +210,99 @@ describe('Automations engine (e2e)', () => {
     const task = await prisma.task.findFirst({ where: { customerId: customer.id } });
     expect(task).toBeNull();
   });
+
+  // Spec (docs/superpowers/specs/2026-11-14-funil-ativo-design.md, seção
+  // "Verificação"): "e2e: criar Deal, forçar stageEnteredAt pro passado,
+  // rodar o scan, confirmar Task criada uma única vez mesmo em duas
+  // passadas." Mesmo padrão de fixtures/helpers de `createFixtures` acima,
+  // mas para DEAL_STAGE_STALE (deal + automação de deal, em vez de cliente
+  // inativo) — reusa o mesmo `prisma`/`queue`/`worker` reais do describe
+  // pai (o worker já despacha por `automation.trigger` dentro de
+  // `processAutomationJob`, nenhum setup adicional de fila necessário).
+  async function createDealStageStaleFixtures(stageEnteredHoursAgo: number) {
+    const suffix = randomUUID();
+    const user = await prisma.user.create({
+      data: { email: `automation-deal-${suffix}@opsmind.test`, passwordHash: 'x', name: 'Deal Owner' },
+    });
+    const organization = await prisma.organization.create({
+      data: { name: 'Automation Deals Co', slug: `automation-deals-co-${suffix}` },
+    });
+    await prisma.membership.create({
+      data: { userId: user.id, organizationId: organization.id, role: 'OWNER' },
+    });
+    const customer = await prisma.customer.create({
+      data: { organizationId: organization.id, name: 'Cliente do Negócio Parado', ownerUserId: user.id },
+    });
+    const stageEnteredAt = new Date();
+    stageEnteredAt.setHours(stageEnteredAt.getHours() - stageEnteredHoursAgo);
+    const deal = await prisma.deal.create({
+      data: {
+        organizationId: organization.id,
+        customerId: customer.id,
+        title: 'Contrato Parado',
+        stage: 'QUALIFICATION', // default threshold de 72h (DEFAULT_EXPECTED_STAGE_DURATION_HOURS)
+        value: 1000,
+        ownerUserId: user.id,
+        actorType: 'USER',
+        actorId: user.id,
+        stageEnteredAt,
+      },
+    });
+    const automation = await prisma.automation.create({
+      data: {
+        organizationId: organization.id,
+        name: 'Negócio parado na etapa',
+        trigger: 'DEAL_STAGE_STALE',
+        actions: { createTask: true, notify: true },
+      },
+    });
+    return { user, organization, customer, deal, automation };
+  }
+
+  it('scan encontra o deal parado na etapa, o worker processa o job de verdade, e cria tarefa + notificação + log', async () => {
+    const { organization, deal, automation, user } = await createDealStageStaleFixtures(100); // 100h > 72h (threshold de QUALIFICATION)
+
+    const enqueued = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    expect(enqueued).toBe(1);
+
+    await waitForJobDone(deal.customerId);
+
+    const task = await prisma.task.findFirst({ where: { organizationId: organization.id, customerId: deal.customerId } });
+    expect(task?.title).toBe('Reativar negócio "Contrato Parado"');
+    expect(task?.actorType).toBe('AUTOMATION');
+    expect(task?.actorId).toBe(automation.id);
+
+    const notification = await prisma.notification.findFirst({
+      where: { organizationId: organization.id, userId: user.id, type: 'automation.deal_stage_stale' },
+    });
+    expect(notification).toBeTruthy();
+
+    const run = await prisma.automationRun.findFirst({
+      where: { automationId: automation.id, dealId: deal.id },
+    });
+    expect(run?.status).toBe('SUCCESS');
+    expect(run?.actorType).toBe('SYSTEM');
+
+    const auditLog = await prisma.auditLog.findFirst({
+      where: { organizationId: organization.id, action: 'automation.executed', resource: `Automation:${automation.id}` },
+    });
+    expect(auditLog).toBeTruthy();
+  }, 15_000);
+
+  it('não dispara de novo pro mesmo deal numa segunda passada do scan (dedup) — Task criada uma única vez', async () => {
+    const { organization, deal, automation } = await createDealStageStaleFixtures(100);
+
+    const firstScan = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    expect(firstScan).toBe(1);
+    await waitForJobDone(deal.customerId);
+
+    const secondScan = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    expect(secondScan).toBe(0);
+
+    const tasks = await prisma.task.findMany({ where: { organizationId: organization.id, customerId: deal.customerId } });
+    expect(tasks).toHaveLength(1);
+
+    const runs = await prisma.automationRun.findMany({ where: { automationId: automation.id, dealId: deal.id } });
+    expect(runs).toHaveLength(1);
+  }, 15_000);
 });

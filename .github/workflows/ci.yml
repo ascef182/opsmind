@@ -61,6 +61,15 @@ jobs:
 
       - run: pnpm --filter @opsmind/database exec prisma generate
 
+      # Mesma lacuna do passo "Create restricted app role" abaixo: `services:`
+      # não monta os init scripts do Docker Compose local. A imagem
+      # pgvector/pgvector já tem o binário da extensão, mas precisa do
+      # `CREATE EXTENSION` rodar antes de qualquer migration que use o tipo
+      # `vector` (Fase 4 — documents_rag). Sem isso: "type vector does not
+      # exist" no meio do `migrate deploy`.
+      - name: Enable pgvector extension
+        run: pnpm --filter @opsmind/database exec prisma db execute --file ../../infra/docker/init/01-extensions.sql --url "$DATABASE_URL"
+
       - run: pnpm --filter @opsmind/database exec prisma migrate deploy
 
       # `services:` do GitHub Actions não monta volumes de init como o Docker
@@ -77,3 +86,80 @@ jobs:
       - run: pnpm test
 
       - run: pnpm turbo run test:e2e
+
+  eval-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # PRs de forks não recebem secrets do repositório — ANTHROPIC_API_KEY/
+    # OPENAI_API_KEY ficariam vazias e o job falharia alto em toda contribuição
+    # externa por um motivo que não é dela. Só roda em push (branch própria) ou
+    # em PR cuja branch de origem é deste mesmo repositório.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: opsmind
+          POSTGRES_PASSWORD: opsmind
+          POSTGRES_DB: opsmind
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U opsmind -d opsmind"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://opsmind:opsmind@localhost:5432/opsmind?schema=public
+      DATABASE_URL_APP: postgresql://opsmind_app:opsmind_app@localhost:5432/opsmind?schema=public
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci-only-secret-not-for-production-use-xx
+      JWT_REFRESH_SECRET: ci-only-secret-not-for-production-use-yy
+      # Suite de eval roda contra as APIs reais (não mocks) — é o próprio
+      # propósito dela. Sem estes dois secrets cadastrados no repo, este job
+      # falha alto e claro na primeira chamada (ver ClaudeGatewayService/
+      # OpenAiEmbeddingGateway) em vez de silenciosamente reportar métricas
+      # falsas.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter @opsmind/database exec prisma generate
+
+      - run: pnpm --filter @opsmind/database exec prisma migrate deploy
+
+      - name: Create restricted app role for RLS
+        run: pnpm --filter @opsmind/database exec prisma db execute --file ../../infra/docker/init/02-app-role.sql --url "$DATABASE_URL"
+
+      - name: Run AI eval suite
+        run: pnpm --filter api eval
+
+      - name: Publish eval report to job summary
+        if: always()
+        run: |
+          echo "## AI Eval Report" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat apps/api/eval-report.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "eval-report.json não foi gerado (o script falhou antes de escrevê-lo)." >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

@@ -224,6 +224,45 @@ describe('TasksService', () => {
       expect(activityService.log).not.toHaveBeenCalled();
     });
 
+    it('ao mudar dueDate, limpa dueDateNotifiedAt (novo prazo merece novo lembrete quando vencer)', async () => {
+      prisma.task.findFirst.mockResolvedValue({
+        id: 'task-1',
+        organizationId: 'org-1',
+        status: 'OPEN',
+        customerId: null,
+        dueDate: new Date('2026-01-01'),
+        dueDateNotifiedAt: new Date('2026-01-02'),
+      });
+      const newDueDate = new Date('2026-02-01');
+      prisma.task.update.mockResolvedValue({ id: 'task-1', dueDate: newDueDate });
+
+      await service.update('org-1', 'task-1', { dueDate: newDueDate }, 'user-1');
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 'task-1' },
+        data: { dueDate: newDueDate, dueDateNotifiedAt: null },
+      });
+    });
+
+    it('não mexe em dueDateNotifiedAt quando dueDate não muda no PATCH', async () => {
+      prisma.task.findFirst.mockResolvedValue({
+        id: 'task-1',
+        organizationId: 'org-1',
+        status: 'OPEN',
+        customerId: null,
+        dueDate: null,
+        dueDateNotifiedAt: null,
+      });
+      prisma.task.update.mockResolvedValue({ id: 'task-1', title: 'Novo título' });
+
+      await service.update('org-1', 'task-1', { title: 'Novo título' }, 'user-1');
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 'task-1' },
+        data: { title: 'Novo título' },
+      });
+    });
+
     it('ao concluir (status → DONE), define completedAt e registra atividade no cliente vinculado', async () => {
       prisma.task.findFirst.mockResolvedValue({
         id: 'task-1',

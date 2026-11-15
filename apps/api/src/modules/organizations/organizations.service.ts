@@ -87,4 +87,40 @@ export class OrganizationsService {
       where: { memberships: { some: { userId } } },
     });
   }
+
+  /**
+   * Fecha a lacuna do PRD §17 (Fase 7): `aiMonthlyBudget` já existia no schema
+   * e já era lido por `BudgetService`/`AiService` desde a Fase 3, mas não
+   * havia como configurá-lo — só editando o banco direto.
+   *
+   * `scrapingMonthlyBudget` (Task 5, leads/prospecção) entra no mesmo método
+   * em vez de um `updateScrapingBudget` separado — os dois campos vêm do
+   * mesmo `UpdateOrganizationDto`/rota `PATCH .../organizations/:id`, então
+   * persisti-los junto evita duas idas ao banco (e dois audit logs) por uma
+   * única request que só mexeu num dos dois.
+   */
+  async updateBudget(
+    organizationId: string,
+    actorUserId: string,
+    budgets: {
+      aiMonthlyBudget?: number | null;
+      scrapingMonthlyBudget?: number | null;
+    },
+  ): Promise<Organization> {
+    const organization = await this.prisma.organization.update({
+      where: { id: organizationId },
+      data: budgets,
+    });
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: actorUserId,
+      organizationId,
+      action: 'organization.budget_updated',
+      resource: `Organization:${organizationId}`,
+      metadata: { ...budgets },
+    });
+
+    return organization;
+  }
 }

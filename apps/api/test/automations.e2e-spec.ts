@@ -118,6 +118,32 @@ describe('Automations flow (e2e)', () => {
     expect(auditRes.body.map((log: { action: string }) => log.action)).toContain('automation.created');
   });
 
+  it('PATCH /automations/:id atualiza e audita', async () => {
+    const owner = await registerUser(app, `automations-owner-patch-${randomUUID()}@opsmind.test`);
+    const organizationId = await createOrg(app, owner.accessToken);
+    const auth = { Authorization: `Bearer ${owner.accessToken}` };
+
+    const created = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/automations`)
+      .set(auth)
+      .send({ name: 'X', trigger: 'CUSTOMER_INACTIVE', actions: { createTask: true } })
+      .expect(201);
+
+    const response = await request(app.getHttpServer())
+      .patch(`/organizations/${organizationId}/automations/${created.body.id}`)
+      .set(auth)
+      .send({ enabled: false })
+      .expect(200);
+
+    expect(response.body.enabled).toBe(false);
+
+    const auditRes = await request(app.getHttpServer())
+      .get(`/organizations/${organizationId}/audit-logs`)
+      .set(auth)
+      .expect(200);
+    expect(auditRes.body.map((log: { action: string }) => log.action)).toContain('automation.updated');
+  });
+
   it('rejeita criação/disparo por um membro VIEWER (RBAC), mas permite leitura', async () => {
     const owner = await registerUser(app, `automations-owner2-${randomUUID()}@opsmind.test`);
     const viewer = await registerUser(app, `automations-viewer-${randomUUID()}@opsmind.test`);
@@ -154,6 +180,12 @@ describe('Automations flow (e2e)', () => {
     await request(app.getHttpServer())
       .post(`/organizations/${organizationId}/automations/${automationRes.body.id}/run`)
       .set(viewerAuth)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .patch(`/organizations/${organizationId}/automations/${automationRes.body.id}`)
+      .set(viewerAuth)
+      .send({ enabled: false })
       .expect(403);
 
     await request(app.getHttpServer())

@@ -18,8 +18,8 @@ export default function HomePage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-6 px-4 text-center">
       <div>
-        <h1 className="text-3xl font-semibold text-slate-900">OpsMind</h1>
-        <p className="mt-2 max-w-md text-slate-600">
+        <h1 className="text-3xl font-semibold text-foreground">OpsMind</h1>
+        <p className="mt-2 max-w-md text-muted-foreground">
           CRM com um assistente de IA que conhece o seu workspace de verdade.
         </p>
       </div>

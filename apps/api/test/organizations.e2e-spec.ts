@@ -114,4 +114,65 @@ describe('Organizations flow (e2e)', () => {
       .set('Authorization', `Bearer ${stranger.accessToken}`)
       .expect(404);
   });
+
+  it('OWNER configura e limpa o orçamento mensal de IA; MEMBER não pode', async () => {
+    const { accessToken: ownerToken } = await registerUser(app, `budget-owner-${randomUUID()}@opsmind.test`);
+    const orgRes = await request(app.getHttpServer())
+      .post('/organizations')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ name: 'Budget Co', slug: `budget-co-${randomUUID()}` })
+      .expect(201);
+    const organizationId = orgRes.body.id as string;
+
+    const setRes = await request(app.getHttpServer())
+      .patch(`/organizations/${organizationId}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ aiMonthlyBudget: 150 })
+      .expect(200);
+
+    // aiMonthlyBudget é um Decimal do Prisma — sem conversão explícita na
+    // controller, JSON.stringify(Decimal) vira STRING ("150"), não number,
+    // quebrando o contrato de OrganizationDto (packages/shared-types).
+    expect(typeof setRes.body.aiMonthlyBudget).toBe('number');
+    expect(setRes.body.aiMonthlyBudget).toBe(150);
+
+    const afterSet = await prisma.organization.findUniqueOrThrow({ where: { id: organizationId } });
+    expect(Number(afterSet.aiMonthlyBudget)).toBe(150);
+
+    await request(app.getHttpServer())
+      .patch(`/organizations/${organizationId}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ aiMonthlyBudget: null })
+      .expect(200);
+
+    const afterClear = await prisma.organization.findUniqueOrThrow({ where: { id: organizationId } });
+    expect(afterClear.aiMonthlyBudget).toBeNull();
+
+    const { userId: memberUserId, accessToken: memberToken } = await registerUser(
+      app,
+      `budget-member-${randomUUID()}@opsmind.test`,
+    );
+    await prisma.membership.create({ data: { userId: memberUserId, organizationId, role: 'MEMBER' } });
+
+    await request(app.getHttpServer())
+      .patch(`/organizations/${organizationId}`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({ aiMonthlyBudget: 999 })
+      .expect(403);
+  });
+
+  it('rejeita orçamento negativo', async () => {
+    const { accessToken } = await registerUser(app, `budget-neg-${randomUUID()}@opsmind.test`);
+    const orgRes = await request(app.getHttpServer())
+      .post('/organizations')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ name: 'Budget Neg Co', slug: `budget-neg-co-${randomUUID()}` })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/organizations/${orgRes.body.id}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ aiMonthlyBudget: -10 })
+      .expect(400);
+  });
 });

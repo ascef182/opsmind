@@ -1,24 +1,101 @@
-import clsx from 'clsx';
+import { cn } from '@/lib/utils';
 
 const COLORS: Record<string, string> = {
-  LEAD: 'bg-amber-100 text-amber-800',
-  ACTIVE: 'bg-green-100 text-green-800',
-  INACTIVE: 'bg-slate-200 text-slate-600',
-  OPEN: 'bg-blue-100 text-blue-800',
-  IN_PROGRESS: 'bg-amber-100 text-amber-800',
-  DONE: 'bg-green-100 text-green-800',
-  CANCELLED: 'bg-slate-200 text-slate-500 line-through',
+  LEAD: 'bg-accent-500/15 text-accent-500',
+  ACTIVE: 'bg-positive-500/15 text-positive-500',
+  INACTIVE: 'bg-ink-800 text-ink-300',
+  OPEN: 'bg-info-500/15 text-info-500',
+  IN_PROGRESS: 'bg-accent-500/15 text-accent-500',
+  DONE: 'bg-positive-500/15 text-positive-500',
+  CANCELLED: 'bg-ink-800 text-ink-300 line-through',
+
+  // LeadStatus (packages/database/prisma/schema.prisma)
+  DISCOVERED: 'bg-ink-800 text-ink-300',
+  QUALIFIED: 'bg-positive-500/15 text-positive-500',
+  DISQUALIFIED: 'bg-negative-500/15 text-negative-500',
+  OUTREACH_DRAFTED: 'bg-accent-500/15 text-accent-500',
+  OUTREACH_APPROVED: 'bg-info-500/15 text-info-500',
+  CONTACTED: 'bg-info-500/15 text-info-500',
+  // REPLIED também é um valor de OutreachStatus — mesma cor serve pros dois
+  // já que COLORS é string-keyed.
+  REPLIED: 'bg-info-500/15 text-info-500',
+  CONVERTED: 'bg-positive-500/15 text-positive-500',
+  LOST: 'bg-ink-800 text-ink-300 line-through',
+
+  // OutreachStatus (packages/database/prisma/schema.prisma)
+  DRAFT: 'bg-accent-500/15 text-accent-500',
+  APPROVED: 'bg-info-500/15 text-info-500',
+  REJECTED: 'bg-negative-500/15 text-negative-500',
+  SENT: 'bg-info-500/15 text-info-500',
+
+  // ScrapeJobStatus (packages/database/prisma/schema.prisma)
+  QUEUED: 'bg-ink-800 text-ink-300',
+  RUNNING: 'bg-info-500/15 text-info-500',
+  COMPLETED: 'bg-positive-500/15 text-positive-500',
+  FAILED: 'bg-negative-500/15 text-negative-500',
+
+  // MarketOpportunityStatus (packages/database/prisma/schema.prisma)
+  NEW: 'bg-accent-500/15 text-accent-500',
+  REVIEWING: 'bg-info-500/15 text-info-500',
+  PURSUING: 'bg-positive-500/15 text-positive-500',
+  DISMISSED: 'bg-ink-800 text-ink-300 line-through',
+
+  // DealStage (packages/database/prisma/schema.prisma) — QUALIFICATION reusa
+  // a cor de DISCOVERED/QUEUED (mesmo espírito: primeiro estágio, neutro).
+  // WON reusa a cor de CONVERTED/DONE (positivo/fechado). LOST já está
+  // mapeado acima (compartilhado com LeadStatus).
+  QUALIFICATION: 'bg-ink-800 text-ink-300',
+  PROPOSAL: 'bg-accent-500/15 text-accent-500',
+  NEGOTIATION: 'bg-info-500/15 text-info-500',
+  CONTRACT_SENT: 'bg-info-500/15 text-info-500',
+  WON: 'bg-positive-500/15 text-positive-500',
+
+  // SignatureRequestStatus (packages/database/prisma/schema.prisma) — SENT
+  // já mapeado acima (compartilhado com OutreachStatus).
+  SIGNED: 'bg-positive-500/15 text-positive-500',
+  DECLINED: 'bg-negative-500/15 text-negative-500',
+  CANCELED: 'bg-ink-800 text-ink-300 line-through',
+
+  // Role (packages/shared-types — ROLE_HIERARCHY), usado na página de Equipe
+  OWNER: 'bg-accent-500/15 text-accent-500',
+  ADMIN: 'bg-info-500/15 text-info-500',
+  MANAGER: 'bg-positive-500/15 text-positive-500',
+  MEMBER: 'bg-ink-800 text-ink-300',
+  VIEWER: 'bg-ink-800 text-ink-300',
+
+  // DealRiskBucket (packages/shared-types/src/deal-risk.ts) — NOT_APPLICABLE
+  // nunca é exibido (deal fechado), então não precisa de entrada aqui.
+  AT_RISK: 'bg-negative-500/15 text-negative-500',
+  COOLING: 'bg-accent-500/15 text-accent-500',
+  ON_TRACK: 'bg-positive-500/15 text-positive-500',
+
+  // AutomationTrigger (apps/web/lib/automations/types.ts)
+  CUSTOMER_INACTIVE: 'bg-negative-500/15 text-negative-500',
+  DEAL_STAGE_STALE: 'bg-accent-500/15 text-accent-500',
+  DEAL_SILENT_FOR: 'bg-info-500/15 text-info-500',
+
+  // AutomationRunStatus (apps/web/lib/automations/types.ts) — FAILED já
+  // mapeado acima (compartilhado com ScrapeJobStatus). SUCCESS reusa a cor
+  // de ACTIVE/DONE, SKIPPED a de INACTIVE/QUEUED (mesmo espírito de
+  // reaproveitamento de cor já usado no arquivo entre enums diferentes).
+  SUCCESS: 'bg-positive-500/15 text-positive-500',
+  SKIPPED: 'bg-ink-800 text-ink-300',
 };
 
-export function Badge({ value }: { value: string }) {
+// `value` é usado como chave de cor em `COLORS` e, por padrão, também como
+// texto exibido. `label`, quando informado, substitui só o texto exibido —
+// usado quando o texto precisa ser diferente da chave de cor (ex.: bucket de
+// risco cru vs. label em português), sem afetar nenhum dos outros call sites
+// que não passam `label`.
+export function Badge({ value, label }: { value: string; label?: string }) {
   return (
     <span
-      className={clsx(
+      className={cn(
         'inline-block rounded-full px-2 py-0.5 text-xs font-medium',
-        COLORS[value] ?? 'bg-slate-100 text-slate-600',
+        COLORS[value] ?? 'bg-ink-800 text-ink-300',
       )}
     >
-      {value}
+      {label ?? value}
     </span>
   );
 }

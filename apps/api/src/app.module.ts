@@ -9,6 +9,7 @@ import { buildLoggerOptions } from './infrastructure/logging/logger-options';
 import { AppController } from './app.controller';
 import { PrismaModule } from './infrastructure/database/prisma.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
+import { StorageModule } from './infrastructure/storage/storage.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditModule } from './modules/audit/audit.module';
@@ -16,10 +17,17 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
 import { MembershipsModule } from './modules/memberships/memberships.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { TasksModule } from './modules/tasks/tasks.module';
+import { DealsModule } from './modules/deals/deals.module';
+import { MeetingsModule } from './modules/meetings/meetings.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { DocumentsModule } from './modules/documents/documents.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AutomationsModule } from './modules/automations/automations.module';
+import { LeadsModule } from './modules/leads/leads.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { MarketOpportunitiesModule } from './modules/market-opportunities/market-opportunities.module';
+import { FinanceModule } from './modules/finance/finance.module';
 import { JwtAuthGuard } from './shared/guards/jwt-auth.guard';
 import { TenantContextInterceptor } from './shared/interceptors/tenant-context.interceptor';
 
@@ -54,6 +62,7 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     ]),
     PrismaModule,
     RedisModule,
+    StorageModule,
     AuditModule,
     UsersModule,
     AuthModule,
@@ -61,10 +70,17 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     MembershipsModule,
     CustomersModule,
     TasksModule,
+    DealsModule,
+    MeetingsModule,
     NotificationsModule,
     DashboardModule,
+    DocumentsModule,
     AiModule,
     AutomationsModule,
+    LeadsModule,
+    WebhooksModule,
+    MarketOpportunitiesModule,
+    FinanceModule,
   ],
   controllers: [AppController],
   providers: [

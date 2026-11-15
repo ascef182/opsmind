@@ -18,4 +18,18 @@ describe('ConsoleEmailProvider', () => {
 
     logSpy.mockRestore();
   });
+
+  it('loga um email genérico (sendEmail) em vez de enviar de verdade, retornando id null', async () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    const provider = new ConsoleEmailProvider();
+
+    const result = await provider.sendEmail({ to: 'lead@example.com', subject: 'Assunto X', html: '<p>Corpo</p>' });
+
+    expect(result).toEqual({ id: null });
+    const logged = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(logged).toContain('lead@example.com');
+    expect(logged).toContain('Assunto X');
+
+    logSpy.mockRestore();
+  });
 });

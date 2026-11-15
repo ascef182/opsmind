@@ -96,11 +96,17 @@ export class TasksService {
 
     const completingNow = dto.status === 'DONE' && existing.status !== 'DONE';
     const reopening = dto.status !== undefined && dto.status !== 'DONE' && existing.status === 'DONE';
+    // Novo prazo merece novo lembrete quando vencer — sem isso,
+    // `scanTaskDueReminders` (apps/worker) nunca notificaria de novo uma
+    // tarefa cujo prazo foi adiado depois de já ter vencido uma vez.
+    const dueDateChanged =
+      dto.dueDate !== undefined && dto.dueDate.getTime() !== (existing.dueDate?.getTime() ?? null);
 
     const data = {
       ...dto,
       ...(completingNow ? { completedAt: new Date() } : {}),
       ...(reopening ? { completedAt: null } : {}),
+      ...(dueDateChanged ? { dueDateNotifiedAt: null } : {}),
     };
 
     const updated = await this.prisma.task.update({ where: { id }, data });

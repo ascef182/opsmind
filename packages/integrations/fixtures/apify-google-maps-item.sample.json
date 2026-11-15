@@ -1,0 +1,18 @@
+{
+  "title": "Padaria Pão Dourado",
+  "address": "Rua das Flores, 123",
+  "city": "Campinas",
+  "state": "SP",
+  "phoneUnformatted": "+5519912345678",
+  "phone": "(19) 91234-5678",
+  "website": "https://paodouradopadaria.com.br",
+  "categoryName": "Padaria",
+  "categories": ["Padaria", "Confeitaria"],
+  "totalScore": 4.6,
+  "reviewsCount": 128,
+  "placeId": "ChIJn8_random_place_id_123",
+  "url": "https://www.google.com/maps/place/?q=place_id:ChIJn8_random_place_id_123",
+  "searchString": "padaria em Campinas, SP",
+  "location": { "lat": -22.9099, "lng": -47.0626 },
+  "permanentlyClosed": false
+}

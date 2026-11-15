@@ -12,6 +12,6 @@
     // sido gerado antes pra isso importar).
     "outDir": "./dist"
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "eval/**/*.ts"],
   "exclude": ["node_modules", "dist", "test"]
 }

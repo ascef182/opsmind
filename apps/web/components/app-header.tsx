@@ -10,12 +10,12 @@ export function AppHeader({ title }: { title: string }) {
   const logout = useLogout();
 
   return (
-    <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
-      <Link href="/organizations" className="text-lg font-semibold text-slate-900">
+    <header className="flex items-center justify-between border-b border-border bg-background px-6 py-4">
+      <Link href="/organizations" className="text-lg font-semibold text-foreground">
         OpsMind
       </Link>
       <div className="flex items-center gap-4">
-        <span className="text-sm text-slate-500">{title}</span>
+        <span className="text-sm text-muted-foreground">{title}</span>
         <Button
           variant="ghost"
           onClick={() => logout.mutate(undefined, { onSuccess: () => router.push('/login') })}

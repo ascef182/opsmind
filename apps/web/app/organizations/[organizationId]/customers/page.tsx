@@ -7,18 +7,30 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useCreateCustomer, useCustomers } from '@/lib/customers/use-customers';
-import type { CustomerStatus } from '@/lib/customers/types';
+import { WRITE_ROLES, type CustomerStatus } from '@/lib/customers/types';
+import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { ApiError } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Card, FormError } from '@/components/ui/card';
+import { FormError } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 const createCustomerSchema = z.object({
   name: z.string().min(1, 'Informe um nome'),
   company: z.string().optional(),
   email: z.string().email('E-mail inválido').optional().or(z.literal('')),
+  phone: z.string().optional(),
+  tags: z.string().optional(),
 });
 
 type CreateCustomerFormValues = z.infer<typeof createCustomerSchema>;
@@ -32,9 +44,11 @@ const STATUS_OPTIONS: Array<{ value: CustomerStatus | ''; label: string }> = [
 
 export default function CustomersPage() {
   const { organizationId } = useParams<{ organizationId: string }>();
+  const { membership } = useCurrentMembership(organizationId);
+  const canWrite = membership ? WRITE_ROLES.includes(membership.role) : false;
   const [status, setStatus] = useState<CustomerStatus | ''>('');
   const [search, setSearch] = useState('');
-  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   const customers = useCustomers(organizationId, {
     status: status || undefined,
@@ -50,13 +64,69 @@ export default function CustomersPage() {
 
   const onSubmit = handleSubmit((values) => {
     createCustomer.mutate(
-      { name: values.name, company: values.company || undefined, email: values.email || undefined },
-      { onSuccess: () => { reset(); setShowCreateForm(false); } },
+      {
+        name: values.name,
+        company: values.company || undefined,
+        email: values.email || undefined,
+        phone: values.phone || undefined,
+        tags: values.tags
+          ? values.tags.split(',').map((t) => t.trim()).filter(Boolean)
+          : undefined,
+      },
+      { onSuccess: () => { reset(); setDialogOpen(false); } },
     );
   });
 
   return (
     <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-lg font-semibold text-foreground">Clientes</h1>
+        {canWrite && (
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>+ Novo cliente</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Novo cliente</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={onSubmit} className="flex flex-col gap-4">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Nome</label>
+                  <Input placeholder="Nome" {...register('name')} />
+                  <FormError message={errors.name?.message} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Empresa (opcional)</label>
+                  <Input placeholder="Empresa" {...register('company')} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">E-mail (opcional)</label>
+                  <Input placeholder="E-mail" {...register('email')} />
+                  <FormError message={errors.email?.message} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Telefone (opcional)</label>
+                  <Input placeholder="Telefone" {...register('phone')} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    Tags (opcional, separadas por vírgula)
+                  </label>
+                  <Input placeholder="ex.: vip, indicação" {...register('tags')} />
+                </div>
+                <FormError message={createCustomer.isError ? (createCustomer.error as ApiError).message : null} />
+                <DialogFooter>
+                  <Button type="submit" isLoading={createCustomer.isPending}>
+                    Criar
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-3">
         <Input
           placeholder="Buscar por nome…"
@@ -71,52 +141,60 @@ export default function CustomersPage() {
             </option>
           ))}
         </Select>
-        <Button variant="secondary" className="ml-auto" onClick={() => setShowCreateForm((v) => !v)}>
-          + Novo cliente
-        </Button>
       </div>
 
-      {showCreateForm && (
-        <Card>
-          <h2 className="font-medium text-slate-900">Novo cliente</h2>
-          <form onSubmit={onSubmit} className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
-            <div className="flex-1">
-              <Input placeholder="Nome" {...register('name')} />
-              <FormError message={errors.name?.message} />
-            </div>
-            <div className="flex-1">
-              <Input placeholder="Empresa (opcional)" {...register('company')} />
-            </div>
-            <div className="flex-1">
-              <Input placeholder="E-mail (opcional)" {...register('email')} />
-              <FormError message={errors.email?.message} />
-            </div>
-            <Button type="submit" isLoading={createCustomer.isPending}>
-              Criar
-            </Button>
-          </form>
-          <FormError message={createCustomer.isError ? (createCustomer.error as ApiError).message : null} />
-        </Card>
-      )}
-
-      {customers.isLoading && <p className="text-slate-500">Carregando clientes…</p>}
+      {customers.isLoading && <p className="text-muted-foreground">Carregando clientes…</p>}
       {customers.isSuccess && customers.data.length === 0 && (
-        <p className="text-slate-600">Nenhum cliente encontrado.</p>
+        <p className="text-muted-foreground">Nenhum cliente encontrado.</p>
       )}
 
-      <div className="flex flex-col gap-2">
-        {customers.data?.map((customer) => (
-          <Link key={customer.id} href={`/organizations/${organizationId}/customers/${customer.id}`}>
-            <Card className="flex items-center justify-between transition-shadow hover:shadow-md">
-              <div>
-                <p className="font-medium text-slate-900">{customer.name}</p>
-                <p className="text-sm text-slate-500">{customer.company ?? customer.email ?? '—'}</p>
-              </div>
-              <Badge value={customer.status} />
-            </Card>
-          </Link>
-        ))}
-      </div>
+      {customers.isSuccess && customers.data.length > 0 && (
+        <div className="rounded-lg border border-border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Nome</TableHead>
+                <TableHead>Empresa</TableHead>
+                <TableHead>Contato</TableHead>
+                <TableHead>Tags</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {customers.data.map((customer) => (
+                <TableRow key={customer.id}>
+                  <TableCell>
+                    <Link
+                      href={`/organizations/${organizationId}/customers/${customer.id}`}
+                      className="font-medium text-foreground hover:text-accent-400"
+                    >
+                      {customer.name}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="text-foreground/80">{customer.company ?? '—'}</TableCell>
+                  <TableCell className="text-foreground/80">{customer.email ?? customer.phone ?? '—'}</TableCell>
+                  <TableCell>
+                    {customer.tags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {customer.tags.map((tag) => (
+                          <span key={tag} className="rounded-full bg-ink-800 px-2 py-0.5 text-xs text-muted-foreground">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge value={customer.status} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 }

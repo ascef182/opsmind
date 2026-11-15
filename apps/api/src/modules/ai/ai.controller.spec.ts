@@ -20,17 +20,26 @@ describe('AiController', () => {
     );
   });
 
-  it('usage: retorna o gasto do mês e o orçamento configurado da organização', async () => {
+  it('usage: retorna o summary com gasto, orçamento, série diária e breakdown por usuário', async () => {
     const aiService = { chat: jest.fn() };
-    const budgetService = { getMonthSpend: jest.fn().mockResolvedValue(12.5) };
-    const controller = new AiController(aiService as never, budgetService as never);
+    const aiUsageService = {
+      getSummary: jest.fn().mockResolvedValue({
+        monthSpend: 12.5,
+        monthlyBudget: 100,
+        dailySeries: [],
+        byUser: [],
+      }),
+    };
+    const controller = new AiController(aiService as never, aiUsageService as never);
 
-    const result = await controller.usage('org-1', {
-      organizationId: 'org-1',
-      role: 'OWNER',
-    } as never);
+    const result = await controller.usage('org-1');
 
-    expect(result).toEqual({ monthSpend: 12.5 });
-    expect(budgetService.getMonthSpend).toHaveBeenCalledWith('org-1');
+    expect(result).toEqual({
+      monthSpend: 12.5,
+      monthlyBudget: 100,
+      dailySeries: [],
+      byUser: [],
+    });
+    expect(aiUsageService.getSummary).toHaveBeenCalledWith('org-1');
   });
 });

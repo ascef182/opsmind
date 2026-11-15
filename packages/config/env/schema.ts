@@ -38,6 +38,68 @@ export const envSchema = z.object({
 
   // Email
   EMAIL_PROVIDER: z.enum(['console', 'resend']).default('console'),
+  // Só exigido quando EMAIL_PROVIDER=resend — validado no primeiro uso real
+  // por `ResendEmailProvider` (mesma filosofia fail-late de ANTHROPIC_API_KEY
+  // acima), não aqui, porque o Zod não expressa "obrigatório só quando outro
+  // campo tem tal valor" sem `.refine()` cruzando os dois campos, e o
+  // restante do arquivo já resolve esse mesmo padrão (CAMOFOX_*) deixando a
+  // combinação pro gateway checar.
+  RESEND_API_KEY: z.string().optional(),
+  // Remetente usado tanto para convites de organização quanto para envio real
+  // de outreach (plano pensando-como-empresa-com-agile-beaver.md). Default é
+  // o sandbox do Resend — só entrega para o próprio dono da conta Resend;
+  // produção precisa de um domínio verificado aqui (resend:resend skill,
+  // "Common Mistakes" #11/#12).
+  RESEND_FROM_EMAIL: z.string().default('OpsMind <onboarding@resend.dev>'),
+  // Rastreio de resposta (sprint de follow-up do plano
+  // pensando-como-empresa-com-agile-beaver.md) — assina o payload do webhook
+  // inbound do Resend (`ResendWebhookService`). Opcional pelo mesmo motivo
+  // de RESEND_API_KEY: sem ela, o endpoint do webhook recusa processar
+  // qualquer evento (fail-closed — nunca aceita um evento não verificado),
+  // mas o boot da API não trava.
+  RESEND_WEBHOOK_SECRET: z.string().optional(),
+  // Data (YYYY-MM-DD) em que o domínio de envio começou a ser aquecido no
+  // Resend — usada por `EmailWarmupService` pra calcular o teto de e-mails de
+  // outreach permitido HOJE, seguindo o cronograma de aquecimento de domínio
+  // novo do Resend (resend:email-best-practices skill: dia 1 até 150, dia 7
+  // até 2.000). Ausente = sem teto de aquecimento (domínio já aquecido, ou
+  // `EMAIL_PROVIDER=console`/testes) — setar só depois que o domínio for
+  // verificado e o primeiro envio real estiver prestes a acontecer.
+  RESEND_DOMAIN_WARMUP_STARTED_AT: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'RESEND_DOMAIN_WARMUP_STARTED_AT deve ser YYYY-MM-DD')
+    .optional(),
+  // Lembrete de follow-up (worker) — depois de quantos dias sem resposta uma
+  // `OutreachMessage` SENT gera uma notificação pro usuário que aprovou o
+  // envio. Configurável por ambiente pelo mesmo motivo de
+  // PROSPECTING_SCAN_INTERVAL_MS (sem custo de API por trás, mas o ritmo
+  // ainda pode variar por instância/demo vs. produção).
+  OUTREACH_FOLLOWUP_THRESHOLD_DAYS: z.coerce.number().int().positive().default(3),
+  OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
+  // Lembrete de reunião (worker, `meeting-reminder-scan.ts`) — quantos
+  // minutos antes do horário agendado a notificação é disparada. Mesmo
+  // scan de 60s (SCAN_INTERVAL_MS, fixo em apps/worker/src/main.ts) que já
+  // roda para lembrete de tarefa — sem custo de API por trás, então não
+  // precisa de intervalo configurável próprio.
+  MEETING_REMINDER_MINUTES_BEFORE: z.coerce.number().int().positive().default(60),
+
+  // Assinatura eletrônica (plano pensando-como-empresa-com-agile-beaver.md,
+  // trilha de fechamento) — Clicksign (foco PT-BR), único provider por ora.
+  // Opcional pelo mesmo motivo de ANTHROPIC_API_KEY/RESEND_API_KEY: a
+  // feature não existe em toda instância; falha alto e claro só no primeiro
+  // uso real — ver ClicksignSignatureProvider.
+  CLICKSIGN_API_TOKEN: z.string().optional(),
+  // sandbox.clicksign.com para dev/teste (grátis, sandbox.clicksign.com/signup);
+  // app.clicksign.com em produção, com conta paga.
+  CLICKSIGN_BASE_URL: z.string().url().default('https://sandbox.clicksign.com'),
+  // Chave da conta Clicksign (`event.data.account.key` no payload do
+  // webhook) — usada por `ClicksignWebhookService` pra confirmar que um
+  // evento recebido é mesmo desta conta antes de agir, defesa em
+  // profundidade já que a Clicksign não documenta um esquema de assinatura
+  // HMAC pro payload do webhook (verificado nesta sessão). Opcional pelo
+  // mesmo motivo do token acima; sem ela, o endpoint do webhook recusa
+  // processar qualquer evento (fail-closed).
+  CLICKSIGN_ACCOUNT_KEY: z.string().optional(),
 
   // IA (Fase 3) — deliberadamente OPCIONAL, ao contrário de toda outra
   // variável acima: IA é um recurso adicional, não uma dependência do resto
@@ -47,6 +109,88 @@ export const envSchema = z.object({
   // chave só falha, alto e claro, no primeiro uso real do endpoint de IA —
   // ver ClaudeGatewayService.
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Só necessário quando `ANTHROPIC_API_KEY` é uma chave de ORGANIZAÇÃO (não
+  // escopada a nenhum workspace específico) — a API da Anthropic recusa
+  // requests dessas chaves sem o header `anthropic-workspace-id` dizendo
+  // qual workspace usar (achado ao vivo, plano
+  // pensando-como-empresa-com-agile-beaver.md: `ClaudeGatewayService` falhava
+  // com "This API key is not scoped to a workspace" mesmo com a chave
+  // válida). Opcional pelo mesmo motivo de `ANTHROPIC_API_KEY`: uma chave já
+  // escopada a um workspace não precisa disto.
+  ANTHROPIC_WORKSPACE_ID: z.string().optional(),
+  // Eval suite de IA (Fase 7) — permite ao script `pnpm --filter api eval`
+  // usar claude-sonnet-5 (mais barato, ainda suporta thinking adaptativo)
+  // sem tocar em código; produção continua em claude-opus-5 por default.
+  ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
+
+  // Documentos + RAG (Fase 4) — embeddings via OpenAI (Anthropic não tem
+  // endpoint de embeddings; PRD §16 já lista "OpenAI/Anthropic" lado a lado
+  // no AI Gateway). Mesma filosofia do ANTHROPIC_API_KEY: opcional, falha
+  // alto e claro só no primeiro upload de documento — ver OpenAiEmbeddingGateway.
+  OPENAI_API_KEY: z.string().optional(),
+
+  // Storage de arquivos: PRD §16 decide Google Cloud Storage pra produção,
+  // mas dev/CI não tem (nem deveria precisar de) um bucket real — mesmo
+  // espírito de EMAIL_PROVIDER (console local vs. Resend real). `local`
+  // grava em disco (LocalStorageService); `gcs` fica para quando o deploy
+  // em GCP acontecer (Fase 6).
+  STORAGE_PROVIDER: z.enum(['local', 'gcs']).default('local'),
+  // Só usado quando STORAGE_PROVIDER=local. Caminho relativo à raiz do
+  // monorepo por padrão — fora de qualquer pasta versionada (.gitignore).
+  LOCAL_STORAGE_DIR: z.string().default('.data/uploads'),
+
+  // Leads / prospecção (branch feat/leads-prospecting) — três integrações
+  // externas plugáveis por `ScrapeJob.sourceType`, todas OPCIONAIS, mesmo
+  // espírito de ANTHROPIC_API_KEY: nenhuma delas é dependência do resto da
+  // aplicação (Fase 1/2 e o restante do produto funcionam sem a feature de
+  // leads). Cada uma falha alto e claro só no primeiro scrape que a usa —
+  // ver os gateways em packages/integrations.
+  // Apify (actor de Google Maps — dados estruturados: telefone/rating/site/
+  // categoria). Sem o token, ScrapeJob com sourceType=APIFY_GOOGLE_MAPS
+  // falha ao disparar; outras fontes continuam funcionando normalmente.
+  APIFY_API_TOKEN: z.string().optional(),
+  // Id do actor Apify usado para a busca — tem default porque é o mesmo
+  // actor público pra qualquer organização (não é segredo, só configuração),
+  // ao contrário do token acima; existe como env var em vez de constante
+  // hardcoded só pra permitir apontar pra uma versão/fork do actor sem
+  // rebuild.
+  APIFY_GOOGLE_MAPS_ACTOR_ID: z.string().default('compass/google-maps-extractor'),
+  // Explorium (mesma API por trás das tools MCP "Vibe Prospecting" — busca +
+  // enrichment B2B com firmografia). Opcional pelo mesmo motivo do token
+  // Apify acima: só bloqueia ScrapeJob com sourceType=EXPLORIUM_BUSINESS_SEARCH.
+  EXPLORIUM_API_KEY: z.string().optional(),
+  // camofox-browser (navegador stealth self-hosted, https://github.com/jo-inc/camofox-browser)
+  // — cobertura ampla via macros (@google_search/@yelp_search/@reddit_search)
+  // quando não há API estruturada pra fonte desejada. URL do serviço
+  // self-hosted; opcional pelo mesmo motivo das outras duas acima.
+  CAMOFOX_API_URL: z.string().url().optional(),
+  // Chave de acesso do camofox-browser self-hosted. Só faz sentido em par
+  // com CAMOFOX_API_URL; validada aqui sem exigir a outra porque o Zod
+  // schema não expressa "obrigatório junto" facilmente — o gateway
+  // (packages/integrations) que checa a combinação no primeiro uso real.
+  CAMOFOX_ACCESS_KEY: z.string().optional(),
+  // Descoberta de contato/redes (Task 9) — dois Actors da Apify (caminho
+  // primário; ver `ContactEnrichmentGateway`, packages/integrations), com
+  // fallback pro Camoufox já configurado acima quando indisponível/sem
+  // resultado. Reaproveitam `APIFY_API_TOKEN` (mesma conta/token do actor de
+  // Google Maps) — só os IDs dos actors são novos. Ambos têm default (não
+  // são segredo, só apontam pro actor público) pelo mesmo motivo de
+  // `APIFY_GOOGLE_MAPS_ACTOR_ID`.
+  APIFY_CONTACT_ENRICHMENT_ACTOR_ID: z.string().default('vdrmota/contact-info-scraper'),
+  APIFY_INSTAGRAM_PROFILE_ACTOR_ID: z.string().default('apify/instagram-profile-scraper'),
+  // Intervalo (ms) do scan automático de `ProspectingTarget`s ativos
+  // (apps/worker/src/prospecting-scan.ts + main.ts) — mesmo padrão de
+  // "scan periódico via setInterval" de `scanCustomerInactiveAutomations`,
+  // mas configurável por ambiente (default 1 dia) porque cada `ScrapeJob`
+  // automático tem custo real de orçamento de scraping, ao contrário do
+  // scan de automations.
+  PROSPECTING_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
+  // Intervalo (ms) do scan automático de `RedditWatchTopic`s ativos
+  // (apps/worker/src/reddit-mining-scan.ts + main.ts, Task 13) — mesmo
+  // padrão de PROSPECTING_SCAN_INTERVAL_MS acima (configurável por ambiente,
+  // default 1 dia), porque cada busca via Camoufox também tem custo/rate
+  // limit próprio.
+  REDDIT_MINING_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
 
   // Observabilidade (Fase 6 — PRD §15: "Sentry + logging estruturado").
   // SENTRY_DSN opcional pelo mesmo motivo de ANTHROPIC_API_KEY: observabilidade
