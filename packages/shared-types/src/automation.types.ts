@@ -23,7 +23,12 @@ export interface AutomationExecutionJobData {
   actorId?: string;
 }
 
-// dealId tem precedência: um cliente pode ter vários deals sob a mesma automação.
+// dealId tem precedência: um cliente pode ter vários deals sob a mesma
+// automação. Delimitador `_`, não `:` — BullMQ (job.js, validateOptions)
+// rejeita um jobId customizado que contenha `:` fora do formato interno de
+// job repetível (reservado pra sua própria estrutura de chave Redis
+// `bull:<queue>:<jobId>`); confirmado batendo contra Redis real no e2e
+// (apps/worker/test/automation.e2e-spec.ts) antes de aceitar esta função.
 export function automationJobId(data: AutomationExecutionJobData): string {
-  return `${data.automationId}:${data.dealId ?? data.customerId}`;
+  return `${data.automationId}_${data.dealId ?? data.customerId}`;
 }

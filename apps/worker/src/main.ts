@@ -2,6 +2,7 @@
 import './instrument';
 import * as Sentry from '@sentry/node';
 import { validateEnv, type Env } from '@opsmind/config/env/schema';
+import { automationJobId } from '@opsmind/shared-types';
 import {
   ApifyGatewayService,
   ExploriumGatewayService,
@@ -245,7 +246,9 @@ async function main(): Promise<void> {
 
   async function runScan(): Promise<void> {
     try {
-      const enqueued = await scanCustomerInactiveAutomations(prisma, (data) => queue.add('execute', data));
+      const enqueued = await scanCustomerInactiveAutomations(prisma, (data) =>
+        queue.add('execute', data, { jobId: automationJobId(data) }),
+      );
       if (enqueued > 0) {
         logger.info({ enqueued }, 'scan enfileirou execuções de automação');
       }
@@ -264,8 +267,12 @@ async function main(): Promise<void> {
   // ciclo; o próximo tick (SCAN_INTERVAL_MS) tenta os dois de novo.
   async function runDealAutomationsScan(): Promise<void> {
     try {
-      const staleCount = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
-      const silentCount = await scanDealSilentForAutomations(prisma, (data) => queue.add('execute', data));
+      const staleCount = await scanDealStageStaleAutomations(prisma, (data) =>
+        queue.add('execute', data, { jobId: automationJobId(data) }),
+      );
+      const silentCount = await scanDealSilentForAutomations(prisma, (data) =>
+        queue.add('execute', data, { jobId: automationJobId(data) }),
+      );
       const enqueued = staleCount + silentCount;
       if (enqueued > 0) {
         logger.info({ enqueued }, 'scan de automações de deal enfileirou execuções');

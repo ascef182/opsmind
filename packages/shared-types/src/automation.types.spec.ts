@@ -6,13 +6,13 @@ describe('automationJobId', () => {
       organizationId: 'org-1', automationId: 'auto-1', customerId: 'cust-1', dealId: 'deal-1',
       actorType: 'SYSTEM',
     });
-    expect(id).toBe('auto-1:deal-1');
+    expect(id).toBe('auto-1_deal-1');
   });
 
   it('usa automationId + customerId quando dealId está ausente (ex.: CUSTOMER_INACTIVE)', () => {
     const id = automationJobId({
       organizationId: 'org-1', automationId: 'auto-1', customerId: 'cust-1', actorType: 'SYSTEM',
     });
-    expect(id).toBe('auto-1:cust-1');
+    expect(id).toBe('auto-1_cust-1');
   });
 });

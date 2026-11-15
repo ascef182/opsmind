@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { validateEnv } from '@opsmind/config/env/schema';
+import { automationJobId } from '@opsmind/shared-types';
 import { createPrismaClient } from '../src/tenant-context';
 import { createAutomationQueue, createAutomationWorker, createRedisConnection } from '../src/queue';
 import { processAutomationJob } from '../src/automation-processor';
@@ -127,6 +128,35 @@ describe('Automations engine (e2e)', () => {
     const runs = await prisma.automationRun.findMany({ where: { automationId: automation.id, customerId: customer.id } });
     expect(runs).toHaveLength(1);
   }, 15_000);
+
+  // Complementa o teste de dedup acima (que prova dedup na camada do scan,
+  // reconsultando o Postgres): este prova dedup na camada da fila em si —
+  // dois `queue.add` de volta a volta pro MESMO par (automação, alvo), antes
+  // do primeiro job terminar, devem resultar no MESMO job BullMQ.
+  it('automationJobId faz o BullMQ deduplicar dois enqueues do mesmo par (automação, alvo) antes do primeiro job terminar', async () => {
+    const data = { organizationId: 'org-x', automationId: 'auto-x', customerId: 'cust-x', actorType: 'SYSTEM' as const };
+    const jobId = automationJobId(data);
+
+    // Pausa local do worker real do describe — sem isso ele pega o job
+    // (dados fake, nunca existiram no Postgres) quase instantaneamente e
+    // trava o lock antes do `job1.remove()` de limpeza abaixo
+    // ("Job ... could not be removed because it is locked by another
+    // worker", confirmado rodando contra Redis real). O ponto do teste é a
+    // dedup no enqueue, não o processamento — pausar não enfraquece a prova.
+    await worker.pause();
+    try {
+      const job1 = await queue.add('execute', data, { jobId });
+      const job2 = await queue.add('execute', data, { jobId });
+
+      // Mesmo jobId, job ainda não processado (waiting/active) => BullMQ devolve
+      // o MESMO job em vez de criar um segundo — é a prova real de dedup.
+      expect(job2.id).toBe(job1.id);
+
+      await job1.remove(); // limpeza — não deixar pendurado pra não interferir nos outros testes do arquivo
+    } finally {
+      await worker.resume();
+    }
+  });
 
   it('não dispara para um cliente que teve atividade recente (dentro do período de inatividade)', async () => {
     const { customer } = await createFixtures(2);
