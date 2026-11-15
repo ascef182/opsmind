@@ -151,12 +151,10 @@ const DEFAULT_SILENT_FOR_DAYS = 7;
  * atividade há mais que `silentForDays` (default 7) e enfileira um job por
  * deal, sem executar a ação aqui.
  *
- * Dedup por `customer.lastActivityAt` (não por `stageEnteredAt`): a automação
- * só reabre quando o cliente teve atividade nova depois da última execução
- * com sucesso — mesmo sinal de reset que `CUSTOMER_INACTIVE`. Usar
- * `stageEnteredAt` reabriria só numa mudança de etapa, nunca quando o cliente
- * volta a interagir e depois fica quieto de novo (a própria causa raiz deste
- * trigger).
+ * Dedup usa o mesmo `referenceActivity` da condição de disparo (o mais recente
+ * entre `stageEnteredAt` e `customer.lastActivityAt`): a automação só reabre
+ * depois de uma nova atividade ou mudança de etapa posterior à última execução
+ * com sucesso.
  */
 export async function scanDealSilentForAutomations(
   prisma: PrismaClient,
@@ -203,7 +201,7 @@ export async function scanDealSilentForAutomations(
           automationId: automation.id,
           dealId: deal.id,
           status: 'SUCCESS',
-          createdAt: { gt: deal.customer.lastActivityAt! },
+          createdAt: { gt: referenceActivity },
         },
       });
       if (alreadyHandled) continue;

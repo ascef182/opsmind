@@ -333,4 +333,24 @@ describe('scanDealSilentForAutomations', () => {
     expect(enqueue).not.toHaveBeenCalled();
     expect(count).toBe(0);
   });
+
+  it('reabre a automação quando o deal mudou de etapa e voltou a ficar quieto, mesmo com uma execução SUCCESS anterior baseada em lastActivityAt antigo', async () => {
+    const prisma = buildPrisma();
+    prisma.automation.findMany.mockResolvedValue([{ id: 'auto-1', organizationId: 'org-1', conditions: {} }]);
+    const lastActivityAt = new Date('2020-01-01');
+    const stageEnteredAt = new Date('2020-06-01'); // depois da última atividade, mas também parado há muito tempo
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 'deal-1', customerId: 'cust-1', stage: 'NEGOTIATION', stageEnteredAt, customer: { lastActivityAt } },
+    ]);
+    prisma.automationRun.findFirst.mockResolvedValue(null);
+    const enqueue = jest.fn();
+
+    const count = await scanDealSilentForAutomations(prisma as never, enqueue);
+
+    expect(prisma.automationRun.findFirst).toHaveBeenCalledWith({
+      where: { automationId: 'auto-1', dealId: 'deal-1', status: 'SUCCESS', createdAt: { gt: stageEnteredAt } },
+    });
+    expect(enqueue).toHaveBeenCalled();
+    expect(count).toBe(1);
+  });
 });
