@@ -39,6 +39,21 @@ export interface CreateAutomationInput {
   enabled?: boolean;
 }
 
+// `trigger` fica de fora deliberadamente: mudar o tipo de uma automação sob o
+// mesmo histórico de execução não é suportado.
+export interface UpdateAutomationInput {
+  name?: string;
+  conditions?: CustomerInactiveConditions | DealStaleConditions | DealSilentForConditions;
+  actions?: CustomerInactiveActions | DealStaleActions | DealSilentForActions;
+  enabled?: boolean;
+}
+
+const CONDITION_NUMERIC_FIELD: Record<AutomationTrigger, string> = {
+  CUSTOMER_INACTIVE: 'inactiveForDays',
+  DEAL_STAGE_STALE: 'thresholdHoursOverride',
+  DEAL_SILENT_FOR: 'silentForDays',
+};
+
 /**
  * Sem repository layer (Decisão #12 do blueprint da Fase 1, mantida aqui) —
  * chama `PrismaService` diretamente.
@@ -51,7 +66,17 @@ export class AutomationsService {
     private readonly auditService: AuditService,
   ) {}
 
+  private assertValidConditionsRange(trigger: AutomationTrigger, conditions: object | undefined): void {
+    const field = CONDITION_NUMERIC_FIELD[trigger];
+    const value = (conditions as Record<string, unknown> | undefined)?.[field];
+    if (value !== undefined && (!Number.isInteger(value) || (value as number) <= 0)) {
+      throw new BadRequestException(`${field} deve ser um inteiro positivo`);
+    }
+  }
+
   async create(organizationId: string, actorUserId: string, dto: CreateAutomationInput): Promise<Automation> {
+    this.assertValidConditionsRange(dto.trigger, dto.conditions);
+
     const automation = await this.prisma.automation.create({
       data: {
         organizationId,
@@ -88,6 +113,32 @@ export class AutomationsService {
     if (!automation) {
       throw new NotFoundException('Automação não encontrada');
     }
+    return automation;
+  }
+
+  async update(
+    organizationId: string,
+    actorUserId: string,
+    automationId: string,
+    dto: UpdateAutomationInput,
+  ): Promise<Automation> {
+    const existing = await this.findByIdOrThrow(organizationId, automationId);
+    this.assertValidConditionsRange(existing.trigger, dto.conditions);
+
+    const automation = await this.prisma.automation.update({
+      where: { id: automationId },
+      data: dto as Prisma.AutomationUpdateInput,
+    });
+
+    await this.auditService.log({
+      actorType: 'USER',
+      actorId: actorUserId,
+      organizationId,
+      action: 'automation.updated',
+      resource: `Automation:${automationId}`,
+      metadata: { ...dto } as Prisma.InputJsonValue,
+    });
+
     return automation;
   }
 

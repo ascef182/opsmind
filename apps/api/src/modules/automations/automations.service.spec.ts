@@ -4,7 +4,7 @@ import { AutomationsService } from './automations.service';
 describe('AutomationsService', () => {
   let service: AutomationsService;
   let prisma: {
-    automation: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
+    automation: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
     automationRun: { findMany: jest.Mock };
     organization: { findUniqueOrThrow: jest.Mock };
     customer: { findMany: jest.Mock };
@@ -14,7 +14,7 @@ describe('AutomationsService', () => {
 
   beforeEach(() => {
     prisma = {
-      automation: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
+      automation: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
       automationRun: { findMany: jest.fn() },
       organization: { findUniqueOrThrow: jest.fn() },
       customer: { findMany: jest.fn() },
@@ -145,6 +145,62 @@ describe('AutomationsService', () => {
 
       await expect(service.runNow('org-1', 'user-1', 'auto-1')).rejects.toThrow(BadRequestException);
       expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('update', () => {
+    it('atualiza a automação, audita, e não precisa reenviar todos os campos', async () => {
+      prisma.automation.findFirst.mockResolvedValue({
+        id: 'auto-1', organizationId: 'org-1', trigger: 'CUSTOMER_INACTIVE', conditions: {}, actions: {},
+      });
+      prisma.automation.update.mockResolvedValue({ id: 'auto-1', organizationId: 'org-1', enabled: false });
+
+      const result = await service.update('org-1', 'user-1', 'auto-1', { enabled: false });
+
+      expect(prisma.automation.update).toHaveBeenCalledWith({ where: { id: 'auto-1' }, data: { enabled: false } });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ actorType: 'USER', actorId: 'user-1', action: 'automation.updated' }),
+      );
+      expect(result.enabled).toBe(false);
+    });
+
+    it('lança NotFoundException se a automação não existe na organização', async () => {
+      prisma.automation.findFirst.mockResolvedValue(null);
+
+      await expect(service.update('org-1', 'user-1', 'auto-x', { enabled: false })).rejects.toThrow(NotFoundException);
+      expect(prisma.automation.update).not.toHaveBeenCalled();
+    });
+
+    it('rejeita thresholdHoursOverride <= 0 num DEAL_STAGE_STALE', async () => {
+      prisma.automation.findFirst.mockResolvedValue({
+        id: 'auto-1', organizationId: 'org-1', trigger: 'DEAL_STAGE_STALE', conditions: {}, actions: {},
+      });
+
+      await expect(
+        service.update('org-1', 'user-1', 'auto-1', { conditions: { thresholdHoursOverride: 0 } }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.automation.update).not.toHaveBeenCalled();
+    });
+
+    it('rejeita silentForDays não-inteiro num DEAL_SILENT_FOR', async () => {
+      prisma.automation.findFirst.mockResolvedValue({
+        id: 'auto-1', organizationId: 'org-1', trigger: 'DEAL_SILENT_FOR', conditions: {}, actions: {},
+      });
+
+      await expect(
+        service.update('org-1', 'user-1', 'auto-1', { conditions: { silentForDays: 2.5 } }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('create — validação de range de conditions', () => {
+    it('rejeita inactiveForDays negativo', async () => {
+      await expect(
+        service.create('org-1', 'user-1', {
+          name: 'X', trigger: 'CUSTOMER_INACTIVE', conditions: { inactiveForDays: -1 }, actions: {},
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.automation.create).not.toHaveBeenCalled();
     });
   });
 
