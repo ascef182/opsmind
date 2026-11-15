@@ -37,10 +37,16 @@ export interface Automation {
 
 export interface AutomationRun {
   id: string;
+  organizationId: string;
   automationId: string;
   customerId: string | null;
   dealId: string | null;
   status: AutomationRunStatus;
+  // 'USER' (disparo manual via "Executar agora") vs 'SYSTEM' (scan periódico
+  // do worker) — mesmo par actorType/actorId de AuditLog, ver
+  // lib/customers/types.ts.
+  actorType: string;
+  actorId: string | null;
   result: Record<string, unknown> | null;
   errorMessage: string | null;
   createdAt: string;
