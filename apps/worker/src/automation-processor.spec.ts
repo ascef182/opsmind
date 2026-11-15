@@ -303,3 +303,64 @@ describe('processAutomationJob — DEAL_SILENT_FOR', () => {
     });
   });
 });
+
+describe.each(['DEAL_STAGE_STALE', 'DEAL_SILENT_FOR'] as const)('processAutomationJob — guards de %s', (trigger) => {
+  const jobDataNoDealId = { organizationId: 'org-1', automationId: 'auto-1', customerId: 'cust-1', actorType: 'SYSTEM' as const };
+  const automation = { id: 'auto-1', organizationId: 'org-1', trigger, conditions: {}, actions: { createTask: true } };
+
+  function buildTx() {
+    return {
+      automation: { findFirst: jest.fn() }, deal: { findFirst: jest.fn() }, customer: { findFirst: jest.fn() },
+      task: { create: jest.fn() }, notification: { create: jest.fn() }, auditLog: { create: jest.fn() }, automationRun: { create: jest.fn() },
+    };
+  }
+
+  function mockWithTenantContext(tx: ReturnType<typeof buildTx>) {
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation((_p: unknown, _o: string, fn: (tx: unknown) => unknown) => fn(tx));
+  }
+
+  it('marca SKIPPED "dealId ausente no job" quando data.dealId está ausente', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(automation);
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SKIPPED' });
+    mockWithTenantContext(tx);
+
+    await processAutomationJob({} as never, jobDataNoDealId);
+
+    expect(tx.deal.findFirst).not.toHaveBeenCalled();
+    expect(tx.automationRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ status: 'SKIPPED', result: { reason: 'dealId ausente no job' } }),
+    });
+  });
+
+  it('marca SKIPPED "Negócio não encontrado ou excluído" quando o deal não existe', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(automation);
+    tx.deal.findFirst.mockResolvedValue(null);
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SKIPPED' });
+    mockWithTenantContext(tx);
+
+    await processAutomationJob({} as never, { ...jobDataNoDealId, dealId: 'deal-x' });
+
+    expect(tx.customer.findFirst).not.toHaveBeenCalled();
+    expect(tx.automationRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ status: 'SKIPPED', result: { reason: 'Negócio não encontrado ou excluído' } }),
+    });
+  });
+
+  it('marca SKIPPED "Cliente do negócio não encontrado ou excluído" quando o customer do deal não existe', async () => {
+    const tx = buildTx();
+    tx.automation.findFirst.mockResolvedValue(automation);
+    tx.deal.findFirst.mockResolvedValue({ id: 'deal-1', customerId: 'cust-1', stage: 'QUALIFICATION', stageEnteredAt: new Date(), ownerUserId: null, title: 'X' });
+    tx.customer.findFirst.mockResolvedValue(null);
+    tx.automationRun.create.mockResolvedValue({ id: 'run-1', status: 'SKIPPED' });
+    mockWithTenantContext(tx);
+
+    await processAutomationJob({} as never, { ...jobDataNoDealId, dealId: 'deal-1' });
+
+    expect(tx.automationRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ status: 'SKIPPED', result: { reason: 'Cliente do negócio não encontrado ou excluído' } }),
+    });
+  });
+});
