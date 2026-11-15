@@ -463,6 +463,7 @@ export async function processAutomationJob(
         organizationId: data.organizationId,
         automationId: data.automationId,
         customerId: data.customerId,
+        dealId: data.dealId,
         status: 'FAILED',
         actorType: data.actorType,
         actorId: data.actorId,

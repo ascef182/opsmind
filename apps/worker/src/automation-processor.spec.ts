@@ -364,3 +364,18 @@ describe.each(['DEAL_STAGE_STALE', 'DEAL_SILENT_FOR'] as const)('processAutomati
     });
   });
 });
+
+describe('processAutomationJob — FAILED preserva dealId', () => {
+  it('grava dealId no AutomationRun FAILED quando o job é de um trigger de Deal e algo lança', async () => {
+    const prisma = { automationRun: { create: jest.fn().mockResolvedValue({ id: 'run-1', status: 'FAILED' }) } };
+    const { withTenantContext } = jest.requireMock('./tenant-context');
+    withTenantContext.mockImplementation(() => { throw new Error('falha simulada'); });
+
+    const jobData = { organizationId: 'org-1', automationId: 'auto-1', customerId: 'cust-1', dealId: 'deal-1', actorType: 'SYSTEM' as const };
+    await processAutomationJob(prisma as never, jobData);
+
+    expect(prisma.automationRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ status: 'FAILED', dealId: 'deal-1' }),
+    });
+  });
+});
