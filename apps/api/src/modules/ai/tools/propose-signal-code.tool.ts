@@ -1,6 +1,9 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import type { SignalCode } from '@opsmind/database';
 import { SignalCodesService } from '../../leads/signal-codes.service';
+import { CreateSignalCodeDto } from '../../leads/dto/create-signal-code.dto';
 import { WRITE_ROLES } from '../../../shared/constants/roles.constant';
 import type { AiTool, AiToolContext } from './ai-tool.interface';
 
@@ -41,7 +44,18 @@ export class ProposeSignalCodeTool implements AiTool<ProposeSignalCodeInput> {
       );
     }
 
-    const { code, label, category } = input;
+    // O input do modelo não passa pelo `ValidationPipe` do Nest (esse só
+    // corre em rotas HTTP) — sem isso, o modelo podia mandar `code`/`label`/
+    // `category` vazios ou absurdamente longos direto pro service. Valida
+    // contra o mesmo DTO que a rota HTTP usa, pra nunca divergir das regras.
+    const dto = plainToInstance(CreateSignalCodeDto, input);
+    const errors = await validate(dto);
+    if (errors.length > 0) {
+      const summary = errors.map((error) => Object.values(error.constraints ?? {}).join('; ')).join(' | ');
+      throw new BadRequestException(`Entrada inválida para propose_signal_code: ${summary}`);
+    }
+
+    const { code, label, category } = dto;
     return this.signalCodesService.propose(context.organizationId, { code, label, category }, context.userId);
   }
 }

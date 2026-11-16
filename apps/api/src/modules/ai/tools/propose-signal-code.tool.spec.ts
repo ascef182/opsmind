@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ProposeSignalCodeTool } from './propose-signal-code.tool';
 
 describe('ProposeSignalCodeTool', () => {
@@ -31,6 +31,19 @@ describe('ProposeSignalCodeTool', () => {
         { organizationId: 'org-1', userId: 'user-1', role: 'VIEWER' },
       ),
     ).rejects.toThrow(ForbiddenException);
+    expect(signalCodesService.propose).not.toHaveBeenCalled();
+  });
+
+  it('recusa um `code` vazio antes de chamar o service (mesma validação do CreateSignalCodeDto da rota HTTP)', async () => {
+    const signalCodesService = { propose: jest.fn() };
+    const tool = new ProposeSignalCodeTool(signalCodesService as never);
+
+    await expect(
+      tool.execute(
+        { code: '', label: 'Contratando em massa', category: 'crescimento' },
+        { organizationId: 'org-1', userId: 'user-1', role: 'MEMBER' },
+      ),
+    ).rejects.toThrow(BadRequestException);
     expect(signalCodesService.propose).not.toHaveBeenCalled();
   });
 });
