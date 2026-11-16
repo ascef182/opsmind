@@ -10,6 +10,7 @@ import {
   QUALIFICATION_THRESHOLD,
   scoreLead,
   pickRoundRobinAssignee,
+  resolveAutodraftChannel,
   STRUCTURED_WEBSITE_SOURCES,
   type LeadScoringInput,
   type LeadSignalForScoring,
@@ -19,6 +20,8 @@ import { EXPLORIUM_GATEWAY, type ExploriumGateway } from '@opsmind/integrations'
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { DealsService } from '../deals/deals.service';
+import { WebsiteProfileQueueService } from '../../infrastructure/queue/website-profile-queue.service';
+import { OutreachAutodraftQueueService } from '../../infrastructure/queue/outreach-autodraft-queue.service';
 import { WRITE_ROLES } from '../../shared/constants/roles.constant';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
@@ -96,6 +99,8 @@ export class LeadsService {
     private readonly auditService: AuditService,
     @Inject(EXPLORIUM_GATEWAY) private readonly exploriumGateway: ExploriumGateway,
     private readonly dealsService: DealsService,
+    private readonly websiteProfileQueueService: WebsiteProfileQueueService,
+    private readonly outreachAutodraftQueueService: OutreachAutodraftQueueService,
   ) {}
 
   async create(organizationId: string, dto: CreateLeadDto, actorUserId: string): Promise<Lead> {
@@ -441,6 +446,44 @@ export class LeadsService {
       resource: `Lead:${id}`,
       metadata: { score: breakdown.total, status: canUpdateStatus ? computedStatus : lead.status },
     });
+
+    // Gatilho de qualificação (Harvey Fase 7) — mesma bifurcação de
+    // `apps/worker/src/lead-scrape-processor.ts` quando um lead em lote
+    // cruza pra QUALIFIED, replicada aqui pro caminho manual (endpoint
+    // `POST .../leads/:id/score` e a AI tool `score_lead`, que não passavam
+    // por esse pipeline). Best-effort: o score já foi computado e persistido
+    // com sucesso acima, então uma falha de enfileiramento (ex.: Redis fora)
+    // nunca pode derrubar essa chamada já bem-sucedida.
+    if (canUpdateStatus && computedStatus === 'QUALIFIED' && updated.suggestedOfferingId) {
+      try {
+        const existingOutreachCount = await this.prisma.outreachMessage.count({ where: { leadId: id } });
+        if (existingOutreachCount === 0) {
+          const alreadyInvestigated = updated.website
+            ? (await this.prisma.leadSignal.count({ where: { leadId: id } })) > 0
+            : false;
+          if (updated.website && !alreadyInvestigated) {
+            await this.websiteProfileQueueService.enqueue({
+              organizationId,
+              leadId: id,
+              actorType: 'USER',
+              actorId: actorUserId,
+            });
+          } else {
+            const channel = resolveAutodraftChannel(updated);
+            if (channel) {
+              await this.outreachAutodraftQueueService.enqueue({
+                organizationId,
+                leadId: id,
+                channel,
+                serviceOfferingId: updated.suggestedOfferingId,
+              });
+            }
+          }
+        }
+      } catch {
+        // best-effort — ver nota acima; nunca derruba score() já persistido com sucesso.
+      }
+    }
 
     return updated;
   }

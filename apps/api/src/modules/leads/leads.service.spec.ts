@@ -16,13 +16,16 @@ describe('LeadsService', () => {
     };
     serviceOffering: { findMany: jest.Mock };
     leadEnrichment: { findFirst: jest.Mock; create: jest.Mock };
-    leadSignal: { findMany: jest.Mock };
+    leadSignal: { findMany: jest.Mock; count: jest.Mock };
+    outreachMessage: { count: jest.Mock };
     customer: { create: jest.Mock };
     membership: { findMany: jest.Mock; findFirst: jest.Mock };
   };
   let auditService: { log: jest.Mock };
   let exploriumGateway: { searchBusinesses: jest.Mock; matchBusiness: jest.Mock };
   let dealsService: { create: jest.Mock };
+  let websiteProfileQueueService: { enqueue: jest.Mock };
+  let outreachAutodraftQueueService: { enqueue: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -36,18 +39,23 @@ describe('LeadsService', () => {
       },
       serviceOffering: { findMany: jest.fn() },
       leadEnrichment: { findFirst: jest.fn(), create: jest.fn() },
-      leadSignal: { findMany: jest.fn().mockResolvedValue([]) },
+      leadSignal: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
+      outreachMessage: { count: jest.fn().mockResolvedValue(0) },
       customer: { create: jest.fn() },
       membership: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
     };
     auditService = { log: jest.fn() };
     exploriumGateway = { searchBusinesses: jest.fn(), matchBusiness: jest.fn() };
     dealsService = { create: jest.fn().mockResolvedValue({ id: 'deal-1' }) };
+    websiteProfileQueueService = { enqueue: jest.fn().mockResolvedValue(undefined) };
+    outreachAutodraftQueueService = { enqueue: jest.fn().mockResolvedValue(undefined) };
     service = new LeadsService(
       prisma as never,
       auditService as never,
       exploriumGateway as never,
       dealsService as never,
+      websiteProfileQueueService as never,
+      outreachAutodraftQueueService as never,
     );
   });
 
@@ -590,6 +598,170 @@ describe('LeadsService', () => {
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ metadata: { score: expect.any(Number), status: 'CONVERTED' } }),
       );
+    });
+
+    // Gatilho de qualificação (Harvey Fase 7) — bifurcação website-profile
+    // vs. outreach-autodraft disparada quando `score()` cruza o lead pra
+    // QUALIFIED. Mesma lógica de `lead-scrape-processor.ts`, replicada aqui
+    // pro caminho manual (endpoint + AI tool `score_lead`).
+    describe('gatilho de qualificação', () => {
+      const baseLead = {
+        id: 'lead-1',
+        organizationId: 'org-1',
+        status: 'DISCOVERED',
+        sourceType: 'MANUAL',
+        website: 'https://acme.com',
+        whatsapp: null,
+        email: null,
+        phone: null,
+        socialLinks: null,
+        googleCategory: null,
+        rating: null,
+        reviewCount: null,
+        rawContent: 'clínica odontológica referência em dentista na região',
+      };
+      const qualifyingOfferings = [
+        {
+          id: 'off-1',
+          signals: ['dentista'],
+          targetIndustries: [],
+          minEmployees: null,
+          maxEmployees: null,
+          minRevenueUsd: null,
+          maxRevenueUsd: null,
+        },
+      ];
+
+      it('lead cruza pra QUALIFIED com site nunca investigado: enfileira website-profile, não outreach-autodraft', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...baseLead });
+        prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.leadSignal.count.mockResolvedValue(0);
+        prisma.outreachMessage.count.mockResolvedValue(0);
+        prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ ...baseLead, ...data }));
+
+        const result = await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(result.status).toBe('QUALIFIED');
+        expect(websiteProfileQueueService.enqueue).toHaveBeenCalledWith({
+          organizationId: 'org-1',
+          leadId: 'lead-1',
+          actorType: 'USER',
+          actorId: 'user-1',
+        });
+        expect(outreachAutodraftQueueService.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('lead cruza pra QUALIFIED com site já investigado e whatsapp preenchido: enfileira outreach-autodraft com canal WHATSAPP, não website-profile', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...baseLead, whatsapp: '+5511999999999' });
+        prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.leadSignal.count.mockResolvedValue(1);
+        prisma.outreachMessage.count.mockResolvedValue(0);
+        prisma.lead.update.mockImplementation(({ data }) =>
+          Promise.resolve({ ...baseLead, whatsapp: '+5511999999999', ...data }),
+        );
+
+        await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(outreachAutodraftQueueService.enqueue).toHaveBeenCalledWith({
+          organizationId: 'org-1',
+          leadId: 'lead-1',
+          channel: 'WHATSAPP',
+          serviceOfferingId: 'off-1',
+        });
+        expect(websiteProfileQueueService.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('lead cruza pra QUALIFIED sem site, com email preenchido: enfileira outreach-autodraft com canal EMAIL', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...baseLead, website: null, email: 'contato@acme.com' });
+        prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.outreachMessage.count.mockResolvedValue(0);
+        prisma.lead.update.mockImplementation(({ data }) =>
+          Promise.resolve({ ...baseLead, website: null, email: 'contato@acme.com', ...data }),
+        );
+
+        await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(outreachAutodraftQueueService.enqueue).toHaveBeenCalledWith({
+          organizationId: 'org-1',
+          leadId: 'lead-1',
+          channel: 'EMAIL',
+          serviceOfferingId: 'off-1',
+        });
+        expect(websiteProfileQueueService.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('lead cruza pra QUALIFIED sem suggestedOfferingId: não enfileira nada', async () => {
+        prisma.lead.findFirst.mockResolvedValue({
+          ...baseLead,
+          sourceType: 'APIFY_GOOGLE_MAPS',
+          website: null,
+          rawContent: null,
+        });
+        prisma.serviceOffering.findMany.mockResolvedValue([]);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.outreachMessage.count.mockResolvedValue(0);
+        prisma.lead.update.mockImplementation(({ data }) =>
+          Promise.resolve({ ...baseLead, sourceType: 'APIFY_GOOGLE_MAPS', website: null, rawContent: null, ...data }),
+        );
+
+        const result = await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(result.status).toBe('QUALIFIED');
+        expect(result.suggestedOfferingId).toBeNull();
+        expect(websiteProfileQueueService.enqueue).not.toHaveBeenCalled();
+        expect(outreachAutodraftQueueService.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('lead já tem um OutreachMessage existente: não enfileira nada mesmo cruzando pra QUALIFIED agora', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...baseLead });
+        prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.outreachMessage.count.mockResolvedValue(1);
+        prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ ...baseLead, ...data }));
+
+        const result = await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(result.status).toBe('QUALIFIED');
+        expect(websiteProfileQueueService.enqueue).not.toHaveBeenCalled();
+        expect(outreachAutodraftQueueService.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('lead permanece em status que canUpdateStatus não altera (ex.: já CONVERTED): não enfileira nada', async () => {
+        prisma.lead.findFirst.mockResolvedValue({
+          ...baseLead,
+          status: 'CONVERTED',
+          convertedCustomerId: 'cust-1',
+        });
+        prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.outreachMessage.count.mockResolvedValue(0);
+        prisma.lead.update.mockImplementation(({ data }) =>
+          Promise.resolve({ ...baseLead, status: 'CONVERTED', convertedCustomerId: 'cust-1', ...data }),
+        );
+
+        await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(websiteProfileQueueService.enqueue).not.toHaveBeenCalled();
+        expect(outreachAutodraftQueueService.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('falha ao enfileirar não propaga: score() ainda retorna o lead atualizado normalmente', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...baseLead });
+        prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.leadSignal.count.mockResolvedValue(0);
+        prisma.outreachMessage.count.mockResolvedValue(0);
+        prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ ...baseLead, ...data }));
+        websiteProfileQueueService.enqueue.mockRejectedValue(new Error('redis indisponível'));
+
+        const result = await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(result.status).toBe('QUALIFIED');
+        expect(result.score).toBeGreaterThanOrEqual(50);
+      });
     });
   });
 
