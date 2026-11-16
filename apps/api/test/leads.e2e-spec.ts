@@ -244,14 +244,25 @@ describe('Leads/Prospecção (e2e)', () => {
     expect(scoreRes.body.status).toBe('QUALIFIED');
     expect(scoreRes.body.suggestedOfferingId).toBe(offeringId);
 
-    // Espera determinística pelo job assíncrono acima: um `OutreachMessage`
-    // DRAFT pra este lead só existe depois que `OutreachAutodraftConsumer`
-    // já chamou (e consumiu) o `mockResolvedValueOnce` registrado acima —
-    // só então é seguro deixar os passos seguintes registrarem os próprios
-    // mocks, sem risco de um roubar o call do outro.
-    const autodraftMessage = await waitFor(() =>
-      prisma.outreachMessage.findFirst({ where: { organizationId, leadId, status: 'DRAFT' } }),
-    );
+    // Espera determinística pelo job assíncrono acima — poll no PRÓPRIO sinal
+    // que o passo 5 abaixo depende de já ter commitado: `Lead.status`
+    // virando `OUTREACH_DRAFTED`, não a existência do `OutreachMessage`.
+    // `OutreachService.generateDraft()` grava os dois em dois `await`s
+    // sequenciais, não atomicamente (`outreach.service.ts:268-289`: primeiro
+    // cria o `OutreachMessage`, só depois atualiza `Lead.status`) — pollar
+    // só a mensagem deixaria uma janela estreita em que ela já existe mas o
+    // status ainda não comitou, e o `/enrich` do passo 5 poderia ler
+    // `QUALIFIED` obsoleto. Pollar o status diretamente fecha essa janela
+    // por construção: se já é `OUTREACH_DRAFTED`, o `OutreachMessage` já
+    // existe também (ele é gravado ANTES, na mesma função).
+    const leadAfterAutodraft = await waitFor(async () => {
+      const current = await prisma.lead.findUnique({ where: { id: leadId } });
+      return current?.status === 'OUTREACH_DRAFTED' ? current : null;
+    });
+    expect(leadAfterAutodraft.status).toBe('OUTREACH_DRAFTED');
+    const autodraftMessage = await prisma.outreachMessage.findFirst({
+      where: { organizationId, leadId, status: 'DRAFT' },
+    });
     expect(autodraftMessage?.channel).toBe('PHONE');
 
     // 5. Enrich manual — Explorium mockada encontra firmografia; score é
@@ -312,6 +323,11 @@ describe('Leads/Prospecção (e2e)', () => {
     const draftCall = gateway.sendMessage.mock.calls.at(-1)?.[0];
     expect(draftCall.tools).toEqual([]);
 
+    // Nota: esta asserção já não exercita a transição QUALIFIED ->
+    // OUTREACH_DRAFTED do draft MANUAL em si — o lead já chegou aqui
+    // OUTREACH_DRAFTED pelo autodraft automático do passo 4 (Harvey Fase 7).
+    // Continua correta (o endpoint manual não regride o status), só deixou
+    // de ser prova de que o draft manual É quem avança o status.
     const leadAfterDraftRes = await request(app.getHttpServer())
       .get(`/organizations/${organizationId}/leads/${leadId}`)
       .set(auth)
