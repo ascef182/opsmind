@@ -1,5 +1,8 @@
+jest.mock('@sentry/nestjs', () => ({ captureException: jest.fn() }));
+
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@opsmind/database';
+import * as Sentry from '@sentry/nestjs';
 import { LeadsService } from './leads.service';
 import type { SocialLinkDto } from './dto/social-link.dto';
 
@@ -28,6 +31,7 @@ describe('LeadsService', () => {
   let outreachAutodraftQueueService: { enqueue: jest.Mock };
 
   beforeEach(() => {
+    (Sentry.captureException as jest.Mock).mockClear();
     prisma = {
       lead: {
         create: jest.fn(),
@@ -748,19 +752,28 @@ describe('LeadsService', () => {
         expect(outreachAutodraftQueueService.enqueue).not.toHaveBeenCalled();
       });
 
-      it('falha ao enfileirar não propaga: score() ainda retorna o lead atualizado normalmente', async () => {
+      it('falha ao enfileirar não propaga: score() ainda retorna o lead atualizado normalmente, mas reporta pro Sentry', async () => {
         prisma.lead.findFirst.mockResolvedValue({ ...baseLead });
         prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
         prisma.leadEnrichment.findFirst.mockResolvedValue(null);
         prisma.leadSignal.count.mockResolvedValue(0);
         prisma.outreachMessage.count.mockResolvedValue(0);
         prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ ...baseLead, ...data }));
-        websiteProfileQueueService.enqueue.mockRejectedValue(new Error('redis indisponível'));
+        const enqueueError = new Error('redis indisponível');
+        websiteProfileQueueService.enqueue.mockRejectedValue(enqueueError);
 
         const result = await service.score('org-1', 'lead-1', 'user-1');
 
         expect(result.status).toBe('QUALIFIED');
         expect(result.score).toBeGreaterThanOrEqual(50);
+        // Best-effort não é silencioso: reporta a falha de enfileiramento,
+        // mesma disciplina de observabilidade de `lead-scrape-processor.ts`.
+        expect(Sentry.captureException).toHaveBeenCalledWith(
+          enqueueError,
+          expect.objectContaining({
+            extra: { leadId: 'lead-1', organizationId: 'org-1', phase: 'website-profile-enqueue' },
+          }),
+        );
       });
     });
   });

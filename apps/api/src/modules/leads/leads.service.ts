@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import * as Sentry from '@sentry/nestjs';
 import { Prisma, type Customer, type Lead, type LeadStatus } from '@opsmind/database';
 import {
   QUALIFICATION_THRESHOLD,
@@ -455,6 +456,10 @@ export class LeadsService {
     // com sucesso acima, então uma falha de enfileiramento (ex.: Redis fora)
     // nunca pode derrubar essa chamada já bem-sucedida.
     if (canUpdateStatus && computedStatus === 'QUALIFIED' && updated.suggestedOfferingId) {
+      // Rastreia qual enfileiramento foi tentado só pra enriquecer o report
+      // de erro abaixo (`extra.phase`) — nunca influencia a decisão
+      // best-effort em si.
+      let phase: 'website-profile-enqueue' | 'outreach-autodraft-enqueue' | undefined;
       try {
         const existingOutreachCount = await this.prisma.outreachMessage.count({ where: { leadId: id } });
         if (existingOutreachCount === 0) {
@@ -462,6 +467,7 @@ export class LeadsService {
             ? (await this.prisma.leadSignal.count({ where: { leadId: id } })) > 0
             : false;
           if (updated.website && !alreadyInvestigated) {
+            phase = 'website-profile-enqueue';
             await this.websiteProfileQueueService.enqueue({
               organizationId,
               leadId: id,
@@ -471,6 +477,7 @@ export class LeadsService {
           } else {
             const channel = resolveAutodraftChannel(updated);
             if (channel) {
+              phase = 'outreach-autodraft-enqueue';
               await this.outreachAutodraftQueueService.enqueue({
                 organizationId,
                 leadId: id,
@@ -480,8 +487,19 @@ export class LeadsService {
             }
           }
         }
-      } catch {
-        // best-effort — ver nota acima; nunca derruba score() já persistido com sucesso.
+      } catch (enqueueError) {
+        // best-effort — ver nota acima; nunca derruba score() já persistido com
+        // sucesso. Mesma disciplina de observabilidade de
+        // `lead-scrape-processor.ts` (Passo 3.5): reporta pro Sentry e stderr
+        // em vez de engolir silenciosamente.
+        Sentry.captureException(enqueueError, {
+          extra: { leadId: id, organizationId, phase },
+        });
+        // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
+        console.error(
+          `[LeadsService] falha ao enfileirar gatilho de qualificação (${phase ?? 'fase desconhecida'}) para o lead ${id}:`,
+          enqueueError,
+        );
       }
     }
 
