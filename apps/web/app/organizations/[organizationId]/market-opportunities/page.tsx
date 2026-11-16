@@ -2,26 +2,13 @@
 
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
-import { toast } from 'sonner';
 import { isSafeHttpUrl } from '@opsmind/shared-types';
 import { useCurrentMembership } from '@/lib/memberships/use-memberships';
 import { useMarketOpportunities, useUpdateMarketOpportunityStatus } from '@/lib/market-opportunities/use-market-opportunities';
-import {
-  useCreateRedditWatchTopic,
-  useRedditWatchTopics,
-  useRunRedditWatchTopicNow,
-  useUpdateRedditWatchTopic,
-} from '@/lib/market-opportunities/use-reddit-watch-topics';
-import {
-  WRITE_ROLES,
-  type MarketOpportunity,
-  type MarketOpportunityStatus,
-  type RedditWatchTopic,
-} from '@/lib/market-opportunities/types';
+import { WRITE_ROLES, type MarketOpportunity, type MarketOpportunityStatus } from '@/lib/market-opportunities/types';
 import { ApiError } from '@/lib/api-client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormError } from '@/components/ui/card';
 
@@ -161,153 +148,6 @@ function OpportunityCard({
   );
 }
 
-// Sem isso, o monitoramento "não funcionar" (Camoufox mal configurado,
-// orçamento estourado) era invisível — nada na UI distinguia "nunca rodou"
-// de "rodou e falhou" (ver `lastScannedAt`/`lastScanStatus`/`lastScanError`,
-// gravados por `apps/worker/src/reddit-mining-scan.ts`).
-function scanStatusLabel(topic: RedditWatchTopic): string {
-  if (!topic.lastScannedAt) return 'Ainda não verificado — aguardando o próximo scan.';
-  const when = new Date(topic.lastScannedAt).toLocaleString('pt-BR');
-  if (topic.lastScanStatus === 'ERROR') {
-    return `Última verificação: ${when} — falhou${topic.lastScanError ? `: ${topic.lastScanError}` : ''}.`;
-  }
-  if (topic.lastScanStatus === 'SKIPPED_BUDGET') {
-    return `Última verificação: ${when} — pulada (orçamento de scraping excedido).`;
-  }
-  return `Última verificação: ${when} — ok.`;
-}
-
-// Painel colapsável de gestão de RedditWatchTopic — mesmo padrão de
-// expand/collapse de `ScrapeJobsPanel` (leads/page.tsx), mas essa entidade é
-// pequena o bastante pra caber list+criar+ativar/desativar aqui mesmo, sem
-// página própria (ver brief da Task 14).
-function RedditWatchTopicsPanel({ organizationId, canWrite }: { organizationId: string; canWrite: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const topics = useRedditWatchTopics(organizationId);
-  const createTopic = useCreateRedditWatchTopic(organizationId);
-  const updateTopic = useUpdateRedditWatchTopic(organizationId);
-  const runNow = useRunRedditWatchTopicNow(organizationId);
-
-  const [query, setQuery] = useState('');
-  const [subreddit, setSubreddit] = useState('');
-
-  function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    if (!query.trim()) return;
-    createTopic.mutate(
-      { query: query.trim(), subreddit: subreddit.trim() || undefined },
-      { onSuccess: () => { setQuery(''); setSubreddit(''); } },
-    );
-  }
-
-  function toggleActive(topicId: string, isActive: boolean) {
-    updateTopic.mutate({ topicId, input: { isActive: !isActive } });
-  }
-
-  function handleRunNow(topicId: string) {
-    runNow.mutate(topicId, {
-      onSuccess: () => toast.success('Verificação iniciada — o resultado aparece aqui em instantes.'),
-      onError: () => toast.error('Não foi possível iniciar a verificação agora.'),
-    });
-  }
-
-  return (
-    <div className="rounded-lg border border-border bg-card">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-foreground"
-        aria-expanded={expanded}
-      >
-        <span>Tópicos monitorados no Reddit {topics.data ? `(${topics.data.length})` : ''}</span>
-        <span className="text-muted-foreground">{expanded ? '▲' : '▼'}</span>
-      </button>
-      {expanded && (
-        <div className="flex flex-col gap-4 border-t border-border px-4 py-3">
-          {canWrite && (
-            <form onSubmit={handleCreate} className="flex flex-wrap items-end gap-2">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Termo de busca</label>
-                <Input
-                  placeholder="ex.: 'problema com agendamento'"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="max-w-[240px]"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Subreddit (opcional)</label>
-                <Input
-                  placeholder="ex.: smallbusiness"
-                  value={subreddit}
-                  onChange={(e) => setSubreddit(e.target.value)}
-                  className="max-w-[180px]"
-                />
-              </div>
-              <Button type="submit" size="sm" disabled={createTopic.isPending || !query.trim()}>
-                + Adicionar tópico
-              </Button>
-            </form>
-          )}
-          <FormError message={createTopic.isError ? (createTopic.error as ApiError).message : null} />
-          <FormError message={updateTopic.isError ? (updateTopic.error as ApiError).message : null} />
-
-          {topics.isLoading && <p className="text-sm text-muted-foreground">Carregando tópicos…</p>}
-          {topics.isSuccess && topics.data.length === 0 && (
-            <p className="text-sm text-muted-foreground">Nenhum tópico monitorado ainda.</p>
-          )}
-          <ul className="flex flex-col gap-2">
-            {topics.data?.map((topic) => (
-              <li
-                key={topic.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
-              >
-                <div className="flex flex-col">
-                  <span className="text-foreground">
-                    {topic.query}
-                    {topic.subreddit ? ` · r/${topic.subreddit}` : ''}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    Criado em {new Date(topic.createdAt).toLocaleString('pt-BR')}
-                  </span>
-                  <span
-                    className={`text-xs ${topic.lastScanStatus === 'ERROR' ? 'text-negative-500' : 'text-muted-foreground'}`}
-                  >
-                    {scanStatusLabel(topic)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge value={topic.isActive ? 'ACTIVE' : 'INACTIVE'} />
-                  {canWrite && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={runNow.isPending && runNow.variables === topic.id}
-                      onClick={() => handleRunNow(topic.id)}
-                    >
-                      {runNow.isPending && runNow.variables === topic.id ? 'Verificando…' : 'Verificar agora'}
-                    </Button>
-                  )}
-                  {canWrite && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={updateTopic.isPending}
-                      onClick={() => toggleActive(topic.id, topic.isActive)}
-                    >
-                      {topic.isActive ? 'Desativar' : 'Ativar'}
-                    </Button>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function MarketOpportunitiesPage() {
   const { organizationId } = useParams<{ organizationId: string }>();
   const { membership } = useCurrentMembership(organizationId);
@@ -353,8 +193,6 @@ export default function MarketOpportunitiesPage() {
           ))}
         </ul>
       )}
-
-      <RedditWatchTopicsPanel organizationId={organizationId} canWrite={canWrite} />
     </div>
   );
 }
