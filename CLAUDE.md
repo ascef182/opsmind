@@ -162,7 +162,10 @@ fórmula por firmografia quando o lead vem de fonte estruturada (Apify/Explorium
 match de palavra-chave contra `ServiceOffering.signals` quando vem de fonte não-estruturada (Camofox) — a
 mesma função é usada por `apps/worker` (scraping em lote) e `apps/api` (`/leads/:id/score` sob demanda) para
 nunca divergir. Uma análise de IA por lead (`analyze_lead_potential`, opt-in, nunca automática) fica separada
-do scoring — grava o resultado como `LeadEnrichment{type:'ai_analysis'}`, nunca muta `Lead` direto.
+do scoring — grava o resultado como `LeadEnrichment{type:'ai_analysis'}`, nunca muta `Lead` direto. Qualificação
+(cruzar o threshold) dispara automaticamente investigação de site ou rascunho de outreach (Harvey Fase 7),
+independentemente do caminho de entrada (scraping em lote, endpoint manual ou a AI tool `score_lead`) — mas essa
+reação à qualificação é um gatilho separado do cálculo do score em si, que continua determinístico.
 
 `apps/worker`'s `lead-scrape-processor.ts` diverge deliberadamente do padrão de uma-transação-só de
 `automation-processor.ts`: usa 3 transações curtas (`withTenantContext`) ao redor de 1 fase sem transação (a

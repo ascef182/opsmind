@@ -24,7 +24,7 @@ export interface ScoreLeadInput {
 export class ScoreLeadTool implements AiTool<ScoreLeadInput> {
   readonly name = 'score_lead';
   readonly description =
-    'Recalcula a pontuação de qualificação de um lead (cálculo determinístico, não usa IA) e retorna o detalhamento do score.';
+    'Recalcula a pontuação de qualificação de um lead (cálculo determinístico, não usa IA) e retorna o detalhamento do score. Pode disparar automaticamente investigação de site ou rascunho de outreach quando o lead qualifica.';
   readonly inputSchema = {
     type: 'object',
     properties: {
