@@ -2,7 +2,10 @@ import { randomUUID } from 'crypto';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
+import { Queue } from 'bullmq';
+import IORedis from 'ioredis';
 import { APIFY_GATEWAY, CAMOFOX_GATEWAY, EXPLORIUM_GATEWAY } from '@opsmind/integrations';
+import { WEBSITE_PROFILE_QUEUE, type WebsiteProfileJobData } from '@opsmind/shared-types';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/infrastructure/database/prisma.service';
 import { AI_GATEWAY, type AiGateway } from '../src/modules/ai/gateway/ai-gateway.interface';
@@ -643,6 +646,75 @@ describe('Leads/Prospecção (e2e)', () => {
       .post(`/organizations/${orgA}/leads/${leadWithWebsite.id}/investigate`)
       .set(viewerAuth)
       .expect(403);
+  });
+
+  // Harvey Fase 7 (docs/superpowers/sdd/2026-11-16-harvey-fase7-gatilho-qualificacao):
+  // `LeadsService.score()` dispara um enqueue real em `website-profile`
+  // quando um lead cruza pra QUALIFIED com site nunca investigado — a
+  // bifurcação em si (mockada) já tem cobertura unitária em
+  // `leads.service.spec.ts`; este teste prova que, contra o Postgres+Redis
+  // reais deste e2e, o job realmente chega na fila BullMQ `website-profile`,
+  // não uma dublagem. Mesma fixture de keyword-match (offering com
+  // `signals: ['sem site']` + `rawContent` batendo) do teste de fluxo
+  // completo acima, só com `website` preenchido — nenhum outro teste desta
+  // suíte consome `website-profile` (o worker real é processo separado, ver
+  // comentário de topo do arquivo), então o job fica parado em "waiting" até
+  // a asserção abaixo rodar.
+  it('POST /leads/:id/score que qualifica um lead com site nunca investigado enfileira um job real em website-profile', async () => {
+    const owner = await registerUser(app, `leads-queue-trigger-${randomUUID()}@opsmind.test`);
+    const organizationId = await createOrg(app, owner.accessToken, 'Leads Co Queue Trigger');
+    const auth = { Authorization: `Bearer ${owner.accessToken}` };
+
+    const offeringRes = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/service-offerings`)
+      .set(auth)
+      .send({
+        name: 'Presença Online',
+        description: 'Criamos site simples para negócios locais sem site.',
+        signals: ['sem site'],
+        targetIndustries: ['padaria'],
+      })
+      .expect(201);
+    const offeringId = offeringRes.body.id as string;
+
+    const leadRes = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/leads`)
+      .set(auth)
+      .send({
+        name: 'Padaria com Site e Sinal',
+        website: 'https://padaria-com-site.example.com',
+        googleCategory: 'padaria',
+        rating: 4.6,
+        reviewCount: 30,
+        // Mesmo rawContent do teste de fluxo completo: casa com
+        // `signals: ['sem site']` da offering via keyword-fallback
+        // (`website` preenchido não afeta esse cálculo — só desabilita o
+        // bucket `hasNoWebsitePoints`, que já não se aplica a fonte MANUAL).
+        rawContent: 'Padaria tradicional do bairro, sem site próprio, muito bem avaliada.',
+      })
+      .expect(201);
+    const leadId = leadRes.body.id as string;
+
+    const scoreRes = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/leads/${leadId}/score`)
+      .set(auth)
+      .expect(201);
+    expect(scoreRes.body.score).toBeGreaterThanOrEqual(50);
+    expect(scoreRes.body.status).toBe('QUALIFIED');
+    expect(scoreRes.body.suggestedOfferingId).toBe(offeringId);
+
+    // Conexão BullMQ própria só pra inspecionar a fila real de teste (mesmo
+    // Redis do `.env` de teste, via `WebsiteProfileQueueService` dentro da
+    // app) — fechada no finally, nunca deixada aberta pro processo de teste.
+    const connection = new IORedis(process.env.REDIS_URL as string, { maxRetriesPerRequest: null });
+    const websiteProfileQueue = new Queue<WebsiteProfileJobData>(WEBSITE_PROFILE_QUEUE, { connection });
+    try {
+      const jobs = await websiteProfileQueue.getJobs(['waiting', 'active']);
+      expect(jobs.some((job) => job.data.leadId === leadId)).toBe(true);
+    } finally {
+      await websiteProfileQueue.close();
+      connection.disconnect();
+    }
   });
 
   // Governança de vocabulário de SignalCode (docs/superpowers/sdd/
