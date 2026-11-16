@@ -26,6 +26,7 @@ import { Worker, type Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData } from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
+import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { OutreachService } from './outreach.service';
 
 /**
@@ -54,6 +55,7 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
   constructor(
     private readonly configService: ConfigService<Env, true>,
     private readonly outreachService: OutreachService,
+    private readonly prisma: PrismaService,
   ) {
     this.connection = new IORedis(this.configService.get('REDIS_URL', { infer: true }), {
       maxRetriesPerRequest: null,
@@ -77,6 +79,28 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
 
   private async process(job: Job<OutreachAutodraftJobData>): Promise<void> {
     const { organizationId, leadId, channel, serviceOfferingId } = job.data;
+
+    // Guarda contra rollback (Fix 2 do review final, Harvey Fase 7): este
+    // job é enfileirado DENTRO da transação de request de `score()`. Se essa
+    // transação nunca commitar (ex.: a AI tool `score_lead` roda no meio de
+    // uma chamada de chat com múltiplas tool calls que depois lança ou
+    // atinge `MAX_ITERATIONS`), o job já está sentado no Redis mas o status
+    // QUALIFIED do lead nunca existiu de fato no Postgres. Reconfirma contra
+    // o banco antes de gastar orçamento de IA gerando um rascunho pra um
+    // lead que, pelo estado real do banco, nunca qualificou. Filtro
+    // explícito por `organizationId` na query (defesa em profundidade, ver
+    // seção de multi-tenancy do CLAUDE.md) — este consumer roda fora de
+    // qualquer transação de request, sem contexto de RLS pra confiar.
+    const lead = await this.prisma.lead.findUnique({ where: { id: leadId, organizationId } });
+    if (!lead || lead.status !== 'QUALIFIED') {
+      this.logger.warn(
+        `rascunho automático de outreach pulado (organizationId=${organizationId}, leadId=${leadId}) — ` +
+          `status atual do lead no banco é "${lead?.status ?? 'não encontrado'}", não QUALIFIED (provável rollback ` +
+          'da transação que enfileirou este job)',
+      );
+      return;
+    }
+
     try {
       await this.outreachService.generateDraft(
         organizationId,
