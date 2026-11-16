@@ -80,6 +80,14 @@ const COLORS: Record<string, string> = {
   // reaproveitamento de cor já usado no arquivo entre enums diferentes).
   SUCCESS: 'bg-positive-500/15 text-positive-500',
   SKIPPED: 'bg-ink-800 text-ink-300',
+
+  // SignalCodeStatus (apps/web/lib/leads/types.ts) — PROPOSED reusa a cor de
+  // DISCOVERED (neutro, ainda não revisado), CONFIRMED a de QUALIFIED/ACTIVE
+  // (positivo, em uso), DEPRECATED a de CANCELLED (neutro+line-through,
+  // retirado de uso sem ser uma rejeição explícita como DISQUALIFIED).
+  PROPOSED: 'bg-ink-800 text-ink-300',
+  CONFIRMED: 'bg-positive-500/15 text-positive-500',
+  DEPRECATED: 'bg-ink-800 text-ink-300 line-through',
 };
 
 // `value` é usado como chave de cor em `COLORS` e, por padrão, também como
