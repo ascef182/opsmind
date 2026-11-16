@@ -83,14 +83,18 @@ export default function RedditWatchTopicsPage() {
   const mutation = editingTopic ? updateTopic : createTopic;
 
   const onSubmit = handleSubmit((values) => {
-    // `subreddit` vazio vira `undefined` no payload — mesmo tratamento do
-    // form de criação embutido em market-opportunities/page.tsx, espelhando
-    // o DTO opcional do backend (string vazia não é um subreddit válido).
-    const payload = { ...values, subreddit: values.subreddit?.trim() ? values.subreddit.trim() : undefined };
     if (editingTopic) {
+      // EDIÇÃO: `subreddit` vazio precisa virar `null` explícito no PATCH —
+      // `undefined` faria a chave desaparecer do JSON e o backend nunca
+      // tocaria no campo, deixando um `subreddit` antigo "preso" mesmo com o
+      // form mostrando vazio (bug corrigido nesta rodada).
+      const payload = { ...values, subreddit: values.subreddit?.trim() ? values.subreddit.trim() : null };
       updateTopic.mutate({ topicId: editingTopic.id, input: payload }, { onSuccess: () => setDialogOpen(false) });
       return;
     }
+    // CRIAÇÃO: pode seguir omitindo — `subreddit` ausente = busca ampla,
+    // mesmo tratamento do form embutido em market-opportunities/page.tsx.
+    const payload = { ...values, subreddit: values.subreddit?.trim() ? values.subreddit.trim() : undefined };
     createTopic.mutate(payload, { onSuccess: () => setDialogOpen(false) });
   });
 

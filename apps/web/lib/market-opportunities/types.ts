@@ -70,7 +70,11 @@ export interface RedditWatchTopic {
 
 export interface CreateRedditWatchTopicInput {
   query: string;
-  subreddit?: string;
+  // `string | null` (não só `string | undefined`) porque o form de EDIÇÃO
+  // precisa mandar `null` explícito pra limpar o campo — omitir a chave no
+  // PATCH faz o backend simplesmente não tocar nela (ver
+  // reddit-watch-topics/page.tsx).
+  subreddit?: string | null;
   isActive?: boolean;
 }
 
