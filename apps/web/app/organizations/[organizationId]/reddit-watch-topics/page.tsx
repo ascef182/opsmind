@@ -177,6 +177,14 @@ export default function RedditWatchTopicsPage() {
                   </TableCell>
                   <TableCell className="text-foreground/80">
                     {topic.lastScanStatus ? <Badge value={topic.lastScanStatus} /> : '—'}
+                    {topic.lastScannedAt && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {new Date(topic.lastScannedAt).toLocaleString('pt-BR')}
+                      </p>
+                    )}
+                    {topic.lastScanStatus === 'ERROR' && topic.lastScanError && (
+                      <p className="mt-1 text-xs text-negative-500">{topic.lastScanError}</p>
+                    )}
                   </TableCell>
                   <TableCell className="text-foreground/80">
                     {new Date(topic.createdAt).toLocaleDateString('pt-BR')}
