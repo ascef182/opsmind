@@ -54,10 +54,10 @@ export function resolveAutodraftChannel(lead: {
     return 'WHATSAPP';
   }
   const socialLinks = Array.isArray(lead.socialLinks) ? (lead.socialLinks as unknown as SocialLink[]) : [];
-  if (socialLinks.some((link) => link.platform === 'INSTAGRAM')) {
+  if (socialLinks.some((link) => link?.platform === 'INSTAGRAM')) {
     return 'INSTAGRAM_DM';
   }
-  if (socialLinks.some((link) => link.platform === 'LINKEDIN')) {
+  if (socialLinks.some((link) => link?.platform === 'LINKEDIN')) {
     return 'LINKEDIN_DM';
   }
   if (lead.email) {

@@ -37,4 +37,18 @@ describe('resolveAutodraftChannel', () => {
     expect(resolveAutodraftChannel({ whatsapp: null, email: null, phone: null, socialLinks: null })).toBeNull();
     expect(resolveAutodraftChannel({ whatsapp: null, email: null, phone: null, socialLinks: { foo: 'bar' } })).toBeNull();
   });
+
+  it('nunca lança com uma entrada null/malformada dentro do array de socialLinks, e ainda acha o canal válido seguinte', () => {
+    expect(
+      resolveAutodraftChannel({
+        whatsapp: null,
+        email: 'a@b.com',
+        phone: null,
+        socialLinks: [null, { platform: 'EMAIL_ONLY_NOT_REAL' }],
+      }),
+    ).toBe('EMAIL');
+    expect(
+      resolveAutodraftChannel({ whatsapp: null, email: null, phone: null, socialLinks: [null, undefined] }),
+    ).toBeNull();
+  });
 });
