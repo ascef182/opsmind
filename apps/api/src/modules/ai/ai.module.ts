@@ -23,6 +23,7 @@ import { CreateTaskTool } from './tools/create-task.tool';
 import { SearchDocumentsTool } from './tools/search-documents.tool';
 import { FindLeadsTool } from './tools/find-leads.tool';
 import { ScoreLeadTool } from './tools/score-lead.tool';
+import { ProposeSignalCodeTool } from './tools/propose-signal-code.tool';
 import { AnalyzeLeadPotentialTool } from './tools/analyze-lead-potential.tool';
 import { GenerateOutreachMessageTool } from './tools/generate-outreach-message.tool';
 import { InvestigateCompanyWebsiteTool } from './tools/investigate-company-website.tool';
@@ -76,6 +77,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
     GenerateDealProposalTool,
     GetSalesForecastTool,
     GetFinancialSummaryTool,
+    ProposeSignalCodeTool,
     {
       provide: AI_TOOLS,
       useFactory: (
@@ -99,6 +101,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         generateDealProposal: GenerateDealProposalTool,
         getSalesForecast: GetSalesForecastTool,
         getFinancialSummary: GetFinancialSummaryTool,
+        proposeSignalCode: ProposeSignalCodeTool,
       ): AiTool[] => [
         getCustomer,
         searchCustomers,
@@ -120,6 +123,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         generateDealProposal,
         getSalesForecast,
         getFinancialSummary,
+        proposeSignalCode,
       ],
       inject: [
         GetCustomerTool,
@@ -142,6 +146,7 @@ import { TenantGuard } from '../../shared/guards/tenant.guard';
         GenerateDealProposalTool,
         GetSalesForecastTool,
         GetFinancialSummaryTool,
+        ProposeSignalCodeTool,
       ],
     },
   ],
