@@ -26,7 +26,7 @@ import { randomUUID } from 'node:crypto';
 import { withTenantContext } from './tenant-context';
 import { ssrfSafeFetch, SsrfSafeFetchError } from './ssrf-safe-fetch';
 import { extractWebsiteSignals, type FetchedPage } from './signal-extractors';
-import { resolveAutodraftChannel } from './lead-scrape-processor';
+import { resolveAutodraftChannel } from '@opsmind/shared-types';
 
 // Mesmo racional de `PRE_QUALIFICATION_STATUSES` em `leads.service.ts`
 // (apps/api) — duplicada aqui, não importada, pelo mesmo motivo de

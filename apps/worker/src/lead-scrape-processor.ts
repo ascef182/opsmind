@@ -2,7 +2,6 @@ import type { PrismaClient, Prisma, ScrapeJob, ScrapeSourceType, Lead, LeadStatu
 import type {
   LeadScrapeJobData,
   OutreachAutodraftJobData,
-  OutreachChannel,
   WebsiteProfileJobData,
 } from '@opsmind/shared-types';
 import {
@@ -12,6 +11,7 @@ import {
   ROLE_HIERARCHY,
   pickRoundRobinAssignee,
   STRUCTURED_WEBSITE_SOURCES,
+  resolveAutodraftChannel,
   type LeadScoringInput,
   type ServiceOfferingIcp,
   type SocialLink,
@@ -1184,49 +1184,6 @@ const AUTODRAFT_MAX_PER_ORG_PER_JOB = 10;
 // que o custo marginal da investigação seja ~$0 (HTTP direto, sem gateway
 // pago) — o teto aqui é sobre capacidade/ritmo do worker, não sobre custo.
 const WEBSITE_PROFILE_MAX_PER_ORG_PER_JOB = 15;
-
-/**
- * Resolve o canal de outreach do gatilho automático (B4/Task 11) por
- * prioridade fixa — WHATSAPP > INSTAGRAM_DM > LINKEDIN_DM > EMAIL > PHONE,
- * primeiro campo preenchido — a partir do `Lead` já persistido (pós-
- * `upsertLead`). `PHONE` é a prioridade mais baixa (ruling pós-review,
- * substitui a decisão original desta função): dado real de seed mostra
- * bastante negócio só-com-telefone, que sem este tier nunca ganharia
- * rascunho automático nenhum — `OutreachChannel` já suporta `PHONE`, então
- * não há razão pra deixar esses leads de fora. `null` só quando NENHUM dos
- * cinco campos está preenchido — o chamador trata `null` como "sem canal
- * elegível", nunca força um canal fora desta lista.
- *
- * Exportada: `website-profiler-processor.ts` reaproveita esta função pra
- * decidir o canal do autodraft disparado DEPOIS da investigação de site
- * (ver racional em `website-profiler-processor.ts`), em vez de duplicar a
- * prioridade de canal — mesmo app (`apps/worker`), importar é a escolha
- * certa.
- */
-export function resolveAutodraftChannel(lead: {
-  whatsapp: string | null;
-  email: string | null;
-  phone: string | null;
-  socialLinks: Prisma.JsonValue;
-}): OutreachChannel | null {
-  if (lead.whatsapp) {
-    return 'WHATSAPP';
-  }
-  const socialLinks = Array.isArray(lead.socialLinks) ? (lead.socialLinks as unknown as SocialLink[]) : [];
-  if (socialLinks.some((link) => link.platform === 'INSTAGRAM')) {
-    return 'INSTAGRAM_DM';
-  }
-  if (socialLinks.some((link) => link.platform === 'LINKEDIN')) {
-    return 'LINKEDIN_DM';
-  }
-  if (lead.email) {
-    return 'EMAIL';
-  }
-  if (lead.phone) {
-    return 'PHONE';
-  }
-  return null;
-}
 
 /**
  * Processa um job de scraping de leads, consumido da fila `lead-scrape`.
