@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { LeadScrapeQueueService } from './lead-scrape-queue.service';
+import { OutreachAutodraftQueueService } from './outreach-autodraft-queue.service';
 import { RedditTopicScanQueueService } from './reddit-topic-scan-queue.service';
 import { WebsiteProfileQueueService } from './website-profile-queue.service';
 
@@ -22,7 +23,17 @@ import { WebsiteProfileQueueService } from './website-profile-queue.service';
  * por ora, cada produtor vive no módulo que o expõe hoje.
  */
 @Module({
-  providers: [LeadScrapeQueueService, RedditTopicScanQueueService, WebsiteProfileQueueService],
-  exports: [LeadScrapeQueueService, RedditTopicScanQueueService, WebsiteProfileQueueService],
+  providers: [
+    LeadScrapeQueueService,
+    OutreachAutodraftQueueService,
+    RedditTopicScanQueueService,
+    WebsiteProfileQueueService,
+  ],
+  exports: [
+    LeadScrapeQueueService,
+    OutreachAutodraftQueueService,
+    RedditTopicScanQueueService,
+    WebsiteProfileQueueService,
+  ],
 })
 export class QueueModule {}
