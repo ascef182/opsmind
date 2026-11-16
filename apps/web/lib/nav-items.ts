@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Building2, Gauge, Handshake, LayoutDashboard, Lightbulb, ListTodo, Send, Sparkles, Target, Users, UsersRound, Wallet, Zap } from 'lucide-react';
+import { Building2, Gauge, Handshake, LayoutDashboard, Lightbulb, ListTodo, MessageCircle, Send, Sparkles, Tag, Target, Users, UsersRound, Wallet, Zap } from 'lucide-react';
 import type { Role } from '@opsmind/shared-types';
 
 export interface NavItem {
@@ -24,6 +24,8 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Negócios', segment: 'deals', icon: Handshake, group: 'workspace' },
   { label: 'Tarefas', segment: 'tasks', icon: ListTodo, group: 'workspace' },
   { label: 'Automações', segment: 'automations', icon: Zap, group: 'workspace' },
+  { label: 'Códigos de sinal', segment: 'signal-codes', icon: Tag, group: 'workspace' },
+  { label: 'Monitoramento de tópicos', segment: 'reddit-watch-topics', icon: MessageCircle, group: 'workspace' },
   { label: 'Financeiro', segment: 'finance', icon: Wallet, group: 'workspace', roles: ['OWNER', 'ADMIN', 'MANAGER'] },
   { label: 'Assistente IA', segment: 'ai', icon: Sparkles, group: 'intelligence' },
   { label: 'Uso de IA', segment: 'ai/usage', icon: Gauge, group: 'intelligence' },

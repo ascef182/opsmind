@@ -1,10 +1,18 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { SignalCodesService } from './signal-codes.service';
 
 describe('SignalCodesService', () => {
   function buildDeps() {
     const prisma = {
-      signalCode: { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+      signalCode: {
+        findMany: jest.fn(),
+        findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+        findFirst: jest.fn(),
+        create: jest.fn(),
+        createMany: jest.fn(),
+        update: jest.fn(),
+      },
     };
     const auditService = { log: jest.fn() };
     const service = new SignalCodesService(prisma as never, auditService as never);
@@ -29,8 +37,12 @@ describe('SignalCodesService', () => {
   describe('propose', () => {
     it('cria sempre como PROPOSED, escopado à organização, nunca global', async () => {
       const { service, prisma, auditService } = buildDeps();
-      prisma.signalCode.findUnique.mockResolvedValue(null);
-      prisma.signalCode.create.mockResolvedValue({ code: 'custom.novo_sinal', organizationId: 'org-1', status: 'PROPOSED' });
+      prisma.signalCode.createMany.mockResolvedValue({ count: 1 });
+      prisma.signalCode.findUniqueOrThrow.mockResolvedValue({
+        code: 'custom.novo_sinal',
+        organizationId: 'org-1',
+        status: 'PROPOSED',
+      });
 
       const result = await service.propose(
         'org-1',
@@ -38,21 +50,31 @@ describe('SignalCodesService', () => {
         'user-1',
       );
 
-      expect(prisma.signalCode.create).toHaveBeenCalledWith({
-        data: { code: 'custom.novo_sinal', organizationId: 'org-1', label: 'Novo sinal', category: 'custom', status: 'PROPOSED' },
+      expect(prisma.signalCode.createMany).toHaveBeenCalledWith({
+        data: [{ code: 'custom.novo_sinal', organizationId: 'org-1', label: 'Novo sinal', category: 'custom', status: 'PROPOSED' }],
+        skipDuplicates: true,
       });
       expect(result.status).toBe('PROPOSED');
       expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'signal_code.propose' }));
     });
 
-    it('rejeita propor um código que já existe (global ou de outra organização)', async () => {
-      const { service, prisma } = buildDeps();
-      prisma.signalCode.findUnique.mockResolvedValue({ code: 'website.no_ssl', status: 'CONFIRMED' });
+    // Sob RLS real, um `findUnique({where:{code}}` prévio NUNCA veria a
+    // linha de outra organização (RLS esconde) — o único jeito real de uma
+    // colisão aparecer é o próprio `createMany`/`ON CONFLICT` devolvendo
+    // `count: 0`. Mensagem genérica: nunca revela se o código já existe
+    // nesta organização, em outra, ou é global.
+    it('rejeita com ConflictException genérica quando createMany não insere nada (colisão real sob RLS)', async () => {
+      const { service, prisma, auditService } = buildDeps();
+      prisma.signalCode.createMany.mockResolvedValue({ count: 0 });
 
       await expect(
         service.propose('org-1', { code: 'website.no_ssl', label: 'x', category: 'website' }, 'user-1'),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.signalCode.create).not.toHaveBeenCalled();
+      ).rejects.toThrow(ConflictException);
+      await expect(
+        service.propose('org-1', { code: 'website.no_ssl', label: 'x', category: 'website' }, 'user-1'),
+      ).rejects.toMatchObject({ message: expect.not.stringContaining('status') });
+      expect(prisma.signalCode.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalled();
     });
   });
 

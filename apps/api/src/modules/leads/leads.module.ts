@@ -18,6 +18,7 @@ import { OutreachMessagesController } from './outreach-messages.controller';
 import { LeadAnalysisService } from './lead-analysis.service';
 import { LeadSignalsService } from './lead-signals.service';
 import { SignalCodesService } from './signal-codes.service';
+import { SignalCodesController } from './signal-codes.controller';
 import { OutreachAutodraftConsumer } from './outreach-autodraft.consumer';
 import { BudgetService } from '../ai/services/budget.service';
 import { AI_GATEWAY } from '../ai/gateway/ai-gateway.interface';
@@ -50,6 +51,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     ProspectingTargetsController,
     LeadsController,
     OutreachMessagesController,
+    SignalCodesController,
   ],
   providers: [
     ServiceOfferingsService,

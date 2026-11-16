@@ -391,3 +391,26 @@ export interface ConvertedCustomer {
   organizationId: string;
   name: string;
 }
+
+export type SignalCodeStatus = 'PROPOSED' | 'CONFIRMED' | 'DEPRECATED';
+
+export interface SignalCode {
+  code: string;
+  organizationId: string | null;
+  label: string;
+  category: string;
+  defaultServiceOfferingId: string | null;
+  status: SignalCodeStatus;
+  createdAt: string;
+}
+
+export interface CreateSignalCodeInput {
+  code: string;
+  label: string;
+  category: string;
+}
+
+// Confirmar um SignalCode é governança de vocabulário com efeito duradouro
+// no scoring da organização — mais restrito que WRITE_ROLES comum, espelha
+// apps/api/src/modules/leads/signal-codes.controller.ts (SIGNAL_CODE_GOVERNANCE_ROLE).
+export const SIGNAL_CODE_CONFIRM_ROLES: Role[] = ['OWNER', 'ADMIN', 'MANAGER'];
