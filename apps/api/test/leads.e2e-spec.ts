@@ -6,6 +6,7 @@ import { APIFY_GATEWAY, CAMOFOX_GATEWAY, EXPLORIUM_GATEWAY } from '@opsmind/inte
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/infrastructure/database/prisma.service';
 import { AI_GATEWAY, type AiGateway } from '../src/modules/ai/gateway/ai-gateway.interface';
+import { PasswordService } from '../src/modules/auth/services/password.service';
 import { registerUser } from './helpers/auth';
 
 async function createOrg(app: INestApplication, accessToken: string, name = 'Leads Co') {
@@ -15,6 +16,32 @@ async function createOrg(app: INestApplication, accessToken: string, name = 'Lea
     .send({ name, slug: `${name.toLowerCase().replace(/\s+/g, '-')}-${randomUUID()}` })
     .expect(201);
   return res.body.id as string;
+}
+
+// `/auth/register` tem throttle de 10/60s (AuthController) e este arquivo já
+// soma 9 chamadas reais a `registerUser` nos testes acima — qualquer teste
+// novo que precise de 2+ usuários a mais estoura esse orçamento (visto
+// empiricamente: 429 no primeiro `registerUser` extra). `/auth/login` tem seu
+// próprio balde de throttle (chave inclui o nome do handler), ainda intacto
+// nesta suíte, então os testes de RBAC de signal-codes abaixo criam o usuário
+// direto via Prisma (mesmo hash de senha do fluxo real, via `PasswordService`)
+// e autenticam por login — sem contorno de regra de negócio, só evita o
+// endpoint de registro já perto do limite.
+async function createLoggedInUser(
+  app: INestApplication,
+  prisma: PrismaService,
+  email: string,
+): Promise<{ accessToken: string; userId: string; email: string }> {
+  const password = 'correct horse battery staple';
+  const passwordHash = await app.get(PasswordService).hash(password);
+  const user = await prisma.user.create({ data: { email, name: 'E2E User', passwordHash } });
+
+  const loginRes = await request(app.getHttpServer())
+    .post('/auth/login')
+    .send({ email, password })
+    .expect(200);
+
+  return { accessToken: loginRes.body.accessToken as string, userId: user.id, email };
 }
 
 function endTurn(text: string, inputTokens = 100, outputTokens = 50) {
@@ -616,5 +643,136 @@ describe('Leads/Prospecção (e2e)', () => {
       .post(`/organizations/${orgA}/leads/${leadWithWebsite.id}/investigate`)
       .set(viewerAuth)
       .expect(403);
+  });
+
+  // Governança de vocabulário de SignalCode (docs/superpowers/sdd/
+  // 2026-11-16-signal-codes-e-reddit-watch-ui): propor é WRITE_ROLES comum,
+  // mas confirmar (promover PROPOSED -> CONFIRMED, efeito dura em todo o
+  // scoring da organização) exige MANAGER ou acima — mais restrito que o
+  // resto do módulo de leads.
+  it('POST /signal-codes — MEMBER consegue propor, VIEWER recebe 403', async () => {
+    const owner = await createLoggedInUser(app, prisma, `sc-rbac-owner-${randomUUID()}@opsmind.test`);
+    const organizationId = await createOrg(app, owner.accessToken, 'Leads Co Signal Codes RBAC');
+    const ownerAuth = { Authorization: `Bearer ${owner.accessToken}` };
+
+    const member = await createLoggedInUser(app, prisma, `sc-rbac-member-${randomUUID()}@opsmind.test`);
+    const logSpyMember = jest.spyOn(console, 'log').mockImplementation();
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/invite`)
+      .set(ownerAuth)
+      .send({ email: member.email, role: 'MEMBER' })
+      .expect(201);
+    const memberInvitationToken = /token: (\S+)/.exec(
+      logSpyMember.mock.calls.map((c) => c.join(' ')).join('\n'),
+    )?.at(1);
+    logSpyMember.mockRestore();
+    await request(app.getHttpServer())
+      .post(`/invitations/${memberInvitationToken}/accept`)
+      .set({ Authorization: `Bearer ${member.accessToken}` })
+      .expect(201);
+    const memberToken = member.accessToken;
+
+    const viewer = await createLoggedInUser(app, prisma, `sc-rbac-viewer-${randomUUID()}@opsmind.test`);
+    const logSpyViewer = jest.spyOn(console, 'log').mockImplementation();
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/invite`)
+      .set(ownerAuth)
+      .send({ email: viewer.email, role: 'VIEWER' })
+      .expect(201);
+    const viewerInvitationToken = /token: (\S+)/.exec(
+      logSpyViewer.mock.calls.map((c) => c.join(' ')).join('\n'),
+    )?.at(1);
+    logSpyViewer.mockRestore();
+    await request(app.getHttpServer())
+      .post(`/invitations/${viewerInvitationToken}/accept`)
+      .set({ Authorization: `Bearer ${viewer.accessToken}` })
+      .expect(201);
+    const viewerToken = viewer.accessToken;
+
+    // Código único por execução — `SignalCode.code` é globalmente único
+    // (não escopado por organização), então um literal fixo colidiria entre
+    // reexecuções locais contra o mesmo Postgres persistente.
+    const memberResponse = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/signal-codes`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({ code: `TESTE_RBAC_${randomUUID()}`, label: 'Teste RBAC', category: 'teste' });
+    expect(memberResponse.status).toBe(201);
+
+    const viewerResponse = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/signal-codes`)
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({ code: `TESTE_RBAC_${randomUUID()}`, label: 'Teste', category: 'teste' });
+    expect(viewerResponse.status).toBe(403);
+  });
+
+  it('POST /signal-codes/:code/confirm — exige MANAGER ou acima, MEMBER recebe 403', async () => {
+    const owner = await createLoggedInUser(
+      app,
+      prisma,
+      `sc-confirm-owner-${randomUUID()}@opsmind.test`,
+    );
+    const organizationId = await createOrg(app, owner.accessToken, 'Leads Co Signal Codes Confirm');
+    const ownerAuth = { Authorization: `Bearer ${owner.accessToken}` };
+    const ownerToken = owner.accessToken;
+
+    const member = await createLoggedInUser(
+      app,
+      prisma,
+      `sc-confirm-member-${randomUUID()}@opsmind.test`,
+    );
+    const logSpyMember = jest.spyOn(console, 'log').mockImplementation();
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/invite`)
+      .set(ownerAuth)
+      .send({ email: member.email, role: 'MEMBER' })
+      .expect(201);
+    const memberInvitationToken = /token: (\S+)/.exec(
+      logSpyMember.mock.calls.map((c) => c.join(' ')).join('\n'),
+    )?.at(1);
+    logSpyMember.mockRestore();
+    await request(app.getHttpServer())
+      .post(`/invitations/${memberInvitationToken}/accept`)
+      .set({ Authorization: `Bearer ${member.accessToken}` })
+      .expect(201);
+    const memberToken = member.accessToken;
+
+    const manager = await createLoggedInUser(
+      app,
+      prisma,
+      `sc-confirm-mgr-${randomUUID()}@opsmind.test`,
+    );
+    const logSpyManager = jest.spyOn(console, 'log').mockImplementation();
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/invite`)
+      .set(ownerAuth)
+      .send({ email: manager.email, role: 'MANAGER' })
+      .expect(201);
+    const managerInvitationToken = /token: (\S+)/.exec(
+      logSpyManager.mock.calls.map((c) => c.join(' ')).join('\n'),
+    )?.at(1);
+    logSpyManager.mockRestore();
+    await request(app.getHttpServer())
+      .post(`/invitations/${managerInvitationToken}/accept`)
+      .set({ Authorization: `Bearer ${manager.accessToken}` })
+      .expect(201);
+    const managerToken = manager.accessToken;
+
+    // Mesmo motivo do teste anterior: código único por execução.
+    const code = `TESTE_CONFIRM_${randomUUID()}`;
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/signal-codes`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ code, label: 'Teste', category: 'teste' });
+
+    const memberResponse = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/signal-codes/${code}/confirm`)
+      .set('Authorization', `Bearer ${memberToken}`);
+    expect(memberResponse.status).toBe(403);
+
+    const managerResponse = await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/signal-codes/${code}/confirm`)
+      .set('Authorization', `Bearer ${managerToken}`);
+    expect(managerResponse.status).toBe(200);
+    expect(managerResponse.body.status).toBe('CONFIRMED');
   });
 });
