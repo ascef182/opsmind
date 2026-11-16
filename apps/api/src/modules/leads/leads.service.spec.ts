@@ -775,6 +775,54 @@ describe('LeadsService', () => {
           }),
         );
       });
+
+      // Fix 1 (Critical) do review final: `WebsiteProfileQueueService.enqueue`
+      // usa ioredis com `maxRetriesPerRequest: null` + fila offline habilitada —
+      // durante uma indisponibilidade de Redis, a promise de `queue.add()`
+      // nunca rejeita, só fica pendurada esperando reconexão. Sem um teto de
+      // tempo, isso travaria `score()` (e a transação Postgres do request que
+      // o envolve) indefinidamente. Prova que o timeout interno de
+      // `withTimeout` limita essa espera: mesmo com um `enqueue` que nunca
+      // resolve, `score()` ainda resolve dentro do timeout padrão do Jest.
+      it('enqueue que nunca resolve (Redis indisponível) não trava score() — timeout limita a espera', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...baseLead });
+        prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.leadSignal.count.mockResolvedValue(0);
+        prisma.outreachMessage.count.mockResolvedValue(0);
+        prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ ...baseLead, ...data }));
+        websiteProfileQueueService.enqueue.mockReturnValue(new Promise(() => {}));
+
+        const result = await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(result.status).toBe('QUALIFIED');
+        expect(Sentry.captureException).toHaveBeenCalledWith(
+          expect.objectContaining({ message: expect.stringContaining('timeout') }),
+          expect.objectContaining({
+            extra: { leadId: 'lead-1', organizationId: 'org-1', phase: 'website-profile-enqueue' },
+          }),
+        );
+      });
+
+      // Fix 7 (Minor) do review final: lead já investigado (LeadSignal
+      // existente) e sem NENHUM canal de contato (whatsapp/email/phone/redes) —
+      // `resolveAutodraftChannel` cai em `null`, então nenhuma das duas filas
+      // deve ser chamada (nem website-profile, porque já foi investigado; nem
+      // outreach-autodraft, porque não há canal elegível).
+      it('lead já investigado e sem nenhum canal de contato: não enfileira nada', async () => {
+        prisma.lead.findFirst.mockResolvedValue({ ...baseLead });
+        prisma.serviceOffering.findMany.mockResolvedValue(qualifyingOfferings);
+        prisma.leadEnrichment.findFirst.mockResolvedValue(null);
+        prisma.leadSignal.count.mockResolvedValue(1);
+        prisma.outreachMessage.count.mockResolvedValue(0);
+        prisma.lead.update.mockImplementation(({ data }) => Promise.resolve({ ...baseLead, ...data }));
+
+        const result = await service.score('org-1', 'lead-1', 'user-1');
+
+        expect(result.status).toBe('QUALIFIED');
+        expect(websiteProfileQueueService.enqueue).not.toHaveBeenCalled();
+        expect(outreachAutodraftQueueService.enqueue).not.toHaveBeenCalled();
+      });
     });
   });
 

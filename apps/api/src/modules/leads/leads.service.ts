@@ -58,6 +58,33 @@ export interface ListLeadsFilter {
 // estado de ciclo de vida, então recalculá-los não tem o mesmo risco.
 const PRE_QUALIFICATION_STATUSES: LeadStatus[] = ['DISCOVERED', 'QUALIFIED', 'DISQUALIFIED'];
 
+// Orçamento de tempo para cada enqueue do gatilho de qualificação (Harvey
+// Fase 7, Fix 1 do review final). `WebsiteProfileQueueService`/
+// `OutreachAutodraftQueueService` usam `maxRetriesPerRequest: null` +
+// `enableOfflineQueue: true` (default do ioredis) — durante uma indisponibilidade
+// do Redis, `queue.add()` nunca rejeita, só fica esperando reconexão
+// indefinidamente. Sem um teto aqui, isso travaria `score()` (e a transação
+// Postgres do request que o envolve, via `TenantContextInterceptor`) até o
+// timeout da própria transação. `withTimeout` abaixo garante que o
+// best-effort documentado logo adiante seja best-effort de verdade.
+const QUALIFICATION_TRIGGER_ENQUEUE_TIMEOUT_MS = 2000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 // Tipo do enrichment gravado por `enrich()` — mesmo formato usado por
 // `apps/worker/src/lead-scrape-processor.ts` (`type: 'explorium_firmographics'`,
 // `data` = `ExploriumBusinessResult` bruto) para que `getFirmographics` leia
@@ -450,56 +477,82 @@ export class LeadsService {
 
     // Gatilho de qualificação (Harvey Fase 7) — mesma bifurcação de
     // `apps/worker/src/lead-scrape-processor.ts` quando um lead em lote
-    // cruza pra QUALIFIED, replicada aqui pro caminho manual (endpoint
-    // `POST .../leads/:id/score` e a AI tool `score_lead`, que não passavam
-    // por esse pipeline). Best-effort: o score já foi computado e persistido
-    // com sucesso acima, então uma falha de enfileiramento (ex.: Redis fora)
-    // nunca pode derrubar essa chamada já bem-sucedida.
+    // cruza pra QUALIFIED, replicada aqui pros três caminhos manuais
+    // (endpoint `POST .../leads/:id/score`, a AI tool `score_lead`, e
+    // `enrich()` abaixo, que chama este método internamente) que não
+    // passavam por esse pipeline. Best-effort: o score já foi computado e
+    // persistido com sucesso acima, então uma falha de enfileiramento (ex.:
+    // Redis fora) nunca pode derrubar essa chamada já bem-sucedida.
+    //
+    // Decisão de QUAL fila enfileirar (as duas leituras de `count` + a
+    // bifurcação website-profile vs. outreach-autodraft) fica FORA do
+    // try/catch abaixo de propósito (Fix 1/Problem B do review final): só o
+    // próprio `enqueue()` é best-effort. Se uma dessas leituras falhar (erro
+    // transitório do Postgres), o erro deve propagar e abortar a transação
+    // normalmente, nunca ser engolido como se fosse uma falha de
+    // enfileiramento.
     if (canUpdateStatus && computedStatus === 'QUALIFIED' && updated.suggestedOfferingId) {
-      // Rastreia qual enfileiramento foi tentado só pra enriquecer o report
-      // de erro abaixo (`extra.phase`) — nunca influencia a decisão
-      // best-effort em si.
-      let phase: 'website-profile-enqueue' | 'outreach-autodraft-enqueue' | undefined;
-      try {
-        const existingOutreachCount = await this.prisma.outreachMessage.count({ where: { leadId: id } });
-        if (existingOutreachCount === 0) {
-          const alreadyInvestigated = updated.website
-            ? (await this.prisma.leadSignal.count({ where: { leadId: id } })) > 0
-            : false;
-          if (updated.website && !alreadyInvestigated) {
-            phase = 'website-profile-enqueue';
-            await this.websiteProfileQueueService.enqueue({
-              organizationId,
-              leadId: id,
-              actorType: 'USER',
-              actorId: actorUserId,
-            });
-          } else {
-            const channel = resolveAutodraftChannel(updated);
-            if (channel) {
-              phase = 'outreach-autodraft-enqueue';
-              await this.outreachAutodraftQueueService.enqueue({
+      const existingOutreachCount = await this.prisma.outreachMessage.count({ where: { leadId: id } });
+      if (existingOutreachCount === 0) {
+        const alreadyInvestigated = updated.website
+          ? (await this.prisma.leadSignal.count({ where: { leadId: id } })) > 0
+          : false;
+
+        // Rastreia qual enfileiramento foi tentado só pra enriquecer o report
+        // de erro abaixo (`extra.phase`) — nunca influencia a decisão
+        // best-effort em si.
+        let phase: 'website-profile-enqueue' | 'outreach-autodraft-enqueue' | undefined;
+        let enqueue: (() => Promise<unknown>) | undefined;
+        if (updated.website && !alreadyInvestigated) {
+          phase = 'website-profile-enqueue';
+          enqueue = () =>
+            withTimeout(
+              this.websiteProfileQueueService.enqueue({
                 organizationId,
                 leadId: id,
-                channel,
-                serviceOfferingId: updated.suggestedOfferingId,
-              });
-            }
+                actorType: 'USER',
+                actorId: actorUserId,
+              }),
+              QUALIFICATION_TRIGGER_ENQUEUE_TIMEOUT_MS,
+            );
+        } else {
+          const channel = resolveAutodraftChannel(updated);
+          if (channel) {
+            phase = 'outreach-autodraft-enqueue';
+            const suggestedOfferingId = updated.suggestedOfferingId;
+            enqueue = () =>
+              withTimeout(
+                this.outreachAutodraftQueueService.enqueue({
+                  organizationId,
+                  leadId: id,
+                  channel,
+                  serviceOfferingId: suggestedOfferingId,
+                }),
+                QUALIFICATION_TRIGGER_ENQUEUE_TIMEOUT_MS,
+              );
           }
         }
-      } catch (enqueueError) {
-        // best-effort — ver nota acima; nunca derruba score() já persistido com
-        // sucesso. Mesma disciplina de observabilidade de
-        // `lead-scrape-processor.ts` (Passo 3.5): reporta pro Sentry e stderr
-        // em vez de engolir silenciosamente.
-        Sentry.captureException(enqueueError, {
-          extra: { leadId: id, organizationId, phase },
-        });
-        // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
-        console.error(
-          `[LeadsService] falha ao enfileirar gatilho de qualificação (${phase ?? 'fase desconhecida'}) para o lead ${id}:`,
-          enqueueError,
-        );
+
+        if (enqueue) {
+          try {
+            await enqueue();
+          } catch (enqueueError) {
+            // best-effort — ver nota acima; nunca derruba score() já persistido
+            // com sucesso. Mesma disciplina de observabilidade de
+            // `lead-scrape-processor.ts` (Passo 3.5): reporta pro Sentry e
+            // stderr em vez de engolir silenciosamente. Um timeout (Redis
+            // indisponível, ver `withTimeout` acima) cai no mesmo catch, com
+            // a mesma mensagem de erro — é só mais um jeito do enqueue falhar.
+            Sentry.captureException(enqueueError, {
+              extra: { leadId: id, organizationId, phase },
+            });
+            // eslint-disable-next-line no-console -- visibilidade mínima mesmo sem SENTRY_DSN configurado (SDK vira no-op nesse caso)
+            console.error(
+              `[LeadsService] falha ao enfileirar gatilho de qualificação (${phase ?? 'fase desconhecida'}) para o lead ${id}:`,
+              enqueueError,
+            );
+          }
+        }
       }
     }
 
