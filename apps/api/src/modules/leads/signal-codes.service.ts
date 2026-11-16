@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import type { SignalCode } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -37,14 +37,23 @@ export class SignalCodesService {
     dto: { code: string; label: string; category: string },
     actorUserId: string,
   ): Promise<SignalCode> {
-    const existing = await this.prisma.signalCode.findUnique({ where: { code: dto.code } });
-    if (existing) {
-      throw new BadRequestException(`O código "${dto.code}" já existe (status: ${existing.status}).`);
+    // `code` é PK global no Postgres, mas RLS esconde da organização atual
+    // uma linha já existente de outra organização (ou global) — um
+    // `findUnique` prévio devolveria `null` mesmo quando o código já existe,
+    // e um `create()` subsequente estouraria a constraint única real (P2002,
+    // 500 bruto, abortando a transação única por-requisição). `createMany` +
+    // `skipDuplicates` usa `ON CONFLICT DO NOTHING` por baixo: nunca aborta a
+    // transação, e o `count` devolvido (0 ou 1) é a única informação que
+    // tratamos — nunca confirmamos nem negamos para quem a colisão pertence.
+    const { count } = await this.prisma.signalCode.createMany({
+      data: [{ code: dto.code, organizationId, label: dto.label, category: dto.category, status: 'PROPOSED' }],
+      skipDuplicates: true,
+    });
+    if (count === 0) {
+      throw new ConflictException(`Não foi possível propor o código "${dto.code}" — tente outro nome.`);
     }
 
-    const created = await this.prisma.signalCode.create({
-      data: { code: dto.code, organizationId, label: dto.label, category: dto.category, status: 'PROPOSED' },
-    });
+    const created = await this.prisma.signalCode.findUniqueOrThrow({ where: { code: dto.code } });
 
     await this.auditService.log({
       actorType: 'USER',

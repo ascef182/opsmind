@@ -775,4 +775,48 @@ describe('Leads/Prospecção (e2e)', () => {
     expect(managerResponse.status).toBe(200);
     expect(managerResponse.body.status).toBe('CONFIRMED');
   });
+
+  // C1 — `SignalCode.code` é PK global no Postgres, mas RLS esconde da
+  // organização B um código já proposto pela organização A: sem o fix
+  // (createMany + skipDuplicates), a tentativa da org B estourava a
+  // constraint única real (P2002) como 500 bruto. Usa `createLoggedInUser`
+  // (não `registerUser`) pelo mesmo motivo documentado no topo do arquivo —
+  // dois donos de organização a mais estourariam o throttle de /auth/register.
+  it('POST /signal-codes — código colidindo entre organizações diferentes dá erro claro (não 500) e não revela o código da outra organização', async () => {
+    const ownerA = await createLoggedInUser(app, prisma, `sc-collide-a-${randomUUID()}@opsmind.test`);
+    const organizationA = await createOrg(app, ownerA.accessToken, 'Leads Co Collide A');
+    const authA = { Authorization: `Bearer ${ownerA.accessToken}` };
+
+    const ownerB = await createLoggedInUser(app, prisma, `sc-collide-b-${randomUUID()}@opsmind.test`);
+    const organizationB = await createOrg(app, ownerB.accessToken, 'Leads Co Collide B');
+    const authB = { Authorization: `Bearer ${ownerB.accessToken}` };
+
+    const code = `TESTE_COLLIDE_${randomUUID()}`;
+
+    const firstResponse = await request(app.getHttpServer())
+      .post(`/organizations/${organizationA}/signal-codes`)
+      .set(authA)
+      .send({ code, label: 'Rótulo da organização A', category: 'teste' });
+    expect(firstResponse.status).toBe(201);
+    expect(firstResponse.body.status).toBe('PROPOSED');
+
+    const collisionResponse = await request(app.getHttpServer())
+      .post(`/organizations/${organizationB}/signal-codes`)
+      .set(authB)
+      .send({ code, label: 'Rótulo da organização B', category: 'teste' });
+
+    expect(collisionResponse.status).toBeGreaterThanOrEqual(400);
+    expect(collisionResponse.status).toBeLessThan(500);
+    const collisionMessage = JSON.stringify(collisionResponse.body);
+    expect(collisionMessage).not.toContain('PROPOSED');
+    expect(collisionMessage).not.toContain('CONFIRMED');
+    expect(collisionMessage).not.toContain('status:');
+
+    // Org B nunca vê o código que a org A propôs (RLS continua escondendo).
+    const listB = await request(app.getHttpServer())
+      .get(`/organizations/${organizationB}/signal-codes`)
+      .set(authB)
+      .expect(200);
+    expect(listB.body.find((sc: { code: string }) => sc.code === code)).toBeUndefined();
+  });
 });
