@@ -779,7 +779,12 @@ describe('Leads/Prospecção (e2e)', () => {
     const websiteProfileQueue = new Queue<WebsiteProfileJobData>(WEBSITE_PROFILE_QUEUE, { connection });
     try {
       const jobs = await websiteProfileQueue.getJobs(['waiting', 'active']);
-      expect(jobs.some((job) => job.data.leadId === leadId)).toBe(true);
+      const job = jobs.find((j) => j.data.leadId === leadId);
+      expect(job).toBeDefined();
+      // Limpa o job real que este teste produziu — sem isso ele fica
+      // permanentemente no Redis de teste (ninguém mais consome esta fila
+      // nesta suíte, ver comentário acima).
+      await job?.remove();
     } finally {
       await websiteProfileQueue.close();
       connection.disconnect();
