@@ -57,6 +57,27 @@ function endTurn(text: string, inputTokens = 100, outputTokens = 50) {
   };
 }
 
+// Poll curto e limitado (nunca indefinido) pra esperar um efeito assíncrono
+// de um consumer BullMQ real (ex.: `OutreachAutodraftConsumer`, que roda
+// dentro do próprio `apps/api` — ver comentário no passo 4 de "fluxo
+// completo") terminar antes do teste seguir, em vez de assumir uma
+// sincronia que não existe. Falha com uma mensagem clara (nunca um timeout
+// genérico do Jest) se o efeito nunca aparecer.
+async function waitFor<T>(
+  check: () => Promise<T | null>,
+  { timeoutMs = 5000, intervalMs = 50 }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const result = await check();
+    if (result) return result;
+    if (Date.now() >= deadline) {
+      throw new Error(`waitFor: condição não satisfeita após ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 // Fluxo completo de Leads/Prospecção (Task 5, docs/superpowers/sdd/
 // 2026-09-02-leads-prospecting-dashboard): offering → scrape-job → lead
 // pontuado → enrich manual → outreach draft → aprovação → mark-sent →
@@ -198,6 +219,23 @@ describe('Leads/Prospecção (e2e)', () => {
 
     // 4. Score — sem site (50) + industry match contra a offering (10+) >=
     // threshold(50) => QUALIFIED, suggestedOfferingId aponta pra offering.
+    //
+    // Harvey Fase 7: este lead não tem website e tem `phone` preenchido, sem
+    // `whatsapp`/`email`/`socialLinks` — exatamente o caso que
+    // `resolveAutodraftChannel()` resolve pra `PHONE` — então este `score()`
+    // sempre dispara, de verdade, um enqueue real em `outreach-autodraft`
+    // (ver `LeadsService.score()`). Diferente de `website-profile`
+    // (consumido só por `apps/worker`, fora deste processo),
+    // `OutreachAutodraftConsumer` roda DENTRO do próprio `apps/api`
+    // (`outreach-autodraft.consumer.ts`, registrado em `LeadsModule`) — a
+    // mesma app Nest deste teste já o inicializou em `beforeAll`. Esse job
+    // chama `gateway.sendMessage` (o MESMO mock AI_GATEWAY compartilhado por
+    // todo este `describe`) de forma assíncrona, correndo contra as
+    // chamadas HTTP síncronas dos passos seguintes — sem registrar e
+    // drenar esse mock aqui, ele rouba (ou é roubado por) o
+    // `mockResolvedValueOnce` do passo 6/7, produzindo um 500 intermitente.
+    gateway.sendMessage.mockResolvedValueOnce(endTurn('rascunho automático de outreach via telefone'));
+
     const scoreRes = await request(app.getHttpServer())
       .post(`/organizations/${organizationId}/leads/${leadId}/score`)
       .set(auth)
@@ -206,8 +244,23 @@ describe('Leads/Prospecção (e2e)', () => {
     expect(scoreRes.body.status).toBe('QUALIFIED');
     expect(scoreRes.body.suggestedOfferingId).toBe(offeringId);
 
+    // Espera determinística pelo job assíncrono acima: um `OutreachMessage`
+    // DRAFT pra este lead só existe depois que `OutreachAutodraftConsumer`
+    // já chamou (e consumiu) o `mockResolvedValueOnce` registrado acima —
+    // só então é seguro deixar os passos seguintes registrarem os próprios
+    // mocks, sem risco de um roubar o call do outro.
+    const autodraftMessage = await waitFor(() =>
+      prisma.outreachMessage.findFirst({ where: { organizationId, leadId, status: 'DRAFT' } }),
+    );
+    expect(autodraftMessage?.channel).toBe('PHONE');
+
     // 5. Enrich manual — Explorium mockada encontra firmografia; score é
-    // recalculado automaticamente ao final do enrich.
+    // recalculado automaticamente ao final do enrich. `status` já é
+    // `OUTREACH_DRAFTED` (não mais `QUALIFIED`) porque o autodraft do passo 4
+    // acima já avançou o lead — `enrich()` -> `score()` interno só regrava
+    // `status` quando o lead ainda está em `PRE_QUALIFICATION_STATUSES`
+    // (`DISCOVERED`/`QUALIFIED`/`DISQUALIFIED`), nunca regride um lead que já
+    // passou dali (mesma guarda documentada no topo de `leads.service.ts`).
     exploriumGateway.matchBusiness.mockResolvedValueOnce({
       name: 'Padaria da Esquina',
       website: null,
@@ -224,7 +277,7 @@ describe('Leads/Prospecção (e2e)', () => {
       .expect(201);
     expect(exploriumGateway.matchBusiness).toHaveBeenCalledWith('Padaria da Esquina', null, null);
     expect(enrichRes.body.score).toBeGreaterThanOrEqual(50);
-    expect(enrichRes.body.status).toBe('QUALIFIED');
+    expect(enrichRes.body.status).toBe('OUTREACH_DRAFTED');
 
     const enrichmentsInDb = await prisma.leadEnrichment.findMany({ where: { organizationId, leadId } });
     expect(enrichmentsInDb.some((e) => e.type === 'explorium_firmographics')).toBe(true);
