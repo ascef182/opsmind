@@ -32,6 +32,7 @@ import { processRedditTopicScanJob } from './reddit-topic-scan-processor';
 import { scanOutreachFollowups } from './outreach-followup-scan';
 import { scanTaskDueReminders } from './task-due-reminder-scan';
 import { scanMeetingReminders } from './meeting-reminder-scan';
+import { scanSpendAlerts } from './spend-alert-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
 import { processWebsiteProfileJob } from './website-profiler-processor';
@@ -385,6 +386,24 @@ async function main(): Promise<void> {
 
   await runOutreachFollowupScan();
   setInterval(runOutreachFollowupScan, OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS);
+
+  // Alertas de gasto (50/80/100% dos tetos de IA e do Revenue Engine). De
+  // hora em hora: é aviso; o corte síncrono fica em cada caminho que gasta.
+  const SPEND_ALERT_SCAN_INTERVAL_MS = 3_600_000;
+  async function runSpendAlertScan(): Promise<void> {
+    try {
+      const notified = await scanSpendAlerts(prisma, connection);
+      if (notified > 0) {
+        logger.info({ notified }, 'scan de alertas de gasto notificou administradores');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'scan de alertas de gasto falhou');
+      Sentry.captureException(error);
+    }
+  }
+
+  await runSpendAlertScan();
+  setInterval(runSpendAlertScan, SPEND_ALERT_SCAN_INTERVAL_MS);
 
   logger.info(
     `OpsMind worker rodando — filas "${queue.name}" (scan a cada ${SCAN_INTERVAL_MS}ms), "${leadScrapeQueue.name}" e "${redditTopicScanWorker.name}"`,

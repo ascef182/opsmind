@@ -25,6 +25,7 @@ import { ConfigService } from '@nestjs/config';
 import { Worker, type Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData } from '@opsmind/shared-types';
+import { getEngineBudgetStatus } from '@opsmind/database';
 import type { Env } from '@opsmind/config/env/schema';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { OutreachService } from './outreach.service';
@@ -136,6 +137,15 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
         `rascunho automático de outreach pulado (organizationId=${organizationId}, leadId=${leadId}) — ` +
           `status final do lead no banco é "${lead?.status ?? 'não encontrado'}", não QUALIFIED após ${maxAttempts} ` +
           'tentativas — tratando como rollback/não-qualificação de verdade',
+      );
+      return;
+    }
+
+    // Teto mensal do Revenue Engine: rascunho automático é gasto autônomo e
+    // para quando o teto estoura (um humano ainda pode gerar manualmente).
+    if ((await getEngineBudgetStatus(this.prisma, organizationId)).exceeded) {
+      this.logger.warn(
+        `rascunho automático de outreach pulado (organizationId=${organizationId}, leadId=${leadId}) — teto mensal do Revenue Engine atingido`,
       );
       return;
     }

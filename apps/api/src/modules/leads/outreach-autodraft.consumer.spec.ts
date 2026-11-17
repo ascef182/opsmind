@@ -53,6 +53,9 @@ describe('OutreachAutodraftConsumer', () => {
           ...leadOverrides,
         }),
       },
+      // Teto do Revenue Engine: sem gasto no mês, sem configuração (US$50).
+      costEvent: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountUsd: 0 } }) },
+      organizationRevenueSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     };
   }
 
@@ -181,6 +184,23 @@ describe('OutreachAutodraftConsumer', () => {
     await expect(processor({ data: jobData })).resolves.toBeUndefined();
     expect(outreachService.approve).not.toHaveBeenCalled();
     expect(outreachService.markSent).not.toHaveBeenCalled();
+  });
+
+  it('teto mensal do Revenue Engine atingido: pula sem gerar rascunho e sem relançar', async () => {
+    const outreachService = buildOutreachService();
+    const prisma = buildPrisma();
+    prisma.costEvent.aggregate.mockResolvedValue({ _sum: { amountUsd: 50 } });
+    const consumer = new OutreachAutodraftConsumer(
+      buildConfigService() as never,
+      outreachService as never,
+      prisma as never,
+    );
+    consumer.onModuleInit();
+
+    const processor = getRegisteredProcessor();
+
+    await expect(processor({ data: jobData })).resolves.toBeUndefined();
+    expect(outreachService.generateDraft).not.toHaveBeenCalled();
   });
 
   it('recusa da IA resolve o job sem relançar (retentar pagaria cada tentativa de novo)', async () => {

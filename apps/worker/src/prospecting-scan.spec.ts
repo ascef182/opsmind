@@ -1,11 +1,14 @@
 import { scanProspectingTargets } from './prospecting-scan';
 
 describe('scanProspectingTargets', () => {
-  function buildPrisma() {
+  function buildPrisma(engineSpentUsd = 0) {
     return {
       prospectingTarget: { findMany: jest.fn() },
       scrapeJob: { findFirst: jest.fn(), create: jest.fn() },
       auditLog: { create: jest.fn() },
+      // Razão de custos do mês e teto do Revenue Engine (sem linha = US$50).
+      costEvent: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountUsd: engineSpentUsd } }) },
+      organizationRevenueSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     };
   }
 
@@ -31,6 +34,20 @@ describe('scanProspectingTargets', () => {
       ...overrides,
     };
   }
+
+  it('teto do Revenue Engine estourado no mês: não cria ScrapeJob automático', async () => {
+    const prisma = buildPrisma(50);
+    const redis = buildRedis();
+    prisma.prospectingTarget.findMany.mockResolvedValue([buildTarget()]);
+    prisma.scrapeJob.findFirst.mockResolvedValue(null);
+    const enqueue = jest.fn();
+
+    const created = await scanProspectingTargets(prisma as never, redis as never, enqueue);
+
+    expect(created).toBe(0);
+    expect(prisma.scrapeJob.create).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
 
   it('(a) cria um ScrapeJob para um target ativo sem ScrapeJob COMPLETED recente', async () => {
     const prisma = buildPrisma();

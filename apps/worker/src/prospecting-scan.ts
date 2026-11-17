@@ -1,4 +1,5 @@
 import type { PrismaClient, ScrapeJob } from '@opsmind/database';
+import { getEngineBudgetStatus } from '@opsmind/database';
 import type { LeadScrapeJobData } from '@opsmind/shared-types';
 import type Redis from 'ioredis';
 import * as Sentry from '@sentry/node';
@@ -90,6 +91,11 @@ export async function scanProspectingTargets(
           ? Number(target.organization.scrapingMonthlyBudget)
           : null;
       if (await isOverBudget(redis, target.organizationId, monthlyBudget)) {
+        continue;
+      }
+      // Teto do Revenue Engine (razão de custos do mês, todas as categorias):
+      // o scan diário é gasto autônomo, então para quando o teto estoura.
+      if ((await getEngineBudgetStatus(prisma, target.organizationId)).exceeded) {
         continue;
       }
 

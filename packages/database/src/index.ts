@@ -64,5 +64,10 @@ export type {
   CostCategory,
   OrganizationRevenueSettings,
 } from '@prisma/client';
-export { recordStageTransition, recordCostEvent } from './revenue-ledger';
-export type { StageTransitionInput, CostEventInput } from './revenue-ledger';
+export {
+  recordStageTransition,
+  recordCostEvent,
+  getEngineBudgetStatus,
+  startOfUtcMonth,
+} from './revenue-ledger';
+export type { StageTransitionInput, CostEventInput, EngineBudgetStatus } from './revenue-ledger';

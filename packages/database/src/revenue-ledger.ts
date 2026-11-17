@@ -68,3 +68,42 @@ export async function recordCostEvent(client: CostEventClient, input: CostEventI
     },
   });
 }
+
+type EngineBudgetClient = Pick<Prisma.TransactionClient, 'costEvent' | 'organizationRevenueSettings'>;
+
+// Mesmo default da migration para organizações sem configuração gravada.
+const DEFAULT_ENGINE_MONTHLY_BUDGET_USD = 50;
+
+export interface EngineBudgetStatus {
+  spentUsd: number;
+  budgetUsd: number;
+  exceeded: boolean;
+}
+
+export function startOfUtcMonth(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
+// Gasto do mês corrente (UTC) na razão de custos contra o teto do Revenue
+// Engine. É o corte das automações que gastam sozinhas (scan diário de
+// prospecção, rascunho automático); ações pedidas por um humano seguem os
+// orçamentos de IA e scraping de sempre.
+export async function getEngineBudgetStatus(
+  client: EngineBudgetClient,
+  organizationId: string,
+  now: Date = new Date(),
+): Promise<EngineBudgetStatus> {
+  const [spend, settings] = await Promise.all([
+    client.costEvent.aggregate({
+      where: { organizationId, occurredAt: { gte: startOfUtcMonth(now) } },
+      _sum: { amountUsd: true },
+    }),
+    client.organizationRevenueSettings.findUnique({
+      where: { organizationId },
+      select: { engineMonthlyBudgetUsd: true },
+    }),
+  ]);
+  const spentUsd = Number(spend._sum.amountUsd ?? 0);
+  const budgetUsd = settings ? Number(settings.engineMonthlyBudgetUsd) : DEFAULT_ENGINE_MONTHLY_BUDGET_USD;
+  return { spentUsd, budgetUsd, exceeded: spentUsd >= budgetUsd };
+}
