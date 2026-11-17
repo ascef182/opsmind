@@ -66,13 +66,17 @@ export class RevenueSettingsService {
     return this.get(organizationId);
   }
 
+  isGloballyPaused(): boolean {
+    return this.configService.get('OUTREACH_GLOBAL_PAUSE', { infer: true });
+  }
+
   /**
    * Portão de todo envio real de outreach. Ordem: freio de infraestrutura
    * (env), pausa da organização, teto diário de envios. Lança 403 com o
    * motivo; nunca envia "só desta vez".
    */
   async assertCanSendOutreach(organizationId: string): Promise<void> {
-    if (this.configService.get('OUTREACH_GLOBAL_PAUSE', { infer: true })) {
+    if (this.isGloballyPaused()) {
       throw new ForbiddenException('Envio de outreach pausado globalmente nesta instância (OUTREACH_GLOBAL_PAUSE).');
     }
     const settings = await this.get(organizationId);
