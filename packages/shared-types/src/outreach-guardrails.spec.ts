@@ -1,4 +1,4 @@
-import { checkOutreachGate } from './outreach-guardrails';
+import { checkOutreachGate, draftWordTarget, maxSimilarityToRecent } from './outreach-guardrails';
 
 describe('checkOutreachGate', () => {
   it('aprova um corpo limpo, curto, sem link nenhum', () => {
@@ -73,5 +73,40 @@ describe('checkOutreachGate', () => {
     const result = checkOutreachGate('{{nome}}, temos a solução completa e é imperdível!', null);
     expect(result.passed).toBe(false);
     expect(result.violations.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('frases de afirmação sem evidência', () => {
+  it.each([
+    'Um começo de reputação que dá gosto de ver.',
+    'Quem manda mensagem à noite e fica sem resposta tende a procurar outra academia.',
+    'Vocês estão perdendo clientes sem um site.',
+  ])('bloqueia %p', (body) => {
+    expect(checkOutreachGate(body, null).passed).toBe(false);
+  });
+});
+
+describe('draftWordTarget', () => {
+  it('canais de mensagem curta miram 100 palavras; e-mail e ligação têm mais folga', () => {
+    expect(draftWordTarget('WHATSAPP')).toBe(100);
+    expect(draftWordTarget('INSTAGRAM_DM')).toBe(100);
+    expect(draftWordTarget('EMAIL')).toBe(130);
+    expect(draftWordTarget('PHONE')).toBe(150);
+  });
+});
+
+describe('maxSimilarityToRecent', () => {
+  const template =
+    'Olá! Encontrei a sua academia pesquisando no Google e não localizei um site próprio. Posso mostrar um conceito visual?';
+
+  it('mesmo template com outro nome é quase idêntico', () => {
+    const other = template.replace('sua academia', 'Arena Fit');
+    expect(maxSimilarityToRecent(template, [other])).toBeGreaterThan(0.5);
+  });
+
+  it('textos diferentes ficam baixos e lista vazia é zero', () => {
+    const different = 'Bom dia, vi que a Metalúrgica Maná atende Guarulhos inteira com serviços de solda e corte.';
+    expect(maxSimilarityToRecent(template, [different])).toBeLessThan(0.1);
+    expect(maxSimilarityToRecent(template, [])).toBe(0);
   });
 });

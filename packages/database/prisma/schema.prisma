@@ -134,6 +134,13 @@ enum OutreachChannel {
   OTHER
 }
 
+enum OfferingKind {
+  WEBSITE
+  WHATSAPP_AUTOMATION
+  CUSTOM_APP
+  OTHER
+}
+
 enum OutreachStatus {
   DRAFT
   APPROVED
@@ -893,6 +900,9 @@ model ServiceOffering {
   minRevenueUsd    Int?     @map("min_revenue_usd")
   maxRevenueUsd    Int?     @map("max_revenue_usd")
   isActive         Boolean  @default(true) @map("is_active")
+  // Tipo de produto: permite escolher a oferta pela abordagem do contato
+  // (`selectOutreachStrategy`) sem adivinhar pelo nome definido pelo usuário.
+  kind             OfferingKind?
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
@@ -1093,6 +1103,14 @@ model OutreachMessage {
   // quem foi.
   readAt             DateTime?       @map("read_at")
   readByUserId       String?         @map("read_by_user_id")
+  // Sales Copy Intelligence: abordagem escolhida por regra
+  // (`OutreachStrategy`, shared-types), revisão de qualidade feita antes de
+  // salvar, texto original da IA (antes de edição humana) e versão do prompt.
+  // Base do relatório de desempenho de copy por abordagem.
+  strategy           String?
+  qualityReview      Json?           @map("quality_review")
+  originalBody       String?         @map("original_body") @db.Text
+  promptVersion      String?         @map("prompt_version")
   actorType          AuditActorType  @map("actor_type")
   actorId            String?         @map("actor_id")
   createdAt          DateTime        @default(now()) @map("created_at")
@@ -1108,6 +1126,7 @@ model OutreachMessage {
   @@index([leadId])
   @@index([status, sentAt])
   @@index([organizationId, status, readAt])
+  @@index([organizationId, strategy])
   @@map("outreach_messages")
 }
 

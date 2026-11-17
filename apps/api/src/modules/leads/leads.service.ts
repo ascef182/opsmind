@@ -512,7 +512,7 @@ export class LeadsService {
     // transitório do Postgres), o erro deve propagar e abortar a transação
     // normalmente, nunca ser engolido como se fosse uma falha de
     // enfileiramento.
-    if (canUpdateStatus && computedStatus === 'QUALIFIED' && updated.suggestedOfferingId) {
+    if (canUpdateStatus && computedStatus === 'QUALIFIED') {
       const existingOutreachCount = await this.prisma.outreachMessage.count({ where: { leadId: id } });
       if (existingOutreachCount === 0) {
         const alreadyInvestigated = updated.website
@@ -540,14 +540,14 @@ export class LeadsService {
           const channel = resolveAutodraftChannel(updated);
           if (channel) {
             phase = 'outreach-autodraft-enqueue';
-            const suggestedOfferingId = updated.suggestedOfferingId;
+            // Sem oferta fixa: `generateDraft` escolhe a oferta pela abordagem
+            // (`selectOutreachStrategy`) e cai para a sugerida pelo scoring.
             enqueue = () =>
               withTimeout(
                 this.outreachAutodraftQueueService.enqueue({
                   organizationId,
                   leadId: id,
                   channel,
-                  serviceOfferingId: suggestedOfferingId,
                 }),
                 QUALIFICATION_TRIGGER_ENQUEUE_TIMEOUT_MS,
               );

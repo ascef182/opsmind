@@ -309,14 +309,15 @@ export async function processWebsiteProfileJob(
     // `lead-scrape-processor.ts`, Passo 3): esta é a continuação do lead que
     // foi desviado pra cá em vez de ganhar rascunho imediato, agora com
     // sinais reais disponíveis pra citar. Mesmas condições de lá —
-    // QUALIFIED, oferta sugerida, canal resolvível, zero outreach existente
+    // QUALIFIED, canal resolvível, zero outreach existente (a oferta é
+    // escolhida pela abordagem dentro de `generateDraft`)
     // — só que avaliadas com o `effectiveStatus`/`breakdown` recém-
     // calculados aqui. Sem teto por job (diferente de
     // `AUTODRAFT_MAX_PER_ORG_PER_JOB`): este job processa UM lead só, nunca
     // um lote — não há "avalanche" possível dum job de investigação
     // individual.
     let autodraftJob: OutreachAutodraftJobData | null = null;
-    if (effectiveStatus === 'QUALIFIED' && breakdown.matchedOfferingId) {
+    if (effectiveStatus === 'QUALIFIED') {
       const existingOutreachCount = await tx.outreachMessage.count({ where: { leadId: data.leadId } });
       if (existingOutreachCount === 0) {
         const channel = resolveAutodraftChannel(lead);
@@ -325,7 +326,6 @@ export async function processWebsiteProfileJob(
             organizationId: data.organizationId,
             leadId: data.leadId,
             channel,
-            serviceOfferingId: breakdown.matchedOfferingId,
           };
         }
       }

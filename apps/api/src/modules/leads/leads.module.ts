@@ -14,6 +14,7 @@ import { ProspectingTargetsController } from './prospecting-targets.controller';
 import { LeadsService } from './leads.service';
 import { LeadsController } from './leads.controller';
 import { OutreachService } from './outreach.service';
+import { OutreachQualityReviewer } from './outreach-quality-reviewer';
 import { OutreachMessagesController } from './outreach-messages.controller';
 import { LeadAnalysisService } from './lead-analysis.service';
 import { LeadSignalsService } from './lead-signals.service';
@@ -60,6 +61,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     ProspectingTargetsService,
     LeadsService,
     OutreachService,
+    OutreachQualityReviewer,
     LeadAnalysisService,
     LeadSignalsService,
     SignalCodesService,

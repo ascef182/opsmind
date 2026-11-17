@@ -234,7 +234,12 @@ describe('Leads/Prospecção (e2e)', () => {
     // chamadas HTTP síncronas dos passos seguintes — sem registrar e
     // drenar esse mock aqui, ele rouba (ou é roubado por) o
     // `mockResolvedValueOnce` do passo 6/7, produzindo um 500 intermitente.
-    gateway.sendMessage.mockResolvedValueOnce(endTurn('rascunho automático de outreach via telefone'));
+    // Canal PHONE exige roteiro em três blocos (Sales Copy Intelligence); sem
+    // eles o gerador tentaria de novo e consumiria mocks dos passos seguintes.
+    // A revisão de qualidade cai sem mock e o rascunho sai "não revisado".
+    gateway.sendMessage.mockResolvedValueOnce(
+      endTurn('Abertura: Olá!\nPergunta de descoberta: Como chegam os pedidos hoje?\nPróximo passo: Posso mostrar um conceito?'),
+    );
 
     const scoreRes = await request(app.getHttpServer())
       .post(`/organizations/${organizationId}/leads/${leadId}/score`)

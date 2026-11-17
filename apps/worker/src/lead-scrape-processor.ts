@@ -1671,9 +1671,9 @@ export async function processLeadScrapeJob(
           // fluxo que já processa o lead (nunca um scan periódico separado,
           // ver Risks do plano). Duas condições-base, ambas exigidas:
           //   1. `lead.status === 'QUALIFIED'` (score cruzou o threshold).
-          //   2. `lead.suggestedOfferingId` não-nulo — sem oferta sugerida,
-          //      `OutreachService.generateDraft` lançaria BadRequestException
-          //      (não teria o que promover na mensagem).
+          //   2. A oferta não precisa vir sugerida pelo scoring:
+          //      `OutreachService.generateDraft` escolhe pela abordagem
+          //      (`selectOutreachStrategy`) e só cai para a sugerida depois.
           // E, adicionalmente: o lead ainda não tem NENHUM `OutreachMessage`
           // (checado via `existingOutreachCount` — nunca reenfileira pra um
           // lead que já ganhou um rascunho, automático ou manual).
@@ -1691,7 +1691,7 @@ export async function processLeadScrapeJob(
           // acima via `confirmedSignals`), ou que excedeu o teto de
           // investigação desta rodada, cai no caminho imediato de sempre —
           // nunca fica "preso" sem nenhum rascunho.
-          if (lead.status === 'QUALIFIED' && lead.suggestedOfferingId) {
+          if (lead.status === 'QUALIFIED') {
             const existingOutreachCount = await tx.outreachMessage.count({ where: { leadId: lead.id } });
             if (existingOutreachCount === 0) {
               const alreadyInvestigated = lead.website
@@ -1714,7 +1714,6 @@ export async function processLeadScrapeJob(
                     organizationId: data.organizationId,
                     leadId: lead.id,
                     channel,
-                    serviceOfferingId: lead.suggestedOfferingId,
                   });
                 }
               }

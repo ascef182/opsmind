@@ -42,6 +42,17 @@ const BANNED_PHRASES: readonly string[] = [
   'em um mercado cada vez mais competitivo',
   'espero que esteja bem',
   'espero que esta mensagem o encontre bem',
+  // Elogio artificial e afirmação de desempenho sem evidência, vistos em
+  // rascunhos reais revisados pelo time (2026-11-17).
+  'dá gosto de ver',
+  'tende a procurar outra',
+  'fica sem resposta',
+  'ficam sem resposta',
+  'perdendo clientes',
+  'perdendo cliente',
+  'perdendo vendas',
+  'estão perdendo',
+  'está perdendo',
 ];
 
 // Padrões de tag de merge/placeholder não substituída — um rascunho que
@@ -127,4 +138,57 @@ export function checkOutreachGate(
   }
 
   return { passed: violations.length === 0, violations };
+}
+
+// Alvo de tamanho do RASCUNHO gerado (o teto de aprovação acima continua
+// valendo para texto editado por humano). Primeiro contato pede 60 a 100
+// palavras; e-mail tem assunto e um pouco mais de folga; o roteiro de
+// ligação tem três blocos curtos.
+const DRAFT_WORD_TARGET: Record<string, number> = {
+  EMAIL: 130,
+  PHONE: 150,
+};
+const DEFAULT_DRAFT_WORD_TARGET = 100;
+
+export function draftWordTarget(channel: string): number {
+  return DRAFT_WORD_TARGET[channel] ?? DEFAULT_DRAFT_WORD_TARGET;
+}
+
+export function countDraftWords(text: string): number {
+  return countWords(text);
+}
+
+function wordTrigrams(text: string): Set<string> {
+  const words = text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  const trigrams = new Set<string>();
+  for (let i = 0; i + 2 < words.length; i++) {
+    trigrams.add(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
+  }
+  return trigrams;
+}
+
+/**
+ * Maior similaridade (Jaccard sobre trigramas de palavras, 0 a 1) entre o
+ * rascunho e mensagens recentes da organização. Pega o "mesmo template com o
+ * nome trocado" sem depender do modelo perceber que se repetiu.
+ */
+export function maxSimilarityToRecent(body: string, recentBodies: readonly string[]): number {
+  const current = wordTrigrams(body);
+  if (current.size === 0) return 0;
+  let max = 0;
+  for (const other of recentBodies) {
+    const previous = wordTrigrams(other);
+    if (previous.size === 0) continue;
+    let shared = 0;
+    for (const trigram of current) if (previous.has(trigram)) shared++;
+    const similarity = shared / (current.size + previous.size - shared);
+    if (similarity > max) max = similarity;
+  }
+  return max;
 }

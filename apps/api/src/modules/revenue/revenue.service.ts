@@ -3,6 +3,7 @@ import type { CostCategory } from '@opsmind/database';
 import { leadStatusToPipelineStage, dealStageToPipelineStage, REVENUE_PIPELINE_STAGES } from '@opsmind/shared-types';
 import type { RevenuePipelineStage } from '@opsmind/shared-types';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { aggregateCopyPerformance, type CopyPerformanceRow } from './copy-performance';
 import {
   computeStageFlows,
   periodWindows,
@@ -79,6 +80,13 @@ export interface RevenueCosts {
 interface Window {
   start: Date;
   end: Date;
+}
+
+export interface RevenueCopyPerformance {
+  rows: CopyPerformanceRow[];
+  // Resposta positiva e pedido de demonstração dependem da classificação de
+  // respostas (Fase 4); até lá o relatório mostra respostas em geral.
+  positiveRepliesAvailableFrom: string;
 }
 
 @Injectable()
@@ -161,6 +169,48 @@ export class RevenueService {
       stages: flows.map((flow) => ({ ...flow, current: current.get(flow.stage) ?? 0 })),
       disqualified,
       flowWindowDays: FLOW_WINDOW_DAYS,
+    };
+  }
+
+  // Rascunhos sem `strategy` são anteriores ao Sales Copy Intelligence e
+  // ficam de fora: não dá para atribuir resultado a uma abordagem.
+  async getCopyPerformance(organizationId: string): Promise<RevenueCopyPerformance> {
+    const messages = await this.prisma.outreachMessage.findMany({
+      where: { organizationId, strategy: { not: null } },
+      select: {
+        leadId: true,
+        strategy: true,
+        channel: true,
+        promptVersion: true,
+        status: true,
+        body: true,
+        originalBody: true,
+        approvedAt: true,
+        sentAt: true,
+        repliedAt: true,
+      },
+    });
+    const sentLeadIds = [...new Set(messages.filter((m) => m.sentAt).map((m) => m.leadId))];
+    const transitions =
+      sentLeadIds.length === 0
+        ? []
+        : await this.prisma.pipelineStageTransition.findMany({
+            where: { organizationId, leadId: { in: sentLeadIds } },
+            select: { leadId: true, toStage: true },
+          });
+    const stagesReachedByLead = new Map<string, Set<string>>();
+    for (const transition of transitions) {
+      if (!transition.leadId) continue;
+      const reached = stagesReachedByLead.get(transition.leadId) ?? new Set<string>();
+      reached.add(transition.toStage);
+      stagesReachedByLead.set(transition.leadId, reached);
+    }
+    return {
+      rows: aggregateCopyPerformance(
+        messages.map((m) => ({ ...m, strategy: m.strategy! })),
+        stagesReachedByLead,
+      ),
+      positiveRepliesAvailableFrom: 'Fase 4',
     };
   }
 

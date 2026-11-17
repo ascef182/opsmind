@@ -169,6 +169,63 @@ describe('Revenue Engine (e2e)', () => {
     expect(audit).not.toBeNull();
   });
 
+  it('desempenho de copy agrupa por abordagem e ignora rascunho sem abordagem', async () => {
+    const owner = await registerUser(app, `revenue-copy-${randomUUID()}@opsmind.test`);
+    const auth = { Authorization: `Bearer ${owner.accessToken}` };
+    const organizationId = await createOrg(owner.accessToken, 'Copy Co');
+    const base = `/organizations/${organizationId}`;
+    const lead = await request(app.getHttpServer())
+      .post(`${base}/leads`)
+      .set(auth)
+      .send({ name: 'Arena Fit' })
+      .expect(201);
+    const now = new Date();
+    await prisma.outreachMessage.createMany({
+      data: [
+        {
+          organizationId,
+          leadId: lead.body.id,
+          channel: 'WHATSAPP',
+          body: 'texto editado',
+          originalBody: 'texto da IA',
+          strategy: 'WHATSAPP_AUTOMATION',
+          promptVersion: 'copy-v3',
+          evidenceQuotes: [],
+          status: 'REPLIED',
+          approvedAt: now,
+          sentAt: now,
+          repliedAt: now,
+          actorType: 'AI',
+        },
+        {
+          organizationId,
+          leadId: lead.body.id,
+          channel: 'WHATSAPP',
+          body: 'antigo',
+          evidenceQuotes: [],
+          status: 'DRAFT',
+          actorType: 'AI',
+        },
+      ],
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`${base}/revenue/copy-performance`)
+      .set(auth)
+      .expect(200);
+
+    expect(response.body.rows).toEqual([
+      expect.objectContaining({
+        strategy: 'WHATSAPP_AUTOMATION',
+        drafts: 1,
+        editedBeforeApproval: 1,
+        sent: 1,
+        replied: 1,
+        replyRate: 1,
+      }),
+    ]);
+  });
+
   it('outra organização não lê nem altera o Revenue Engine alheio', async () => {
     const owner = await registerUser(app, `revenue-a-${randomUUID()}@opsmind.test`);
     const outsider = await registerUser(app, `revenue-b-${randomUUID()}@opsmind.test`);
@@ -180,6 +237,7 @@ describe('Revenue Engine (e2e)', () => {
     await request(app.getHttpServer()).get(`${base}/overview`).set(outsiderAuth).expect(403);
     await request(app.getHttpServer()).get(`${base}/pipeline`).set(outsiderAuth).expect(403);
     await request(app.getHttpServer()).get(`${base}/costs`).set(outsiderAuth).expect(403);
+    await request(app.getHttpServer()).get(`${base}/copy-performance`).set(outsiderAuth).expect(403);
     await request(app.getHttpServer())
       .patch(`${base}/settings`)
       .set(outsiderAuth)

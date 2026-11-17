@@ -28,7 +28,7 @@ import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData } from '@opsmin
 import { getEngineBudgetStatus } from '@opsmind/database';
 import type { Env } from '@opsmind/config/env/schema';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
-import { OutreachService } from './outreach.service';
+import { OutreachDraftNotCreatedException, OutreachService } from './outreach.service';
 import { AiRefusalException } from '../ai/services/ai-one-shot-runner';
 
 /**
@@ -164,6 +164,15 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
         // normalmente (sem gerar rascunho nenhum desta vez).
         this.logger.warn(
           `rascunho automático de outreach pulado (organizationId=${organizationId}, leadId=${leadId}) — orçamento mensal de IA estourado`,
+        );
+        return;
+      }
+      if (error instanceof OutreachDraftNotCreatedException) {
+        // Abordagem despriorizada, sem oferta para ela, ou todas as versões
+        // afirmaram algo sem base na pesquisa: decisão, não falha
+        // transitória. Retentar só pagaria a geração de novo.
+        this.logger.warn(
+          `rascunho automático de outreach não criado (organizationId=${organizationId}, leadId=${leadId}, motivo=${error.reason}): ${error.message}`,
         );
         return;
       }

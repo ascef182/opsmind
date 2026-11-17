@@ -5,7 +5,13 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { AuditService } from '../audit/audit.service';
-import { RevenueService, type RevenueCosts, type RevenueOverview, type RevenuePipeline } from './revenue.service';
+import {
+  RevenueService,
+  type RevenueCopyPerformance,
+  type RevenueCosts,
+  type RevenueOverview,
+  type RevenuePipeline,
+} from './revenue.service';
 import { RevenueSettingsService, type RevenueSettings } from './revenue-settings.service';
 import { RevenuePeriodQueryDto } from './dto/revenue-period-query.dto';
 import { UpdateRevenueSettingsDto } from './dto/update-revenue-settings.dto';
@@ -45,6 +51,11 @@ export class RevenueController {
     @Query() query: RevenuePeriodQueryDto,
   ): Promise<RevenueCosts> {
     return this.revenueService.getCosts(organizationId, query.period ?? 'month');
+  }
+
+  @Get('copy-performance')
+  copyPerformance(@Param('organizationId') organizationId: string): Promise<RevenueCopyPerformance> {
+    return this.revenueService.getCopyPerformance(organizationId);
   }
 
   @Get('settings')

@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsIn,
   IsBoolean,
   IsInt,
   IsOptional,
@@ -9,8 +10,17 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import type { OfferingKind } from '@opsmind/shared-types';
+
+const OFFERING_KINDS: OfferingKind[] = ['WEBSITE', 'WHATSAPP_AUTOMATION', 'CUSTOM_APP', 'OTHER'];
 
 export class UpdateServiceOfferingDto {
+  // Tipo de produto: `generateDraft` escolhe a oferta pela abordagem do
+  // contato (sem site -> WEBSITE; WhatsApp -> WHATSAPP_AUTOMATION).
+  @IsOptional()
+  @IsIn(OFFERING_KINDS)
+  kind?: OfferingKind;
+
   @IsOptional()
   @IsString()
   @MaxLength(120)

@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { OutreachService } from './outreach.service';
+import { OUTREACH_PROMPT_VERSION, OutreachDraftNotCreatedException, OutreachService } from './outreach.service';
 import type { AiGateway } from '../ai/gateway/ai-gateway.interface';
 import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 
@@ -8,10 +8,12 @@ function buildDeps() {
     outreachMessage: {
       create: jest.fn(),
       findFirst: jest.fn(),
-      findMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       update: jest.fn(),
       updateMany: jest.fn(),
     },
+    leadSignal: { findMany: jest.fn().mockResolvedValue([]) },
+    serviceOffering: { findFirst: jest.fn().mockResolvedValue(null) },
     lead: {
       update: jest.fn().mockResolvedValue({ id: 'lead-1' }),
       findFirst: jest.fn().mockResolvedValue({ status: 'QUALIFIED' }),
@@ -60,9 +62,15 @@ function buildDeps() {
   const pipelineHistory = { leadStatusChanged: jest.fn().mockResolvedValue(undefined), dealStageChanged: jest.fn().mockResolvedValue(undefined) };
 
   const aiRunner = new AiOneShotRunner(prismaOutOfBand as never, gateway, budgetService as never);
+  // Revisor mockado por padrão (rascunho aceito sem revisão); os testes do
+  // ciclo de revisão trocam o retorno.
+  const qualityReviewer = {
+    review: jest.fn().mockResolvedValue({ status: 'UNREVIEWED', reason: 'teste' }),
+  };
   const service = new OutreachService(
     prisma as never,
     aiRunner,
+    qualityReviewer as never,
     organizationsService as never,
     auditService as never,
     leadsService as never,
@@ -74,6 +82,7 @@ function buildDeps() {
   );
 
   return {
+    qualityReviewer,
     revenueSettings,
     pipelineHistory,
     service,
@@ -152,8 +161,9 @@ describe('OutreachService', () => {
         expect.objectContaining({ tools: [], messages: [{ role: 'user', content: expect.any(String) }] }),
       );
       const promptSent = gateway.sendMessage.mock.calls[0]?.[0]?.messages[0]?.content as string;
-      expect(promptSent).toContain('NÃO TEM SITE');
+      expect(promptSent).toContain('Site próprio: não localizado na pesquisa');
       expect(promptSent).toContain('sem site próprio');
+      expect(promptSent).toContain('HIPÓTESES NÃO VERIFICADAS');
 
       // AIRequest.SUCCESS persistido ANTES do OutreachMessage, para poder
       // linkar o id — mesma trilha de custo/observabilidade de AiService.chat.
@@ -181,6 +191,9 @@ describe('OutreachService', () => {
           actorId: null,
           aiRequestId: 'ai-req-1',
           evidenceQuotes: ['sem site próprio'],
+          strategy: 'NO_WEBSITE',
+          originalBody: 'Olá! Vi que vocês não têm site...',
+          promptVersion: OUTREACH_PROMPT_VERSION,
         }),
       });
       expect(budgetService.recordSpend).toHaveBeenCalledWith('org-1', expect.any(Number));
@@ -224,30 +237,22 @@ describe('OutreachService', () => {
       });
     });
 
-    // Reescrita do prompt (2026-09-17): persona de SDR sênior + framework de
-    // 4 movimentos, pra sair do "apresentável mas genérico". Só checa que os
-    // trechos-chave sobrevivem, não o texto inteiro (evita um teste frágil
-    // que quebra a cada ajuste de redação).
-    it('system prompt inclui a persona de SDR e o framework de 4 movimentos (gancho/dor/oferta/CTA único)', async () => {
+    // v3 do prompt (2026-11-17): sem o movimento obrigatório de "dor", com
+    // regra de evidência explícita. Só os trechos-chave, não o texto inteiro.
+    it('system prompt exige evidência e não pede mais um movimento de dor', async () => {
       const { service, prisma, gateway, leadsService, serviceOfferingsService } = buildDeps();
       leadsService.findByIdOrThrow.mockResolvedValue(baseLead);
       serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
       gateway.sendMessage.mockResolvedValue(mockGatewayResponse('rascunho'));
       prisma.outreachMessage.create.mockResolvedValue({ id: 'msg-1' });
 
-      await service.generateDraft(
-        'org-1',
-        'lead-1',
-        { channel: 'EMAIL' },
-        { type: 'USER', userId: 'user-1' },
-      );
+      await service.generateDraft('org-1', 'lead-1', { channel: 'EMAIL' }, { type: 'USER', userId: 'user-1' });
 
       const systemPrompt = gateway.sendMessage.mock.calls[0]?.[0]?.system as string;
-      expect(systemPrompt).toContain('SDR (Sales Development Representative) sênior');
-      expect(systemPrompt).toContain('GANCHO');
-      expect(systemPrompt).toContain('DOR/CUSTO');
-      expect(systemPrompt).toContain('CTA ÚNICO');
-      expect(systemPrompt).toContain('nunca mais de um pedido/pergunta por mensagem');
+      expect(systemPrompt).toContain('só afirme sobre o negócio o que está em FATOS VERIFICADOS');
+      expect(systemPrompt).toContain('não localizou um site próprio');
+      expect(systemPrompt).toContain('entre 60 e 100 palavras');
+      expect(systemPrompt).not.toContain('DOR/CUSTO');
     });
 
     // Antes desta task, `OutreachMessage.subject` nunca era preenchido pela
@@ -425,7 +430,7 @@ describe('OutreachService', () => {
       );
 
       const promptSent = gateway.sendMessage.mock.calls[0]?.[0]?.messages[0]?.content as string;
-      expect(promptSent).toContain('Instagram: https://instagram.com/padariacentral');
+      expect(promptSent).toContain('instagram (https://instagram.com/padariacentral)');
     });
 
     it('não inventa Instagram/LinkedIn quando o lead não tem esses social links', async () => {
@@ -513,13 +518,13 @@ describe('OutreachService', () => {
       expect(serviceOfferingsService.findByIdOrThrow).toHaveBeenCalledWith('org-1', 'offering-2');
     });
 
-    it('lança BadRequestException quando não há serviceOfferingId nem suggestedOfferingId', async () => {
+    it('sem oferta explícita, sugerida ou do tipo da abordagem, não gera nada (422)', async () => {
       const { service, leadsService, serviceOfferingsService, prisma } = buildDeps();
       leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, suggestedOfferingId: null });
 
       await expect(
         service.generateDraft('org-1', 'lead-1', { channel: 'EMAIL' }, { type: 'USER', userId: 'user-1' }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow(OutreachDraftNotCreatedException);
       expect(serviceOfferingsService.findByIdOrThrow).not.toHaveBeenCalled();
       expect(prisma.outreachMessage.create).not.toHaveBeenCalled();
       expect(prisma.aIRequest.create).not.toHaveBeenCalled();
@@ -1238,5 +1243,223 @@ describe('OutreachService', () => {
       expect(prisma.outreachMessage.update).not.toHaveBeenCalled();
       expect(result).toBe(alreadyRead);
     });
+  });
+});
+
+describe('OutreachService.generateDraft — Sales Copy Intelligence', () => {
+  const reviewed = (overrides: Record<string, unknown> = {}) => ({
+    status: 'REVIEWED',
+    scores: {
+      personalization: 8,
+      factualAccuracy: 9,
+      naturalLanguage: 8,
+      commercialRelevance: 8,
+      ctaClarity: 9,
+      genericLanguage: 8,
+    },
+    average: 8.3,
+    unsupportedClaims: [],
+    issues: [],
+    model: 'claude-haiku-5-5',
+    ...overrides,
+  });
+  const cleanDraft = 'Olá! Tudo bem? Encontrei a Padaria Central pesquisando em São Paulo. Posso mostrar um conceito?';
+
+  function setup() {
+    const deps = buildDeps();
+    deps.leadsService.findByIdOrThrow.mockResolvedValue(baseLead);
+    deps.serviceOfferingsService.findByIdOrThrow.mockResolvedValue(baseOffering);
+    deps.prisma.outreachMessage.create.mockResolvedValue({ id: 'msg-1' });
+    return deps;
+  }
+
+  it('escolhe a oferta pelo tipo que resolve a abordagem, antes da sugerida pelo scoring', async () => {
+    const { service, prisma, gateway, serviceOfferingsService } = setup();
+    prisma.serviceOffering.findFirst.mockResolvedValue({ ...baseOffering, id: 'site-1', kind: 'WEBSITE' });
+    gateway.sendMessage.mockResolvedValue(mockGatewayResponse(cleanDraft));
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'SYSTEM' });
+
+    expect(prisma.serviceOffering.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-1', kind: 'WEBSITE', isActive: true } }),
+    );
+    expect(serviceOfferingsService.findByIdOrThrow).not.toHaveBeenCalled();
+    expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ serviceOfferingId: 'site-1', strategy: 'NO_WEBSITE' }),
+    });
+  });
+
+  it('academia sem site com WhatsApp vai de DeskComm', async () => {
+    const { service, prisma, gateway, leadsService } = setup();
+    leadsService.findByIdOrThrow.mockResolvedValue({
+      ...baseLead,
+      name: 'SPARTA 1507',
+      googleCategory: 'Academia',
+      whatsapp: '5511999990000',
+    });
+    prisma.serviceOffering.findFirst.mockResolvedValue({ ...baseOffering, id: 'desk-1', kind: 'WHATSAPP_AUTOMATION' });
+    gateway.sendMessage.mockResolvedValue(mockGatewayResponse(cleanDraft));
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'SYSTEM' });
+
+    expect(prisma.serviceOffering.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ kind: 'WHATSAPP_AUTOMATION' }) }),
+    );
+    const promptSent = gateway.sendMessage.mock.calls[0]?.[0]?.messages[0]?.content as string;
+    expect(promptSent).toContain('Abordagem: Automação de WhatsApp');
+  });
+
+  it('presença forte não gera rascunho automático e registra o motivo, sem gastar IA', async () => {
+    const { service, prisma, gateway, leadsService, auditService } = setup();
+    leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, website: 'https://padariacentral.com.br' });
+    prisma.leadSignal.findMany.mockResolvedValue([
+      {
+        runId: 'run-1',
+        signalCode: 'social.no_whatsapp_link',
+        signalCodeRef: { label: 'Sem link de WhatsApp' },
+        value: null,
+        evidenceQuote: null,
+        evidenceUrl: null,
+      },
+    ]);
+
+    await expect(
+      service.generateDraft('org-1', 'lead-1', { channel: 'EMAIL' }, { type: 'SYSTEM' }),
+    ).rejects.toMatchObject({ reason: 'DEPRIORITIZED' });
+    expect(gateway.sendMessage).not.toHaveBeenCalled();
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'outreach.draft_skipped', resource: 'Lead:lead-1' }),
+    );
+  });
+
+  it('sinais da última investigação entram como fatos com trecho e URL', async () => {
+    const { service, prisma, gateway, leadsService } = setup();
+    leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, website: 'https://padariacentral.com.br' });
+    prisma.leadSignal.findMany.mockResolvedValue([
+      {
+        runId: 'run-2',
+        signalCode: 'website.outdated_copyright_year',
+        signalCodeRef: { label: 'Copyright desatualizado' },
+        value: '2016',
+        evidenceQuote: '© 2016 Padaria Central',
+        evidenceUrl: 'https://padariacentral.com.br',
+      },
+      {
+        runId: 'run-1',
+        signalCode: 'website.no_ssl',
+        signalCodeRef: { label: 'Sem HTTPS' },
+        value: null,
+        evidenceQuote: null,
+        evidenceUrl: null,
+      },
+    ]);
+    gateway.sendMessage.mockResolvedValue(mockGatewayResponse(cleanDraft));
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'EMAIL' }, { type: 'USER', userId: 'user-1' });
+
+    const promptSent = gateway.sendMessage.mock.calls[0]?.[0]?.messages[0]?.content as string;
+    expect(promptSent).toContain('Copyright desatualizado; trecho: "© 2016 Padaria Central" (https://padariacentral.com.br)');
+    expect(promptSent).not.toContain('Sem HTTPS');
+    expect(promptSent).toContain('Abordagem: Site desatualizado');
+  });
+
+  it('reescreve com as correções do revisor e salva a versão aprovada', async () => {
+    const { service, prisma, gateway, qualityReviewer } = setup();
+    gateway.sendMessage
+      .mockResolvedValueOnce(mockGatewayResponse('Vocês recebem muitas mensagens à noite. Posso mostrar?'))
+      .mockResolvedValueOnce(mockGatewayResponse(cleanDraft));
+    qualityReviewer.review
+      .mockResolvedValueOnce(reviewed({ unsupportedClaims: ['recebem muitas mensagens à noite'] }))
+      .mockResolvedValueOnce(reviewed());
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'USER', userId: 'user-1' });
+
+    expect(gateway.sendMessage).toHaveBeenCalledTimes(2);
+    const secondPrompt = gateway.sendMessage.mock.calls[1]?.[0]?.messages[0]?.content as string;
+    expect(secondPrompt).toContain('afirmação sem base na pesquisa: recebem muitas mensagens à noite');
+    expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        body: cleanDraft,
+        qualityReview: expect.objectContaining({ status: 'REVIEWED', attempts: 2 }),
+      }),
+    });
+  });
+
+  it('descarta quando todas as versões afirmam algo sem base na pesquisa', async () => {
+    const { service, prisma, gateway, qualityReviewer } = setup();
+    gateway.sendMessage.mockResolvedValue(mockGatewayResponse('Vocês estão demorando para responder. Posso ajudar?'));
+    qualityReviewer.review.mockResolvedValue(reviewed({ unsupportedClaims: ['demoram para responder'] }));
+
+    await expect(
+      service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'SYSTEM' }),
+    ).rejects.toMatchObject({ reason: 'UNSUPPORTED_CLAIMS' });
+    expect(gateway.sendMessage).toHaveBeenCalledTimes(3);
+    expect(prisma.outreachMessage.create).not.toHaveBeenCalled();
+  });
+
+  it('fica com a melhor versão quando nenhuma atinge a nota, sem inventar fatos', async () => {
+    const { service, prisma, gateway, qualityReviewer } = setup();
+    gateway.sendMessage
+      .mockResolvedValueOnce(mockGatewayResponse('versão um, genérica. Posso mostrar?'))
+      .mockResolvedValueOnce(mockGatewayResponse('versão dois, melhor. Posso mostrar?'))
+      .mockResolvedValueOnce(mockGatewayResponse('versão três, fraca. Posso mostrar?'));
+    qualityReviewer.review
+      .mockResolvedValueOnce(reviewed({ average: 5 }))
+      .mockResolvedValueOnce(reviewed({ average: 6.5 }))
+      .mockResolvedValueOnce(reviewed({ average: 4 }));
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'SYSTEM' });
+
+    expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        body: 'versão dois, melhor. Posso mostrar?',
+        qualityReview: expect.objectContaining({ average: 6.5, attempts: 3 }),
+      }),
+    });
+  });
+
+  it('frase proibida ou texto longo demais força nova versão mesmo sem revisor', async () => {
+    const { service, prisma, gateway } = setup();
+    gateway.sendMessage
+      .mockResolvedValueOnce(mockGatewayResponse('Um começo de reputação que dá gosto de ver. Posso mostrar?'))
+      .mockResolvedValueOnce(mockGatewayResponse(cleanDraft));
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'SYSTEM' });
+
+    expect(gateway.sendMessage).toHaveBeenCalledTimes(2);
+    expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        body: cleanDraft,
+        qualityReview: expect.objectContaining({ status: 'UNREVIEWED', deterministicIssues: [] }),
+      }),
+    });
+  });
+
+  it('roteiro de ligação sem os três blocos é refeito', async () => {
+    const { service, gateway } = setup();
+    gateway.sendMessage
+      .mockResolvedValueOnce(mockGatewayResponse('Oi, aqui é da CazaTech. Posso mostrar?'))
+      .mockResolvedValueOnce(
+        mockGatewayResponse('Abertura: Oi!\nPergunta de descoberta: Como chegam os clientes?\nPróximo passo: Posso mostrar?'),
+      );
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'PHONE' }, { type: 'SYSTEM' });
+
+    expect(gateway.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('mensagens que receberam resposta viram referência só a partir de 3', async () => {
+    const { service, prisma, gateway } = setup();
+    prisma.outreachMessage.findMany.mockImplementation(({ where }: { where: { status?: unknown } }) =>
+      Promise.resolve(where.status ? [{ body: 'resposta A' }, { body: 'resposta B' }, { body: 'resposta C' }] : []),
+    );
+    gateway.sendMessage.mockResolvedValue(mockGatewayResponse(cleanDraft));
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'SYSTEM' });
+
+    const promptSent = gateway.sendMessage.mock.calls[0]?.[0]?.messages[0]?.content as string;
+    expect(promptSent).toContain('Mensagens desta abordagem que receberam resposta');
+    expect(promptSent).toContain('resposta B');
+    expect(promptSent).not.toContain('resposta C');
   });
 });

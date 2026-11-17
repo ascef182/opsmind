@@ -263,7 +263,6 @@ describe('processWebsiteProfileJob', () => {
         organizationId: 'org-1',
         leadId: 'lead-1',
         channel: 'WHATSAPP',
-        serviceOfferingId: 'offering-1',
       });
     });
 

@@ -675,7 +675,6 @@ describe('LeadsService', () => {
           organizationId: 'org-1',
           leadId: 'lead-1',
           channel: 'WHATSAPP',
-          serviceOfferingId: 'off-1',
         });
         expect(websiteProfileQueueService.enqueue).not.toHaveBeenCalled();
       });
@@ -695,7 +694,6 @@ describe('LeadsService', () => {
           organizationId: 'org-1',
           leadId: 'lead-1',
           channel: 'EMAIL',
-          serviceOfferingId: 'off-1',
         });
         expect(websiteProfileQueueService.enqueue).not.toHaveBeenCalled();
       });

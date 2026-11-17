@@ -1469,7 +1469,9 @@ describe('processLeadScrapeJob', () => {
       );
     }
 
-    it('QUALIFIED + WhatsApp, mas sem suggestedOfferingId → não enfileira', async () => {
+    // A oferta não precisa vir do scoring: `generateDraft` escolhe pela
+    // abordagem (Sales Copy Intelligence) e descarta sem custo se não houver.
+    it('QUALIFIED + WhatsApp, mesmo sem suggestedOfferingId → enfileira sem oferta fixa', async () => {
       const tx = setupTx();
       const prisma = buildPrisma();
       setupQualifyingRun(tx, prisma);
@@ -1492,7 +1494,9 @@ describe('processLeadScrapeJob', () => {
         enqueueAutodraft,
       );
 
-      expect(enqueueAutodraft).not.toHaveBeenCalled();
+      expect(enqueueAutodraft).toHaveBeenCalledWith(
+        expect.not.objectContaining({ serviceOfferingId: expect.anything() }),
+      );
       expect(result.status).toBe('COMPLETED');
     });
 
@@ -1523,7 +1527,6 @@ describe('processLeadScrapeJob', () => {
         organizationId: 'org-1',
         leadId: 'lead-place-autodraft',
         channel: 'WHATSAPP',
-        serviceOfferingId: 'offering-1',
       });
       expect(result.status).toBe('COMPLETED');
     });
@@ -1546,7 +1549,7 @@ describe('processLeadScrapeJob', () => {
 
       expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
       expect(enqueueAutodraft).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: 'INSTAGRAM_DM', serviceOfferingId: 'offering-1' }),
+        expect.objectContaining({ channel: 'INSTAGRAM_DM' }),
       );
     });
 
@@ -1574,7 +1577,6 @@ describe('processLeadScrapeJob', () => {
         organizationId: 'org-1',
         leadId: 'lead-place-autodraft',
         channel: 'PHONE',
-        serviceOfferingId: 'offering-1',
       });
     });
 
