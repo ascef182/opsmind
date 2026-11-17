@@ -194,6 +194,30 @@ do dashboard original).
 
 Plano completo desta feature (10 tasks): `docs/superpowers/plans/2026-09-02-leads-prospecting-dashboard.md`.
 
+### Revenue Engine (`apps/api/src/modules/revenue/`, `apps/web/.../revenue`)
+
+Camada comercial por cima de leads/outreach/deals, sem pipeline paralelo. Roadmap das 8 fases e decisões:
+`docs/superpowers/plans/2026-11-17-revenue-engine-roadmap.md` (Fase 1 feita).
+
+- **Funil de 15 estágios** (`REVENUE_PIPELINE_STAGES`, `packages/shared-types/src/revenue-pipeline.ts`) é sempre
+  derivado de `Lead.status` + `Deal.stage`; o deal nascido de uma conversão carrega `leadId`, então lead e deal são
+  uma trajetória só. Histórico em `PipelineStageTransition`: **toda escrita de `Lead.status`/`Deal.stage` precisa
+  gravar uma transição** — na API via `PipelineHistoryService` (global, `RevenueCoreModule`), no worker via
+  `recordStageTransition` de `@opsmind/database`. Rescan do worker nunca regride lead que já passou da qualificação.
+- **Razão de custos** `CostEvent` (append-only, USD) é a fonte de custo por lead/cliente e do teto mensal do engine
+  (`getEngineBudgetStatus`); os contadores Redis de orçamento continuam sendo o corte em tempo real.
+- **Toda chamada one-shot de IA passa por `AiOneShotRunner`** (`modules/ai/services/`): corte de orçamento,
+  `AIRequest` (com `operation`), débito e `CostEvent` num lugar só. Não reimplementar esse padrão num service.
+  `AiGatewayRequest.tier` (`default`/`standard`/`routine` → `ANTHROPIC_MODEL[_STANDARD|_ROUTINE]`) e `effort`
+  escolhem custo por chamada. Recusa do modelo vira `AiRefusalException` (jobs não retentam).
+- **Outreach nasce pausado**: `OrganizationRevenueSettings.outreachPaused` default true e
+  `RevenueSettingsService.assertCanSendOutreach` (pausa da org, `OUTREACH_GLOBAL_PAUSE`, teto diário) roda antes de
+  todo envio real. Liberar é decisão de OWNER/ADMIN, auditada.
+- **Teto mensal do engine** estourado para o scan diário de prospecção e o rascunho automático; ações humanas seguem
+  os orçamentos de IA/scraping. Scan horário no worker (`spend-alert-scan.ts`) avisa OWNER/ADMIN a 50/80/100%.
+- Filas: opções de job por fila em `packages/shared-types/src/queue-job-options.ts`, aplicadas no construtor da
+  `Queue` dos dois lados (API e worker). `lead-scrape` nunca retenta (pagaria o provedor de novo).
+
 ### Env / config
 
 `packages/config/env/schema.ts` is the single Zod schema validated fail-fast at boot (`main.ts` and again via
