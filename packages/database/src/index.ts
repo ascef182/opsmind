@@ -59,4 +59,10 @@ export type {
   FinancialEntryStatus,
   ContractBilling,
   ContractStatus,
+  PipelineStageTransition,
+  CostEvent,
+  CostCategory,
+  OrganizationRevenueSettings,
 } from '@prisma/client';
+export { recordStageTransition, recordCostEvent } from './revenue-ledger';
+export type { StageTransitionInput, CostEventInput } from './revenue-ledger';

@@ -238,6 +238,9 @@ model Organization {
   financialEntries      FinancialEntry[]
   financialPayments     FinancialPayment[]
   recurringEntries      RecurringEntry[]
+  pipelineTransitions   PipelineStageTransition[]
+  costEvents            CostEvent[]
+  revenueSettings       OrganizationRevenueSettings?
 
   @@map("organizations")
 }
@@ -707,6 +710,9 @@ model AIRequest {
   errorMessage   String?         @map("error_message")
   actorType      AuditActorType  @default(USER) @map("actor_type")
   actorId        String?         @map("actor_id")
+  // Qual operação do produto gerou a chamada (`chat`, `outreach.draft`,
+  // `deal.proposal`...). Nullable: linhas anteriores ao Revenue Engine não têm.
+  operation      String?
   createdAt      DateTime        @default(now()) @map("created_at")
 
   organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -1525,4 +1531,89 @@ model FinancialPayment {
   @@index([organizationId, paidAt])
   @@index([entryId])
   @@map("financial_payments")
+}
+
+// ── Revenue Engine (Fase 1) ──────────────────────────────────────────────
+
+enum CostCategory {
+  AI
+  SCRAPING
+  ENRICHMENT
+  EMAIL
+  SMS
+  WHATSAPP
+  PREVIEW
+  STORAGE
+  HOSTING
+}
+
+// Histórico append-only de mudanças de estágio do funil comercial. Lead e
+// Deal guardam só o estágio atual; taxa de conversão e tempo por estágio
+// saem daqui. `toStage`/`fromStage` usam os estágios unificados de
+// `REVENUE_PIPELINE_STAGES` (@opsmind/shared-types), por isso texto e não os
+// enums `LeadStatus`/`DealStage`. Sem FK para lead/deal: o histórico precisa
+// sobreviver à remoção da linha de origem.
+model PipelineStageTransition {
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
+  leadId         String?        @map("lead_id")
+  dealId         String?        @map("deal_id")
+  fromStage      String?        @map("from_stage")
+  toStage        String         @map("to_stage")
+  actorType      AuditActorType @map("actor_type")
+  actorId        String?        @map("actor_id")
+  occurredAt     DateTime       @default(now()) @map("occurred_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, toStage, occurredAt])
+  @@index([organizationId, occurredAt])
+  @@index([leadId, occurredAt])
+  @@index([dealId, occurredAt])
+  @@map("pipeline_stage_transitions")
+}
+
+// Razão de custos por operação (IA, scraping, e-mail...). Append-only. Os
+// contadores Redis de orçamento continuam sendo o corte em tempo real; esta
+// tabela é a fonte para custo por lead/por cliente e para o painel.
+model CostEvent {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  category       CostCategory
+  provider       String
+  operation      String
+  agent          String?
+  quantity       Decimal      @default(1) @db.Decimal(12, 2)
+  amountUsd      Decimal      @map("amount_usd") @db.Decimal(12, 6)
+  leadId         String?      @map("lead_id")
+  dealId         String?      @map("deal_id")
+  scrapeJobId    String?      @map("scrape_job_id")
+  aiRequestId    String?      @map("ai_request_id")
+  occurredAt     DateTime     @default(now()) @map("occurred_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, category, occurredAt])
+  @@index([leadId])
+  @@map("cost_events")
+}
+
+// Configuração do Revenue Engine por organização. `outreachPaused` nasce
+// true: nenhum envio real acontece até alguém (OWNER/ADMIN) liberar depois
+// de validar domínio, provedor e requisitos legais.
+model OrganizationRevenueSettings {
+  organizationId         String   @id @map("organization_id")
+  outreachPaused         Boolean  @default(true) @map("outreach_paused")
+  outreachPausedReason   String?  @map("outreach_paused_reason")
+  dailySendLimit         Int      @default(20) @map("daily_send_limit")
+  dailyResearchLimit     Int      @default(40) @map("daily_research_limit")
+  engineMonthlyBudgetUsd Decimal  @default(50) @map("engine_monthly_budget_usd") @db.Decimal(10, 2)
+  defaultOutreachCountry String   @default("US") @map("default_outreach_country")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organization_revenue_settings")
 }

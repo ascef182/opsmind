@@ -11,7 +11,10 @@ function buildDeps() {
       update: jest.fn(),
       updateMany: jest.fn(),
     },
-    lead: { update: jest.fn().mockResolvedValue({ id: 'lead-1' }) },
+    lead: {
+      update: jest.fn().mockResolvedValue({ id: 'lead-1' }),
+      findFirst: jest.fn().mockResolvedValue({ status: 'QUALIFIED' }),
+    },
     aIRequest: { create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }) },
   };
   // `PrismaOutOfBandService` mock: invoca `fn` com o mock de `aIRequest`
@@ -48,6 +51,8 @@ function buildDeps() {
     recordSent: jest.fn().mockResolvedValue(undefined),
   };
 
+  const pipelineHistory = { leadStatusChanged: jest.fn().mockResolvedValue(undefined), dealStageChanged: jest.fn().mockResolvedValue(undefined) };
+
   const service = new OutreachService(
     prisma as never,
     prismaOutOfBand as never,
@@ -59,9 +64,11 @@ function buildDeps() {
     serviceOfferingsService as never,
     emailService as never,
     emailWarmupService as never,
+    pipelineHistory as never,
   );
 
   return {
+    pipelineHistory,
     service,
     prisma,
     gateway,

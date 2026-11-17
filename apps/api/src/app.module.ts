@@ -13,6 +13,7 @@ import { StorageModule } from './infrastructure/storage/storage.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditModule } from './modules/audit/audit.module';
+import { PipelineHistoryModule } from './modules/revenue/pipeline-history.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { MembershipsModule } from './modules/memberships/memberships.module';
 import { CustomersModule } from './modules/customers/customers.module';
@@ -64,6 +65,7 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     RedisModule,
     StorageModule,
     AuditModule,
+    PipelineHistoryModule,
     UsersModule,
     AuthModule,
     OrganizationsModule,

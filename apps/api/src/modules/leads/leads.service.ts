@@ -21,6 +21,7 @@ import { EXPLORIUM_GATEWAY, type ExploriumGateway } from '@opsmind/integrations'
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { DealsService } from '../deals/deals.service';
+import { PipelineHistoryService } from '../revenue/pipeline-history.service';
 import { WebsiteProfileQueueService } from '../../infrastructure/queue/website-profile-queue.service';
 import { OutreachAutodraftQueueService } from '../../infrastructure/queue/outreach-autodraft-queue.service';
 import { WRITE_ROLES } from '../../shared/constants/roles.constant';
@@ -136,6 +137,7 @@ export class LeadsService {
     private readonly dealsService: DealsService,
     private readonly websiteProfileQueueService: WebsiteProfileQueueService,
     private readonly outreachAutodraftQueueService: OutreachAutodraftQueueService,
+    private readonly pipelineHistory: PipelineHistoryService,
   ) {}
 
   async create(organizationId: string, dto: CreateLeadDto, actorUserId: string): Promise<Lead> {
@@ -163,6 +165,10 @@ export class LeadsService {
       organizationId,
       action: 'lead.created',
       resource: `Lead:${lead.id}`,
+    });
+    await this.pipelineHistory.leadStatusChanged(organizationId, lead.id, null, lead.status, {
+      type: 'USER',
+      id: actorUserId,
     });
 
     return this.autoAssign(organizationId, lead.id, lead);
@@ -377,6 +383,10 @@ export class LeadsService {
       // arquivo.
       metadata: { ...dto } as unknown as Prisma.InputJsonValue,
     });
+    await this.pipelineHistory.leadStatusChanged(organizationId, id, lead.status, updated.status, {
+      type: 'USER',
+      id: actorUserId,
+    });
 
     return updated;
   }
@@ -480,6 +490,10 @@ export class LeadsService {
       action: 'lead.scored',
       resource: `Lead:${id}`,
       metadata: { score: breakdown.total, status: canUpdateStatus ? computedStatus : lead.status },
+    });
+    await this.pipelineHistory.leadStatusChanged(organizationId, id, lead.status, updated.status, {
+      type: 'USER',
+      id: actorUserId,
     });
 
     // Gatilho de qualificação (Harvey Fase 7) — mesma bifurcação de
@@ -619,10 +633,26 @@ export class LeadsService {
     scrapeJobId: string,
     actorUserId: string,
   ): Promise<{ count: number }> {
+    // Lido antes do `updateMany` só para o histórico de estágio: quem já está
+    // DISQUALIFIED não gera transição nova.
+    const affected = await this.prisma.lead.findMany({
+      where: {
+        organizationId,
+        scrapeJobId,
+        status: { in: PRE_QUALIFICATION_STATUSES, not: 'DISQUALIFIED' },
+      },
+      select: { id: true, status: true },
+    });
     const { count } = await this.prisma.lead.updateMany({
       where: { organizationId, scrapeJobId, status: { in: PRE_QUALIFICATION_STATUSES } },
       data: { status: 'DISQUALIFIED' },
     });
+    for (const lead of affected) {
+      await this.pipelineHistory.leadStatusChanged(organizationId, lead.id, lead.status, 'DISQUALIFIED', {
+        type: 'USER',
+        id: actorUserId,
+      });
+    }
 
     if (count > 0) {
       await this.auditService.log({

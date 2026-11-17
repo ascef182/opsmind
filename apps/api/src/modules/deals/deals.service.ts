@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Deal, DealStage } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { PipelineHistoryService } from '../revenue/pipeline-history.service';
 import { AuditService } from '../audit/audit.service';
 import { ActivityService } from '../activity/activity.service';
 import { CreateDealDto } from './dto/create-deal.dto';
@@ -47,6 +48,7 @@ export class DealsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly activityService: ActivityService,
+    private readonly pipelineHistory: PipelineHistoryService,
   ) {}
 
   // `internal.originLeadId`: nunca vem de DTO/tool pública — só
@@ -77,6 +79,10 @@ export class DealsService {
       organizationId,
       action: 'deal.created',
       resource: `Deal:${deal.id}`,
+    });
+    await this.pipelineHistory.dealStageChanged(organizationId, deal, null, deal.stage, {
+      type: 'USER',
+      id: actorUserId,
     });
 
     return deal;
@@ -181,6 +187,10 @@ export class DealsService {
     }
 
     const updated = await this.findByIdOrThrow(organizationId, id);
+    await this.pipelineHistory.dealStageChanged(organizationId, updated, deal.stage, dto.stage, {
+      type: 'USER',
+      id: actorUserId,
+    });
 
     if (closingNow) {
       // Já atualiza `Customer.lastActivityAt` na mesma chamada — um deal

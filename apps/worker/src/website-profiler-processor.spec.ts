@@ -77,6 +77,7 @@ function buildTx() {
     lead: { update: jest.fn() },
     auditLog: { create: jest.fn() },
     outreachMessage: { count: jest.fn().mockResolvedValue(0) },
+    pipelineStageTransition: { create: jest.fn() },
   };
 }
 

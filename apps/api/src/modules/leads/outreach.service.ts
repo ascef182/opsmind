@@ -11,6 +11,7 @@ import type {
   AIRequest,
   AIRequestStatus,
   Lead,
+  LeadStatus,
   OutreachMessage,
   OutreachStatus,
   Prisma,
@@ -21,6 +22,7 @@ import type { LeadScoreBreakdown, SocialLink, SocialPlatform } from '@opsmind/sh
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { PrismaOutOfBandService } from '../../infrastructure/database/prisma-out-of-band.service';
 import { AuditService } from '../audit/audit.service';
+import { PipelineHistoryService, type PipelineActor } from '../revenue/pipeline-history.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EMAIL_SERVICE, type EmailService } from '../../infrastructure/email/email.service';
 import { EmailWarmupService } from '../../infrastructure/email/email-warmup.service';
@@ -158,6 +160,7 @@ export class OutreachService {
     private readonly serviceOfferingsService: ServiceOfferingsService,
     @Inject(EMAIL_SERVICE) private readonly emailService: EmailService,
     private readonly emailWarmupService: EmailWarmupService,
+    private readonly pipelineHistory: PipelineHistoryService,
   ) {}
 
   // `actor`: quem pediu a geração — `{ type: 'USER', userId }` (chamador
@@ -285,7 +288,10 @@ export class OutreachService {
     await this.budgetService.recordSpend(organizationId, cost);
 
     if (PRE_OUTREACH_DRAFTED_STATUSES.includes(lead.status)) {
-      await this.prisma.lead.update({ where: { id: leadId }, data: { status: 'OUTREACH_DRAFTED' } });
+      await this.setLeadStatus(organizationId, leadId, 'OUTREACH_DRAFTED', {
+        type: actor.type === 'USER' ? 'USER' : 'SYSTEM',
+        id: actor.type === 'USER' ? actor.userId : null,
+      });
     }
 
     // `actorType`/`actorId` do próprio `OutreachMessage` são sempre `AI`
@@ -391,7 +397,7 @@ export class OutreachService {
       { status: 'APPROVED', approvedByUserId: userId, approvedAt: new Date() },
       'aprovar',
     );
-    await this.prisma.lead.update({ where: { id: updated.leadId }, data: { status: 'OUTREACH_APPROVED' } });
+    await this.setLeadStatus(organizationId, updated.leadId, 'OUTREACH_APPROVED', { type: 'USER', id: userId });
 
     await this.auditService.log({
       actorType: 'USER',
@@ -527,7 +533,7 @@ export class OutreachService {
       { status: 'SENT', sentAt: new Date(), providerMessageId: sendResult.id },
       'enviar',
     );
-    await this.prisma.lead.update({ where: { id: updated.leadId }, data: { status: 'CONTACTED' } });
+    await this.setLeadStatus(organizationId, updated.leadId, 'CONTACTED', { type: 'USER', id: userId });
 
     await this.auditService.log({
       actorType: 'USER',
@@ -580,7 +586,7 @@ export class OutreachService {
       { status: 'SENT', sentAt: new Date() },
       'marcar como enviada',
     );
-    await this.prisma.lead.update({ where: { id: updated.leadId }, data: { status: 'CONTACTED' } });
+    await this.setLeadStatus(organizationId, updated.leadId, 'CONTACTED', { type: 'USER', id: userId });
 
     await this.auditService.log({
       actorType: 'USER',
@@ -611,7 +617,7 @@ export class OutreachService {
       { status: 'REPLIED', repliedAt: new Date() },
       'marcar como respondida (webhook)',
     );
-    await this.prisma.lead.update({ where: { id: updated.leadId }, data: { status: 'REPLIED' } });
+    await this.setLeadStatus(organizationId, updated.leadId, 'REPLIED', { type: 'SYSTEM' });
 
     await this.auditService.log({
       actorType: 'SYSTEM',
@@ -634,7 +640,7 @@ export class OutreachService {
       { status: 'REPLIED', repliedAt: new Date() },
       'marcar como respondida',
     );
-    await this.prisma.lead.update({ where: { id: updated.leadId }, data: { status: 'REPLIED' } });
+    await this.setLeadStatus(organizationId, updated.leadId, 'REPLIED', { type: 'USER', id: userId });
 
     await this.auditService.log({
       actorType: 'USER',
@@ -710,6 +716,22 @@ export class OutreachService {
     });
 
     return updated;
+  }
+
+  // Único ponto deste service que escreve `Lead.status`: lê o status atual
+  // para o histórico de estágio registrar de onde o lead veio.
+  private async setLeadStatus(
+    organizationId: string,
+    leadId: string,
+    status: LeadStatus,
+    actor: PipelineActor,
+  ): Promise<void> {
+    const current = await this.prisma.lead.findFirst({
+      where: { id: leadId, organizationId },
+      select: { status: true },
+    });
+    await this.prisma.lead.update({ where: { id: leadId }, data: { status } });
+    await this.pipelineHistory.leadStatusChanged(organizationId, leadId, current?.status ?? null, status, actor);
   }
 
   /**

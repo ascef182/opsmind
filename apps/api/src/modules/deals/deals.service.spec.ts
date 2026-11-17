@@ -15,6 +15,7 @@ describe('DealsService', () => {
   };
   let auditService: { log: jest.Mock };
   let activityService: { log: jest.Mock };
+  let pipelineHistory: { leadStatusChanged: jest.Mock; dealStageChanged: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -29,7 +30,13 @@ describe('DealsService', () => {
     };
     auditService = { log: jest.fn() };
     activityService = { log: jest.fn() };
-    service = new DealsService(prisma as never, auditService as never, activityService as never);
+    pipelineHistory = { leadStatusChanged: jest.fn().mockResolvedValue(undefined), dealStageChanged: jest.fn().mockResolvedValue(undefined) };
+    service = new DealsService(
+      prisma as never,
+      auditService as never,
+      activityService as never,
+      pipelineHistory as never,
+    );
   });
 
   describe('create', () => {

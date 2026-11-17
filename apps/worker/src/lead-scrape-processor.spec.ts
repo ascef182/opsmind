@@ -173,6 +173,7 @@ describe('processLeadScrapeJob', () => {
       // gatilho nem chegam a acionar essa checagem (suggestedOfferingId
       // sempre null nos testes pré-Task 11, ver offerings=[] default).
       outreachMessage: { count: jest.fn().mockResolvedValue(0) },
+      pipelineStageTransition: { create: jest.fn() },
     };
   }
 
@@ -192,6 +193,7 @@ describe('processLeadScrapeJob', () => {
       },
       organization: { findUniqueOrThrow: jest.fn() },
       auditLog: { create: jest.fn() },
+      costEvent: { create: jest.fn() },
       // Usado pelo pré-fetch batched de `whatsapp`/`socialLinks` já
       // existentes (Task 9, ver `prefetchExistingContactState`) — default
       // "nenhum lead existente encontrado", testes que não são sobre esse
@@ -308,6 +310,57 @@ describe('processLeadScrapeJob', () => {
     // o pipeline usa por lead (valor casado com o comentário da constante).
     expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', 0.006);
     expect(result.status).toBe('COMPLETED');
+    expect(prisma.costEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org-1',
+        category: 'SCRAPING',
+        provider: 'APIFY_GOOGLE_MAPS',
+        amountUsd: 0.006,
+        scrapeJobId: 'scrape-1',
+      }),
+    });
+    expect(tx.pipelineStageTransition.create).toHaveBeenCalledTimes(1);
+    expect(tx.pipelineStageTransition.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ organizationId: 'org-1', leadId: 'lead-1', fromStage: null }),
+    });
+  });
+
+  it('rescan de um lead que já avançou (CONTACTED) não regride o status nem grava transição', async () => {
+    const tx = setupTx();
+    (isOverBudget as jest.Mock).mockResolvedValue(false);
+    const prisma = buildPrisma();
+    prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+    prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+    tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+    tx.lead.findUnique.mockResolvedValue({ id: 'lead-1', status: 'CONTACTED' });
+    tx.lead.upsert.mockImplementation((args: { update: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'lead-1', ...args.update }),
+    );
+
+    const gateways = fakeGateways();
+    gateways.apify.searchBusinesses.mockResolvedValue([
+      {
+        name: 'Padaria Sem Site',
+        address: null,
+        city: 'Campinas',
+        state: 'SP',
+        phone: null,
+        website: null,
+        googleCategory: 'Padaria',
+        rating: 4.5,
+        reviewCount: 20,
+        placeId: 'place-1',
+        raw: {},
+      },
+    ]);
+    gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+    await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+    expect(tx.lead.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: expect.objectContaining({ status: 'CONTACTED' }) }),
+    );
+    expect(tx.pipelineStageTransition.create).not.toHaveBeenCalled();
   });
 
   // Regressão do bug real (2026-09): antes da Fase 1 do fix de scoring, todo

@@ -1,4 +1,5 @@
 import type { PrismaClient, Prisma, ScrapeJob, ScrapeSourceType, Lead, LeadStatus } from '@opsmind/database';
+import { recordCostEvent, recordStageTransition } from '@opsmind/database';
 import type {
   LeadScrapeJobData,
   OutreachAutodraftJobData,
@@ -12,6 +13,7 @@ import {
   pickRoundRobinAssignee,
   STRUCTURED_WEBSITE_SOURCES,
   resolveAutodraftChannel,
+  leadStatusToPipelineStage,
   type LeadScoringInput,
   type ServiceOfferingIcp,
   type SocialLink,
@@ -390,6 +392,7 @@ const SOURCE_REGISTRY: Record<ScrapeSourceType, SourceHandler> = {
 interface ContactEnrichmentResult {
   source: 'apify_actor' | 'camoufox_fallback';
   data: Record<string, unknown>;
+  costUsd: number;
 }
 
 interface EnrichedCandidate {
@@ -744,19 +747,16 @@ async function discoverContactAndSocials(
 
   if (primaryResult) {
     await recordSpend(redis, organizationId, primaryResult.costUsd);
-    return { source: 'apify_actor', data: primaryResult.data };
+    return { source: 'apify_actor', data: primaryResult.data, costUsd: primaryResult.costUsd };
   }
 
   // Fallback: sem website, OU caminho primário indisponível/sem resultado/erro.
   try {
     const fallbackResult = await runCamofoxFallback(candidate, camofox, contactEnrichment);
     if (fallbackResult) {
-      await recordSpend(
-        redis,
-        organizationId,
-        SCRAPING_COST_PER_LEAD_USD.CAMOFOX_GOOGLE_SEARCH + fallbackResult.costUsd,
-      );
-      return { source: 'camoufox_fallback', data: fallbackResult.data };
+      const costUsd = SCRAPING_COST_PER_LEAD_USD.CAMOFOX_GOOGLE_SEARCH + fallbackResult.costUsd;
+      await recordSpend(redis, organizationId, costUsd);
+      return { source: 'camoufox_fallback', data: fallbackResult.data, costUsd };
     }
   } catch {
     // Fallback também é best-effort — se falhar, o lead segue sem contato
@@ -965,6 +965,8 @@ function toOfferingIcp(o: {
   };
 }
 
+const RESCAN_WRITABLE_STATUSES: LeadStatus[] = ['DISCOVERED', 'QUALIFIED', 'DISQUALIFIED'];
+
 async function upsertLead(
   tx: Prisma.TransactionClient,
   data: LeadScrapeJobData,
@@ -988,7 +990,7 @@ async function upsertLead(
   const existingLead = candidate.placeId
     ? await tx.lead.findUnique({
         where: { organizationId_placeId: { organizationId: data.organizationId, placeId: candidate.placeId } },
-        select: { id: true },
+        select: { id: true, status: true },
       })
     : await (dedupUrl
         ? tx.lead.findFirst({
@@ -997,7 +999,7 @@ async function upsertLead(
               sourceType,
               rawSnapshot: { path: ['_dedupUrl'], equals: dedupUrl },
             },
-            select: { id: true },
+            select: { id: true, status: true },
           })
         : tx.lead.findFirst({
             where: {
@@ -1007,7 +1009,7 @@ async function upsertLead(
               city: candidate.city,
               state: candidate.state,
             },
-            select: { id: true },
+            select: { id: true, status: true },
           }));
 
   const confirmedSignals = existingLead
@@ -1025,7 +1027,23 @@ async function upsertLead(
     confirmedSignals,
   };
   const breakdown = scoreLead(scoreInput, offeringsIcp);
-  const status: LeadStatus = breakdown.total >= QUALIFICATION_THRESHOLD ? 'QUALIFIED' : 'DISQUALIFIED';
+  const computedStatus: LeadStatus = breakdown.total >= QUALIFICATION_THRESHOLD ? 'QUALIFIED' : 'DISQUALIFIED';
+  // Um rescan nunca regride um lead que já avançou além da qualificação
+  // (rascunho gerado, contatado, convertido...) — mesma regra de
+  // `LeadsService.score()` e do website profiler.
+  const status: LeadStatus =
+    existingLead && !RESCAN_WRITABLE_STATUSES.includes(existingLead.status)
+      ? existingLead.status
+      : computedStatus;
+  const recordTransition = (lead: Lead): Promise<void> =>
+    recordStageTransition(tx, {
+      organizationId: data.organizationId,
+      leadId: lead.id,
+      fromStage: existingLead ? leadStatusToPipelineStage(existingLead.status) : null,
+      toStage: leadStatusToPipelineStage(lead.status),
+      actorType: data.actorType,
+      actorId: data.actorId ?? null,
+    });
 
   const baseData = {
     organizationId: data.organizationId,
@@ -1070,11 +1088,13 @@ async function upsertLead(
 
   if (candidate.placeId) {
     const rawSnapshot = candidate.rawSnapshot as Prisma.InputJsonValue;
-    return tx.lead.upsert({
+    const lead = await tx.lead.upsert({
       where: { organizationId_placeId: { organizationId: data.organizationId, placeId: candidate.placeId } },
       create: { ...baseData, rawSnapshot },
       update: { ...baseData, rawSnapshot },
     });
+    await recordTransition(lead);
+    return lead;
   }
 
   // Sem placeId: ver comentário da estratégia de dedup acima. `dedupUrl` e
@@ -1083,10 +1103,11 @@ async function upsertLead(
   const rawSnapshot = { ...candidate.rawSnapshot, _dedupUrl: dedupUrl } as Prisma.InputJsonValue;
   const dataWithSnapshot = { ...baseData, rawSnapshot };
 
-  if (existingLead) {
-    return tx.lead.update({ where: { id: existingLead.id }, data: dataWithSnapshot });
-  }
-  return tx.lead.create({ data: dataWithSnapshot });
+  const lead = existingLead
+    ? await tx.lead.update({ where: { id: existingLead.id }, data: dataWithSnapshot })
+    : await tx.lead.create({ data: dataWithSnapshot });
+  await recordTransition(lead);
+  return lead;
 }
 
 interface FinalizeParams {
@@ -1095,6 +1116,8 @@ interface FinalizeParams {
   errorMessage?: string;
   /** Custo estimado a registrar no orçamento — 0 quando nada foi de fato gasto (ex.: orçamento já estourado antes de chamar qualquer gateway). */
   cost: number;
+  /** Já debitado do orçamento Redis lead a lead durante o job; aqui só entra na razão de custos. */
+  enrichmentCost?: number;
 }
 
 /**
@@ -1138,6 +1161,25 @@ async function finalizeJob(
     if (params.cost > 0) {
       await recordSpend(redis, data.organizationId, params.cost);
     }
+    await recordCostEvent(prisma, {
+      organizationId: data.organizationId,
+      category: 'SCRAPING',
+      provider: updated.sourceType,
+      operation: 'lead.scrape',
+      agent: 'market-research',
+      quantity: params.leadsFound,
+      amountUsd: params.cost,
+      scrapeJobId: data.scrapeJobId,
+    });
+    await recordCostEvent(prisma, {
+      organizationId: data.organizationId,
+      category: 'ENRICHMENT',
+      provider: 'contact-enrichment',
+      operation: 'lead.contact_enrichment',
+      agent: 'business-intelligence',
+      amountUsd: params.enrichmentCost ?? 0,
+      scrapeJobId: data.scrapeJobId,
+    });
     await prisma.auditLog.create({
       data: {
         organizationId: data.organizationId,
@@ -1410,6 +1452,7 @@ export async function processLeadScrapeJob(
       : new Map<string, ExistingContactState>();
 
     const enriched: EnrichedCandidate[] = [];
+    let enrichmentCost = 0;
     for (const candidate of candidates) {
       // Ponto de partida: firmografia que a própria busca do gateway já
       // trouxe (hoje só Explorium — ver `mapExploriumResult`). `null` pra
@@ -1486,6 +1529,7 @@ export async function processLeadScrapeJob(
             data.organizationId,
             monthlyBudget,
           );
+          enrichmentCost += contactEnrichment?.costUsd ?? 0;
         } catch {
           // Rede de segurança extra — `discoverContactAndSocials` já nunca
           // lança por si só (todo caminho interno tem seu próprio
@@ -1697,7 +1741,7 @@ export async function processLeadScrapeJob(
     }
 
     const cost = leadsFound * SCRAPING_COST_PER_LEAD_USD[scrapeJob.sourceType];
-    return await finalizeJob(prisma, redis, data, { status: 'COMPLETED', leadsFound, cost });
+    return await finalizeJob(prisma, redis, data, { status: 'COMPLETED', leadsFound, cost, enrichmentCost });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
     return prisma.scrapeJob.update({

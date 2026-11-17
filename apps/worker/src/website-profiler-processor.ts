@@ -26,7 +26,8 @@ import { randomUUID } from 'node:crypto';
 import { withTenantContext } from './tenant-context';
 import { ssrfSafeFetch, SsrfSafeFetchError } from './ssrf-safe-fetch';
 import { extractWebsiteSignals, type FetchedPage } from './signal-extractors';
-import { resolveAutodraftChannel } from '@opsmind/shared-types';
+import { leadStatusToPipelineStage, resolveAutodraftChannel } from '@opsmind/shared-types';
+import { recordStageTransition } from '@opsmind/database';
 
 // Mesmo racional de `PRE_QUALIFICATION_STATUSES` em `leads.service.ts`
 // (apps/api) — duplicada aqui, não importada, pelo mesmo motivo de
@@ -283,6 +284,14 @@ export async function processWebsiteProfileJob(
         suggestedOfferingId: breakdown.matchedOfferingId,
         ...(canUpdateStatus ? { status: computedStatus } : {}),
       },
+    });
+    await recordStageTransition(tx, {
+      organizationId: data.organizationId,
+      leadId: data.leadId,
+      fromStage: leadStatusToPipelineStage(lead.status),
+      toStage: leadStatusToPipelineStage(effectiveStatus),
+      actorType: data.actorType,
+      actorId: data.actorId ?? null,
     });
 
     await tx.auditLog.create({

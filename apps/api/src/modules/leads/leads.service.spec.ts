@@ -29,6 +29,7 @@ describe('LeadsService', () => {
   let dealsService: { create: jest.Mock };
   let websiteProfileQueueService: { enqueue: jest.Mock };
   let outreachAutodraftQueueService: { enqueue: jest.Mock };
+  let pipelineHistory: { leadStatusChanged: jest.Mock; dealStageChanged: jest.Mock };
 
   beforeEach(() => {
     (Sentry.captureException as jest.Mock).mockClear();
@@ -53,6 +54,7 @@ describe('LeadsService', () => {
     dealsService = { create: jest.fn().mockResolvedValue({ id: 'deal-1' }) };
     websiteProfileQueueService = { enqueue: jest.fn().mockResolvedValue(undefined) };
     outreachAutodraftQueueService = { enqueue: jest.fn().mockResolvedValue(undefined) };
+    pipelineHistory = { leadStatusChanged: jest.fn().mockResolvedValue(undefined), dealStageChanged: jest.fn().mockResolvedValue(undefined) };
     service = new LeadsService(
       prisma as never,
       auditService as never,
@@ -60,6 +62,7 @@ describe('LeadsService', () => {
       dealsService as never,
       websiteProfileQueueService as never,
       outreachAutodraftQueueService as never,
+      pipelineHistory as never,
     );
   });
 
@@ -877,6 +880,29 @@ describe('LeadsService', () => {
   });
 
   describe('discardByScrapeJob', () => {
+    beforeEach(() => {
+      prisma.lead.findMany.mockResolvedValue([]);
+    });
+
+    it('grava uma transição de estágio por lead que de fato muda para DISQUALIFIED', async () => {
+      prisma.lead.findMany.mockResolvedValue([
+        { id: 'lead-1', status: 'DISCOVERED' },
+        { id: 'lead-2', status: 'QUALIFIED' },
+      ]);
+      prisma.lead.updateMany.mockResolvedValue({ count: 3 });
+
+      await service.discardByScrapeJob('org-1', 'job-1', 'user-1');
+
+      expect(pipelineHistory.leadStatusChanged).toHaveBeenCalledTimes(2);
+      expect(pipelineHistory.leadStatusChanged).toHaveBeenCalledWith(
+        'org-1',
+        'lead-2',
+        'QUALIFIED',
+        'DISQUALIFIED',
+        { type: 'USER', id: 'user-1' },
+      );
+    });
+
     it('marca DISQUALIFIED todos os leads pré-qualificação da busca e audita', async () => {
       prisma.lead.updateMany.mockResolvedValue({ count: 3 });
 
