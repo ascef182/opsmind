@@ -138,6 +138,25 @@ No external spend. Nothing here sends anything.
   services. E2E: `apps/api/test/revenue.e2e-spec.ts` including cross-org isolation of the new tables.
 - `pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e`, then open the dashboard in the browser.
 
+## Sales Copy Intelligence (done 2026-11-17, between Phase 1 and 2)
+
+Requested after the team rated the first 18 real drafts 7/10 (assumptions stated as facts, artificial
+compliments, long first messages). Root cause: the v2 prompt required a "pain/cost" sentence in every message.
+
+- Deterministic strategy per lead (`selectOutreachStrategy`): no website, outdated website, weak conversion,
+  WhatsApp automation (no website + WhatsApp only for WhatsApp-heavy segments, user decision), strong presence
+  (autodraft skipped), general (site not investigated). Offer chosen by `ServiceOffering.kind`.
+- Prompt v3.1: verified facts vs. unverified hypotheses, site signals with quote and URL, 60–100 words, phone
+  call script in three blocks, never claim a concept already exists.
+- Quality control before saving: banned phrases/length/similarity in code + Haiku reviewer (6 scores, unsupported
+  claims), up to 3 versions, fabricated claims never saved.
+- Learning loop: `strategy`, `quality_review`, `original_body`, `prompt_version` on each draft;
+  `GET .../revenue/copy-performance` ranks strategies by won/meetings; replied messages become style references once
+  a strategy×channel has 3.
+- Regeneration of the 18 drafts + 3 leads (`apps/api/scripts/regenerate-outreach-drafts.ts`) stopped at 12 when
+  the Anthropic account ran out of credit; 6 drafts + 3 leads pending. Rate limit/budget note: real cost was about
+  US$0.035 per lead (more attempts than estimated).
+
 ## Phase 2 — market research and lead intelligence
 
 - DB: `Lead.country` (backfill `BR`), `Lead.googleMapsUrl`, `Lead.fieldConfidence Json`; `ProspectingTarget.country`

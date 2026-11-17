@@ -215,6 +215,13 @@ Camada comercial por cima de leads/outreach/deals, sem pipeline paralelo. Roadma
   todo envio real. Liberar é decisão de OWNER/ADMIN, auditada.
 - **Teto mensal do engine** estourado para o scan diário de prospecção e o rascunho automático; ações humanas seguem
   os orçamentos de IA/scraping. Scan horário no worker (`spend-alert-scan.ts`) avisa OWNER/ADMIN a 50/80/100%.
+- **Sales Copy Intelligence** (rascunhos de outreach): a abordagem do contato é escolhida por regra
+  (`selectOutreachStrategy`, `packages/shared-types/src/outreach-strategy.ts`), nunca pelo modelo, e a oferta vem de
+  `ServiceOffering.kind`. `OutreachService.generateDraft` separa fatos verificados de hipóteses no prompt, passa cada
+  versão por regras determinísticas (`outreach-guardrails.ts`) e por `OutreachQualityReviewer` (tier `routine`), e
+  gera até 3 versões; afirmação sem base nunca é salva (`OutreachDraftNotCreatedException`). Mudou o estilo do
+  prompt, troque `OUTREACH_PROMPT_VERSION`: o relatório `GET .../revenue/copy-performance` compara versões. Rotas
+  HTTP que geram rascunho usam `@TransactionTimeout` (a transação padrão da request é de 10s).
 - Filas: opções de job por fila em `packages/shared-types/src/queue-job-options.ts`, aplicadas no construtor da
   `Queue` dos dois lados (API e worker). `lead-scrape` nunca retenta (pagaria o provedor de novo).
 

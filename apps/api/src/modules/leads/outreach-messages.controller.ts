@@ -10,6 +10,11 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { WRITE_ROLES } from '../../shared/constants/roles.constant';
+import { TransactionTimeout } from '../../shared/decorators/transaction-timeout.decorator';
+
+// Gerar um rascunho pode fazer até 3 versões com revisão de qualidade cada
+// (6 chamadas de IA); o padrão de 10s da transação da request não cabe.
+const OUTREACH_DRAFT_TRANSACTION_TIMEOUT_MS = 90_000;
 
 /**
  * Todas as transições de estado (approve/reject/regenerate/mark-sent/
@@ -25,6 +30,7 @@ export class OutreachMessagesController {
 
   @Roles(...WRITE_ROLES)
   @UseGuards(RolesGuard)
+  @TransactionTimeout(OUTREACH_DRAFT_TRANSACTION_TIMEOUT_MS)
   @Post('leads/:leadId/outreach-messages')
   generateDraft(
     @Param('organizationId') organizationId: string,
@@ -124,6 +130,7 @@ export class OutreachMessagesController {
 
   @Roles(...WRITE_ROLES)
   @UseGuards(RolesGuard)
+  @TransactionTimeout(OUTREACH_DRAFT_TRANSACTION_TIMEOUT_MS)
   @Post('outreach-messages/:messageId/regenerate')
   regenerate(
     @Param('organizationId') organizationId: string,

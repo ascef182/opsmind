@@ -39,13 +39,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * silêncio. Fora de uma request (scripts, seed, testes), cai para
    * `$transaction` normal.
    */
-  runInTransaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  // Margem de segurança acima do default do Prisma (5s) — evita cancelar
+  // uma request legítima só um pouco mais lenta que o normal. Rotas com várias
+  // chamadas de IA pedem mais via `@TransactionTimeout`.
+  runInTransaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>, timeoutMs = 10_000): Promise<T> {
     const activeTransaction = tenantContextStorage.getStore();
     if (activeTransaction) {
       return fn(activeTransaction);
     }
-    // Margem de segurança acima do default do Prisma (5s) — evita cancelar
-    // uma request legítima só um pouco mais lenta que o normal.
-    return this.$transaction(fn, { timeout: 10_000 });
+    return this.$transaction(fn, { timeout: timeoutMs });
   }
 }

@@ -1,8 +1,10 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { from, Observable } from 'rxjs';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { tenantContextStorage } from '../context/tenant-context.storage';
+import { TRANSACTION_TIMEOUT_KEY } from '../decorators/transaction-timeout.decorator';
 
 interface RequestWithTenantContext {
   user?: { id: string };
@@ -31,7 +33,10 @@ interface RequestWithTenantContext {
  */
 @Injectable()
 export class TenantContextInterceptor implements NestInterceptor {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reflector: Reflector,
+  ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     if (context.getType() !== 'http') {
@@ -44,6 +49,7 @@ export class TenantContextInterceptor implements NestInterceptor {
     }
 
     const { user, membership } = request;
+    const timeoutMs = this.reflector.get<number | undefined>(TRANSACTION_TIMEOUT_KEY, context.getHandler());
 
     return from(
       this.prisma.runInTransaction(async (tx) => {
@@ -54,7 +60,7 @@ export class TenantContextInterceptor implements NestInterceptor {
           }
           return firstValueFrom(next.handle());
         });
-      }),
+      }, timeoutMs),
     );
   }
 }

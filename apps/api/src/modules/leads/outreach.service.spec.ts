@@ -1418,6 +1418,19 @@ describe('OutreachService.generateDraft — Sales Copy Intelligence', () => {
     });
   });
 
+  it('pergunta final pouco clara força nova versão mesmo com média boa', async () => {
+    const { service, gateway, qualityReviewer } = setup();
+    gateway.sendMessage.mockResolvedValue(mockGatewayResponse(cleanDraft));
+    const weakCta = reviewed();
+    qualityReviewer.review
+      .mockResolvedValueOnce({ ...weakCta, scores: { ...weakCta.scores, ctaClarity: 5 } })
+      .mockResolvedValueOnce(reviewed());
+
+    await service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'SYSTEM' });
+
+    expect(gateway.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('frase proibida ou texto longo demais força nova versão mesmo sem revisor', async () => {
     const { service, prisma, gateway } = setup();
     gateway.sendMessage

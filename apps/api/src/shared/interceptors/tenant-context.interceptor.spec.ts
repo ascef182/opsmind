@@ -1,12 +1,14 @@
 import { of, throwError, lastValueFrom } from 'rxjs';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { tenantContextStorage } from '../context/tenant-context.storage';
 import { TenantContextInterceptor } from './tenant-context.interceptor';
 
-function createContext(request: Record<string, unknown>): ExecutionContext {
+function createContext(request: Record<string, unknown>, handler: () => void = () => undefined): ExecutionContext {
   return {
     getType: () => 'http',
+    getHandler: () => handler,
     switchToHttp: () => ({ getRequest: () => request }),
   } as unknown as ExecutionContext;
 }
@@ -21,7 +23,7 @@ describe('TenantContextInterceptor', () => {
     prisma = {
       runInTransaction: jest.fn((callback: (tx: unknown) => unknown) => callback(tx)),
     };
-    interceptor = new TenantContextInterceptor(prisma as unknown as PrismaService);
+    interceptor = new TenantContextInterceptor(prisma as unknown as PrismaService, new Reflector());
   });
 
   it('não abre transação nem toca no ALS para rotas públicas (sem req.user)', async () => {
@@ -85,5 +87,15 @@ describe('TenantContextInterceptor', () => {
     await expect(
       lastValueFrom(interceptor.intercept(createContext(request), next)),
     ).rejects.toThrow('falhou');
+  });
+
+  it('usa o prazo de transação pedido pela rota com @TransactionTimeout', async () => {
+    const handler = () => undefined;
+    Reflect.defineMetadata('transactionTimeoutMs', 60_000, handler);
+    const next: CallHandler = { handle: jest.fn().mockReturnValue(of('ok')) };
+
+    await lastValueFrom(interceptor.intercept(createContext({ user: { id: 'user-1' } }, handler), next));
+
+    expect(prisma.runInTransaction).toHaveBeenCalledWith(expect.any(Function), 60_000);
   });
 });
