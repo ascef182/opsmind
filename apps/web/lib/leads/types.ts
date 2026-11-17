@@ -108,9 +108,12 @@ export interface ServiceOffering {
   minRevenueUsd: number | null;
   maxRevenueUsd: number | null;
   isActive: boolean;
+  kind: OfferingKind | null;
   createdAt: string;
   updatedAt: string;
 }
+
+export type OfferingKind = 'WEBSITE' | 'WHATSAPP_AUTOMATION' | 'CUSTOM_APP' | 'OTHER';
 
 export interface CreateServiceOfferingInput {
   name: string;
@@ -262,12 +265,71 @@ export interface OutreachMessage {
   // por usuário, ver comentário de `OutreachMessage.readAt` no schema.
   readAt: string | null;
   readByUserId: string | null;
+  // Sales Copy Intelligence: abordagem escolhida por regra e revisão de
+  // qualidade feita antes de salvar. Nulos em rascunhos anteriores.
+  strategy: OutreachStrategy | null;
+  qualityReview: OutreachQualityReview | null;
+  originalBody: string | null;
+  promptVersion: string | null;
   createdAt: string;
   updatedAt: string;
   // Só presente em `GET .../outreach-messages` (a inbox compartilhada) —
   // ausente em `listForLead`/`findByIdOrThrow`, que não fazem esse join.
   lead?: { name: string; assignedUserId: string | null };
 }
+
+export type OutreachStrategy =
+  | 'NO_WEBSITE'
+  | 'OUTDATED_WEBSITE'
+  | 'WEAK_CONVERSION'
+  | 'WHATSAPP_AUTOMATION'
+  | 'STRONG_PRESENCE'
+  | 'GENERAL';
+
+export const OUTREACH_STRATEGY_LABELS: Record<OutreachStrategy, string> = {
+  NO_WEBSITE: 'Sem site',
+  OUTDATED_WEBSITE: 'Site desatualizado',
+  WEAK_CONVERSION: 'Conversão fraca',
+  WHATSAPP_AUTOMATION: 'Automação de WhatsApp',
+  STRONG_PRESENCE: 'Presença forte',
+  GENERAL: 'Geral',
+};
+
+export type QualityCriterion =
+  | 'personalization'
+  | 'factualAccuracy'
+  | 'naturalLanguage'
+  | 'commercialRelevance'
+  | 'ctaClarity'
+  | 'genericLanguage';
+
+export const QUALITY_CRITERION_LABELS: Record<QualityCriterion, string> = {
+  personalization: 'Personalização',
+  factualAccuracy: 'Precisão factual',
+  naturalLanguage: 'Naturalidade',
+  commercialRelevance: 'Relevância comercial',
+  ctaClarity: 'Clareza da pergunta final',
+  genericLanguage: 'Sem linguagem genérica',
+};
+
+interface QualityReviewCommon {
+  attempts: number;
+  deterministicIssues: string[];
+  strategyReasons: string[];
+}
+
+export type OutreachQualityReview = QualityReviewCommon &
+  (
+    | {
+        status: 'REVIEWED';
+        scores: Record<QualityCriterion, number>;
+        average: number;
+        unsupportedClaims: string[];
+        issues: string[];
+        model: string;
+      }
+    | { status: 'UNREVIEWED'; reason: string }
+  );
 
 export interface GenerateOutreachInput {
   channel: OutreachChannel;

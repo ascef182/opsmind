@@ -2,6 +2,7 @@
 // de tipos locais ao front de `lib/leads/types.ts`). Estágios e rótulos do
 // funil vêm de @opsmind/shared-types, que é a fonte única deles.
 import type { RevenuePipelineStage } from '@opsmind/shared-types';
+import type { OutreachChannel, OutreachStrategy } from '../leads/types';
 
 export type RevenuePeriod = 'day' | 'week' | 'month';
 
@@ -106,3 +107,24 @@ export const COST_CATEGORY_LABEL: Record<CostCategory, string> = {
   STORAGE: 'Armazenamento',
   HOSTING: 'Hospedagem',
 };
+
+export interface CopyPerformanceRow {
+  strategy: OutreachStrategy;
+  channel: OutreachChannel;
+  promptVersion: string | null;
+  drafts: number;
+  approved: number;
+  editedBeforeApproval: number;
+  sent: number;
+  replied: number;
+  meetings: number;
+  proposals: number;
+  won: number;
+  replyRate: number | null;
+  meetingRate: number | null;
+}
+
+export interface RevenueCopyPerformance {
+  rows: CopyPerformanceRow[];
+  positiveRepliesAvailableFrom: string;
+}

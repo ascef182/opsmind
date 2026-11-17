@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../api-client';
 import type {
+  RevenueCopyPerformance,
   RevenueCosts,
   RevenueOverview,
   RevenuePeriod,
@@ -33,6 +34,14 @@ export function useRevenueCosts(organizationId: string, period: RevenuePeriod) {
   return useQuery({
     queryKey: key(organizationId, 'costs', period),
     queryFn: () => apiFetch<RevenueCosts>(`/organizations/${organizationId}/revenue/costs?period=${period}`),
+    enabled: Boolean(organizationId),
+  });
+}
+
+export function useRevenueCopyPerformance(organizationId: string) {
+  return useQuery({
+    queryKey: key(organizationId, 'copy-performance'),
+    queryFn: () => apiFetch<RevenueCopyPerformance>(`/organizations/${organizationId}/revenue/copy-performance`),
     enabled: Boolean(organizationId),
   });
 }

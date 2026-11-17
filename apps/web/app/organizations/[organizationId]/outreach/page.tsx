@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { FormError } from '@/components/ui/card';
+import { DraftQuality, OutreachBody } from '@/components/outreach/draft-quality';
 
 const STATUS_OPTIONS: Array<{ value: OutreachStatus | ''; label: string }> = [
   { value: 'DRAFT', label: 'Aguardando aprovação (rascunho)' },
@@ -147,8 +148,9 @@ function QueueCard({
           <FormError message={edit.isError ? (edit.error as ApiError).message : null} />
         </div>
       ) : (
-        <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/80">{message.body}</p>
+        <OutreachBody message={message} />
       )}
+      <DraftQuality message={message} />
       {message.rejectedReason && (
         <p className="mt-2 text-xs text-negative-500">Motivo da rejeição: {message.rejectedReason}</p>
       )}

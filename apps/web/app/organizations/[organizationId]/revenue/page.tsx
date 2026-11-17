@@ -15,6 +15,7 @@ import {
   formatUsd,
 } from '@/components/revenue/revenue-ui';
 import { useRevenueOverview, useRevenueSettings } from '@/lib/revenue/use-revenue';
+import { CopyPerformanceSection } from '@/components/revenue/copy-performance';
 import type { RevenueKpiKey, RevenueOverview, RevenuePeriod } from '@/lib/revenue/types';
 import type { ApiError } from '@/lib/api-client';
 
@@ -80,6 +81,7 @@ export default function RevenueOverviewPage() {
       {overview.isLoading && <OverviewSkeleton />}
       {overview.isError && <FormError message={(overview.error as ApiError).message} />}
       {overview.data && <OverviewContent data={overview.data} />}
+      <CopyPerformanceSection organizationId={organizationId} />
     </div>
   );
 }
