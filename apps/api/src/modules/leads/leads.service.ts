@@ -67,6 +67,13 @@ const PRE_QUALIFICATION_STATUSES: LeadStatus[] = ['DISCOVERED', 'QUALIFIED', 'DI
 // Postgres do request que o envolve, via `TenantContextInterceptor`) até o
 // timeout da própria transação. `withTimeout` abaixo garante que o
 // best-effort documentado logo adiante seja best-effort de verdade.
+//
+// Importante: `withTimeout` só abandona a ESPERA por essa promise, nunca
+// cancela o `queue.add()` subjacente — se o Redis reconectar depois do
+// timeout, o job ainda pode acabar sendo criado "tarde". O evento de erro
+// reportado pro Sentry quando isso acontece (ver `catch` abaixo) significa
+// "não confirmamos que o enqueue funcionou a tempo", não "nenhum job vai
+// existir pra este lead" — os dois podem ser falsos simultaneamente.
 const QUALIFICATION_TRIGGER_ENQUEUE_TIMEOUT_MS = 2000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

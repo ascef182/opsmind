@@ -55,9 +55,15 @@ describe('OutreachAutodraftConsumer', () => {
     };
   }
 
-  function getRegisteredProcessor(): (job: { data: typeof jobData }) => Promise<void> {
+  type FakeJob = {
+    data: typeof jobData;
+    attemptsMade?: number;
+    opts?: { attempts?: number };
+  };
+
+  function getRegisteredProcessor(): (job: FakeJob) => Promise<void> {
     const call = (Worker as unknown as jest.Mock).mock.calls[0] as [string, (job: unknown) => Promise<void>];
-    return call[1] as (job: { data: typeof jobData }) => Promise<void>;
+    return call[1] as (job: FakeJob) => Promise<void>;
   }
 
   beforeEach(() => {
@@ -102,13 +108,20 @@ describe('OutreachAutodraftConsumer', () => {
     expect(outreachService.markReplied).not.toHaveBeenCalled();
   });
 
-  // Fix 2 do review final (Harvey Fase 7): o job é enfileirado DENTRO da
-  // transação de request de `score()` — se essa transação nunca commitar
-  // (ex.: `score_lead` chamado no meio de um chat multi-tool-call que depois
-  // lança ou atinge MAX_ITERATIONS), o lead nunca ficou QUALIFIED de
-  // verdade no banco, mas o job já está no Redis. Simula exatamente esse
-  // cenário: o lead que o banco realmente tem ainda está em DISCOVERED.
-  it('lead não está QUALIFIED no banco (rollback da transação que enfileirou): pula sem chamar generateDraft', async () => {
+  // Fix 2 do review final (Harvey Fase 7) + correção de uma regressão Critical
+  // encontrada num re-review posterior: o job é enfileirado DENTRO da
+  // transação de request de `score()`, e o Worker deste processo normalmente
+  // pega o job poucos milissegundos depois — quase sempre ANTES dessa
+  // transação commitar. A primeira versão deste guard pulava permanentemente
+  // na primeira leitura não-QUALIFIED, o que matava o gatilho quase sempre
+  // pro caminho da AI tool `score_lead` (transação fica aberta por várias
+  // iterações de chat) e virava cara-ou-coroa pro REST/`enrich()`. Uma
+  // transação ainda não commitada e um rollback de verdade são
+  // indistinguíveis numa leitura só — por isso agora relança (deixando o
+  // BullMQ reagendar com backoff, ver `attempts`/`backoff` em
+  // `OutreachAutodraftQueueService.enqueue()`) enquanto não for a última
+  // tentativa permitida, e só desiste de vez nela.
+  it('lead não está QUALIFIED no banco e NÃO é a última tentativa: relança pra deixar o BullMQ reagendar', async () => {
     const outreachService = buildOutreachService();
     const prisma = buildPrisma({ status: 'DISCOVERED' });
     const consumer = new OutreachAutodraftConsumer(
@@ -119,11 +132,34 @@ describe('OutreachAutodraftConsumer', () => {
     consumer.onModuleInit();
 
     const processor = getRegisteredProcessor();
+    // `attemptsMade: 0` + `opts.attempts: 6` ⇒ esta é a 1ª de 6 tentativas
+    // permitidas — ainda não é a última.
+    const job: FakeJob = { data: jobData, attemptsMade: 0, opts: { attempts: 6 } };
 
-    await expect(processor({ data: jobData })).resolves.toBeUndefined();
+    await expect(processor(job)).rejects.toThrow(/tentativa 1 de 6/);
     expect(prisma.lead.findUnique).toHaveBeenCalledWith({
       where: { id: jobData.leadId, organizationId: jobData.organizationId },
     });
+    expect(outreachService.generateDraft).not.toHaveBeenCalled();
+  });
+
+  it('lead não está QUALIFIED no banco na ÚLTIMA tentativa permitida: desiste de vez, sem relançar nem chamar generateDraft', async () => {
+    const outreachService = buildOutreachService();
+    const prisma = buildPrisma({ status: 'DISCOVERED' });
+    const consumer = new OutreachAutodraftConsumer(
+      buildConfigService() as never,
+      outreachService as never,
+      prisma as never,
+    );
+    consumer.onModuleInit();
+
+    const processor = getRegisteredProcessor();
+    // `attemptsMade: 5` + `opts.attempts: 6` ⇒ esta é a 6ª de 6 tentativas
+    // permitidas — é a última; `attemptsMade` reflete as tentativas JÁ
+    // concluídas antes desta (ver comentário em `process()`).
+    const job: FakeJob = { data: jobData, attemptsMade: 5, opts: { attempts: 6 } };
+
+    await expect(processor(job)).resolves.toBeUndefined();
     expect(outreachService.generateDraft).not.toHaveBeenCalled();
     expect(outreachService.approve).not.toHaveBeenCalled();
     expect(outreachService.markSent).not.toHaveBeenCalled();

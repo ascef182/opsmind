@@ -28,7 +28,25 @@ export class OutreachAutodraftQueueService implements OnModuleDestroy {
   }
 
   enqueue(data: OutreachAutodraftJobData): Promise<unknown> {
-    return this.queue.add('draft', data);
+    // `attempts`/`backoff` (Fix do review final sobre a regressão do Fix 2
+    // de uma rodada anterior, Harvey Fase 7): `OutreachAutodraftConsumer`
+    // reconfirma `Lead.status === 'QUALIFIED'` direto no banco antes de
+    // gerar o rascunho, porque este job é enfileirado DENTRO da transação de
+    // request de `score()` — no caso comum o consumer processa o job
+    // milissegundos depois do enqueue, ainda ANTES da transação commitar, e
+    // vê a linha pré-commit (ainda não QUALIFIED). Sem retry, isso
+    // praticamente mata o gatilho pra qualquer transação que não commite
+    // instantaneamente (o caso comum da AI tool `score_lead`, cuja transação
+    // só commita depois de várias iterações de chat/chamadas de IA). Default
+    // do BullMQ é `attempts: 1` (sem retry nenhum) — 6 tentativas com backoff
+    // exponencial a partir de 2s (2s, 4s, 8s, 16s, 32s entre tentativas, ~62s
+    // de janela total) dá tempo de sobra pro caminho comum (REST/`enrich()`,
+    // commit quase imediato) e pra maioria das durações de chat com IA,
+    // enquanto ainda desiste eventualmente de um rollback de verdade. Risco
+    // residual aceito: um chat com IA patologicamente longo (muitas
+    // iterações de tool call) ainda pode exceder essa janela e perder o
+    // autodraft — risco limitado, não algo que este fix precise eliminar.
+    return this.queue.add('draft', data, { attempts: 6, backoff: { type: 'exponential', delay: 2000 } });
   }
 
   async onModuleDestroy(): Promise<void> {

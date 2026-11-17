@@ -44,7 +44,12 @@ import { OutreachService } from './outreach.service';
  * `OutreachService.generateDraft`) resolve o job SEM relançar — não faz
  * sentido o BullMQ retentar antes do próximo mês. Qualquer outro erro
  * relança, deixando o retry padrão do BullMQ agir (rede instável, erro
- * transitório do gateway de IA, etc.).
+ * transitório do gateway de IA, etc.) — isso só passou a ter efeito de
+ * verdade depois do fix de `attempts`/`backoff` em
+ * `OutreachAutodraftQueueService.enqueue()` (review final, Harvey Fase 7):
+ * antes disso o default do BullMQ (`attempts: 1`) fazia qualquer relance
+ * aqui ser, na prática, código morto — o job simplesmente ia pra `failed`
+ * sem nenhuma segunda tentativa.
  */
 @Injectable()
 export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy {
@@ -91,12 +96,45 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
     // explícito por `organizationId` na query (defesa em profundidade, ver
     // seção de multi-tenancy do CLAUDE.md) — este consumer roda fora de
     // qualquer transação de request, sem contexto de RLS pra confiar.
+    //
+    // CORREÇÃO sobre a primeira versão deste guard (regressão Critical
+    // encontrada no re-review): a versão anterior pulava permanentemente na
+    // primeira leitura que não achasse QUALIFIED. Só que o Worker BullMQ
+    // deste processo pega o job poucos milissegundos depois do enqueue —
+    // quase sempre ANTES da transação de `score()` commitar, então a
+    // primeira leitura quase sempre vê a linha pré-commit (ainda
+    // DISCOVERED/etc.), não um rollback de verdade. Pra `score_lead` via AI
+    // tool (transação fica aberta por várias iterações de chat/chamadas de
+    // IA) isso matava o gatilho quase sempre; pro caminho REST/`enrich()`
+    // era um cara-ou-coroa. Uma transação ainda não commitada e uma
+    // genuinamente revertida são INDISTINGUÍVEIS numa única leitura — a
+    // única forma de diferenciar é dar tempo (retry com backoff, ver
+    // `OutreachAutodraftQueueService.enqueue()`) antes de desistir de
+    // verdade.
     const lead = await this.prisma.lead.findUnique({ where: { id: leadId, organizationId } });
     if (!lead || lead.status !== 'QUALIFIED') {
+      const attemptsMade = job.attemptsMade ?? 0;
+      const maxAttempts = job.opts.attempts ?? 1;
+      // Dentro do `process()`, `job.attemptsMade` ainda reflete as tentativas
+      // JÁ CONCLUÍDAS antes desta (o BullMQ só incrementa esse contador —
+      // no Redis e depois no objeto em memória — quando a tentativa atual
+      // termina, sucesso ou falha). Então a tentativa atual é a de número
+      // `attemptsMade + 1`; é a última permitida quando esse número alcança
+      // `maxAttempts`.
+      const isFinalAttempt = attemptsMade + 1 >= maxAttempts;
+      if (!isFinalAttempt) {
+        // Relança (sem `return`) pra deixar o BullMQ reagendar com backoff —
+        // dá tempo real pra transação de `score()` commitar antes de tratar
+        // isso como rollback de verdade.
+        throw new Error(
+          `lead ainda não está QUALIFIED no banco (organizationId=${organizationId}, leadId=${leadId}) — ` +
+            `status atual: "${lead?.status ?? 'não encontrado'}", tentativa ${attemptsMade + 1} de ${maxAttempts}`,
+        );
+      }
       this.logger.warn(
         `rascunho automático de outreach pulado (organizationId=${organizationId}, leadId=${leadId}) — ` +
-          `status atual do lead no banco é "${lead?.status ?? 'não encontrado'}", não QUALIFIED (provável rollback ` +
-          'da transação que enfileirou este job)',
+          `status final do lead no banco é "${lead?.status ?? 'não encontrado'}", não QUALIFIED após ${maxAttempts} ` +
+          'tentativas — tratando como rollback/não-qualificação de verdade',
       );
       return;
     }
