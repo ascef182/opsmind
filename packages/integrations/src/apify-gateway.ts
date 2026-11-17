@@ -61,11 +61,9 @@ export class ApifyGatewayService implements ApifyGateway {
 
   async searchBusinesses(params: ApifySearchParams): Promise<ApifyBusinessResult[]> {
     const client = new ApifyClient({ token: this.apiToken });
-    // Formato de input do actor ASSUMIDO (não rodamos o actor de verdade
-    // nesta sessão) — `compass/google-maps-extractor` costuma aceitar algo
-    // parecido com isto publicamente, mas confirmar contra uma execução real
-    // antes de confiar cegamente, no mesmo espírito autocrítico do
-    // `CamofoxScrapingClient` do branch `feat/prospecting-outbound`.
+    // Input confirmado contra execuções reais do actor
+    // `compass/google-maps-extractor` (2026-11-09). Sem `scrapePlaceDetailPage`
+    // nem enrichments: a Apify cobra só por lugar retornado.
     const run = await client.actor(this.actorId).call({
       searchStringsArray: [params.businessType],
       city: params.city,
@@ -82,12 +80,13 @@ export class ApifyGatewayService implements ApifyGateway {
  * (ou qualquer actor equivalente) pro shape estável `ApifyBusinessResult`.
  * Isolada nesta função pra que trocar de actor no futuro toque só aqui.
  *
- * Nomes de campo ASSUMIDOS a partir da documentação pública do actor —
- * `title`→name, `address`→address, `city`, `state`, `phoneUnformatted`→
- * phone, `website`, `categoryName`→googleCategory, `totalScore`→rating,
- * `reviewsCount`→reviewCount, `placeId`. NÃO CONFIRMADOS contra uma
- * execução real do actor nesta sessão — confirmar antes de confiar
- * cegamente. Qualquer campo ausente ou de tipo inesperado vira `null`
+ * Nomes de campo CONFIRMADOS contra execuções reais do actor
+ * (`compass/google-maps-extractor`, 2026-11-09): `title`→name, `address`,
+ * `city`, `state` (por extenso), `phoneUnformatted`→phone (`""` quando não
+ * há telefone), `website` (chave ausente quando não há site),
+ * `categoryName`→googleCategory, `totalScore`→rating, `reviewsCount`,
+ * `placeId`; `countryCode` e `url` (link do Google Maps) ficam em `raw`.
+ * Qualquer campo ausente, vazio ou de tipo inesperado vira `null`
  * (exceto `name`, que cai para string vazia — o resto do sistema espera
  * `name: string`, nunca nulo); esta função nunca lança erro por campo
  * faltando.
@@ -97,13 +96,19 @@ export function mapApifyItemToLead(item: Record<string, unknown>): ApifyBusiness
     name: typeof item.title === 'string' ? item.title : '',
     address: typeof item.address === 'string' ? item.address : null,
     city: typeof item.city === 'string' ? item.city : null,
+    // Por extenso ("São Paulo", "Texas"): a sigla é resolvida no worker com
+    // `normalizeRegionCode` (`countryCode` continua em `raw`).
     state: typeof item.state === 'string' ? item.state : null,
-    phone: typeof item.phoneUnformatted === 'string' ? item.phoneUnformatted : null,
-    website: typeof item.website === 'string' ? item.website : null,
+    phone: nonEmptyString(item.phoneUnformatted),
+    website: nonEmptyString(item.website),
     googleCategory: typeof item.categoryName === 'string' ? item.categoryName : null,
     rating: typeof item.totalScore === 'number' ? item.totalScore : null,
     reviewCount: typeof item.reviewsCount === 'number' ? item.reviewsCount : null,
     placeId: typeof item.placeId === 'string' ? item.placeId : null,
     raw: item,
   };
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
 }

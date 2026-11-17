@@ -305,17 +305,16 @@ describe('processLeadScrapeJob', () => {
         data: expect.objectContaining({ status: 'COMPLETED', leadsFound: 1 }),
       }),
     );
-    // 1 lead × SCRAPING_COST_PER_LEAD_USD.APIFY_GOOGLE_MAPS — a constante
-    // soma scrape base (0,004) + place details (0,002), as duas parcelas que
-    // o pipeline usa por lead (valor casado com o comentário da constante).
-    expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', 0.006);
+    // Cobrado por resultado DEVOLVIDO pela Apify (2 lugares × US$0,005), não
+    // pelo lead mantido depois do filtro onlyWithoutWebsite (1).
+    expect(recordSpend).toHaveBeenCalledWith(fakeRedis, 'org-1', 0.01);
     expect(result.status).toBe('COMPLETED');
     expect(prisma.costEvent.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         organizationId: 'org-1',
         category: 'SCRAPING',
         provider: 'APIFY_GOOGLE_MAPS',
-        amountUsd: 0.006,
+        amountUsd: 0.01,
         scrapeJobId: 'scrape-1',
       }),
     });
@@ -323,6 +322,41 @@ describe('processLeadScrapeJob', () => {
     expect(tx.pipelineStageTransition.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ organizationId: 'org-1', leadId: 'lead-1', fromStage: null }),
     });
+  });
+
+  it('Apify devolve o estado por extenso ("São Paulo"): o lead é gravado com a sigla, como a busca', async () => {
+    const tx = setupTx();
+    (isOverBudget as jest.Mock).mockResolvedValue(false);
+    const prisma = buildPrisma();
+    prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+    prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+    tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+    tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'lead-1', ...args.create }),
+    );
+    const gateways = fakeGateways();
+    gateways.apify.searchBusinesses.mockResolvedValue([
+      {
+        name: 'Metalúrgica Dias',
+        address: 'R. Itapetininga, 555 - Cidade Jardim, Campinas - SP, 13050-432, Brazil',
+        city: 'Campinas',
+        state: 'São Paulo',
+        phone: null,
+        website: null,
+        googleCategory: 'Metallurgy company',
+        rating: null,
+        reviewCount: null,
+        placeId: 'ChIJL44na2fJyJQRGtz-cdpq1co',
+        raw: { countryCode: 'BR' },
+      },
+    ]);
+    gateways.explorium.matchBusiness.mockResolvedValue(null);
+
+    await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+    expect(tx.lead.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ state: 'SP', phone: null }) }),
+    );
   });
 
   it('rescan de um lead que já avançou (CONTACTED) não regride o status nem grava transição', async () => {

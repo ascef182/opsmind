@@ -2,39 +2,49 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mapApifyItemToLead } from './apify-gateway';
 
-// Fixture gravado a partir de um item "plausível" do actor
-// `compass/google-maps-extractor` (não capturado de uma execução real —
-// ver aviso em `apify-gateway.ts`), incluindo campos extras que o mapeamento
-// ignora (categories, url, searchString, location, permanentlyClosed) pra
-// garantir que eles ainda acabam em `raw` sem quebrar nada.
+// Itens reais do actor `compass/google-maps-extractor` (execução de
+// 2026-11-09, busca "Metalúrgica" em Campinas), reduzidos aos campos
+// relevantes: um negócio com site e telefone, outro sem nenhum dos dois.
 const fixture = JSON.parse(
   readFileSync(join(__dirname, '..', 'fixtures', 'apify-google-maps-item.sample.json'), 'utf-8'),
 ) as Record<string, unknown>;
+const noWebsiteFixture = JSON.parse(
+  readFileSync(join(__dirname, '..', 'fixtures', 'apify-google-maps-item-no-website.sample.json'), 'utf-8'),
+) as Record<string, unknown>;
 
 describe('mapApifyItemToLead', () => {
-  it('mapeia um item completo do dataset do actor pros campos estáveis de ApifyBusinessResult', () => {
+  it('mapeia um item real do dataset do actor pros campos estáveis de ApifyBusinessResult', () => {
     const result = mapApifyItemToLead(fixture);
 
     expect(result).toEqual({
-      name: 'Padaria Pão Dourado',
-      address: 'Rua das Flores, 123',
+      name: 'Usinebra Metalúrgica',
+      address: 'R. Maria Fausta Figueiredo Chaib, 75 - Jardim Myrian Moreira da Costa, Campinas - SP, 13098-419, Brazil',
       city: 'Campinas',
-      state: 'SP',
-      phone: '+5519912345678',
-      website: 'https://paodouradopadaria.com.br',
-      googleCategory: 'Padaria',
-      rating: 4.6,
-      reviewCount: 128,
-      placeId: 'ChIJn8_random_place_id_123',
+      state: 'São Paulo',
+      phone: '+551932571999',
+      website: 'http://usinebra.com.br/',
+      googleCategory: 'Metallurgy company',
+      rating: 5,
+      reviewCount: 1,
+      placeId: 'ChIJafgU2nHEyJQR_J3lcpOPvi4',
       raw: fixture,
     });
   });
 
-  it('preserva o item bruto completo (inclusive campos não mapeados) em `raw`', () => {
+  it('sem site (chave ausente) e sem telefone (string vazia) viram null, nunca ""', () => {
+    const result = mapApifyItemToLead(noWebsiteFixture);
+
+    expect(result.website).toBeNull();
+    expect(result.phone).toBeNull();
+    expect(result.rating).toBeNull();
+    expect(result.reviewCount).toBeNull();
+  });
+
+  it('preserva o item bruto completo (inclusive countryCode e link do Maps) em `raw`', () => {
     const result = mapApifyItemToLead(fixture);
 
-    expect(result.raw.categories).toEqual(['Padaria', 'Confeitaria']);
-    expect(result.raw.location).toEqual({ lat: -22.9099, lng: -47.0626 });
+    expect(result.raw.countryCode).toBe('BR');
+    expect(result.raw.url).toEqual(expect.stringContaining('query_place_id=ChIJafgU2nHEyJQR_J3lcpOPvi4'));
   });
 
   it('nunca lança erro e usa null para campos ausentes', () => {

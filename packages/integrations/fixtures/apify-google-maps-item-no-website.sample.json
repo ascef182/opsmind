@@ -1,0 +1,28 @@
+{
+  "title": "Metalúrgica Dias",
+  "categoryName": "Metallurgy company",
+  "address": "R. Itapetininga, 555 - Cidade Jardim, Campinas - SP, 13050-432, Brazil",
+  "neighborhood": "Cidade Jardim",
+  "city": "Campinas",
+  "postalCode": "13050-432",
+  "state": "São Paulo",
+  "countryCode": "BR",
+  "phone": "",
+  "phoneUnformatted": "",
+  "location": {
+    "lat": -22.9215973,
+    "lng": -47.0942372
+  },
+  "totalScore": null,
+  "permanentlyClosed": false,
+  "temporarilyClosed": false,
+  "placeId": "ChIJL44na2fJyJQRGtz-cdpq1co",
+  "categories": [
+    "Metallurgy company"
+  ],
+  "reviewsCount": null,
+  "url": "https://www.google.com/maps/search/?api=1&query=Metal%C3%BArgica%20Dias&query_place_id=ChIJL44na2fJyJQRGtz-cdpq1co",
+  "searchString": "Metalúrgica",
+  "rank": 15,
+  "isAdvertisement": false
+}

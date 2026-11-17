@@ -1,18 +1,29 @@
 {
-  "title": "Padaria Pão Dourado",
-  "address": "Rua das Flores, 123",
+  "title": "Usinebra Metalúrgica",
+  "categoryName": "Metallurgy company",
+  "address": "R. Maria Fausta Figueiredo Chaib, 75 - Jardim Myrian Moreira da Costa, Campinas - SP, 13098-419, Brazil",
+  "neighborhood": "Jardim Myrian Moreira da Costa",
   "city": "Campinas",
-  "state": "SP",
-  "phoneUnformatted": "+5519912345678",
-  "phone": "(19) 91234-5678",
-  "website": "https://paodouradopadaria.com.br",
-  "categoryName": "Padaria",
-  "categories": ["Padaria", "Confeitaria"],
-  "totalScore": 4.6,
-  "reviewsCount": 128,
-  "placeId": "ChIJn8_random_place_id_123",
-  "url": "https://www.google.com/maps/place/?q=place_id:ChIJn8_random_place_id_123",
-  "searchString": "padaria em Campinas, SP",
-  "location": { "lat": -22.9099, "lng": -47.0626 },
-  "permanentlyClosed": false
+  "postalCode": "13098-419",
+  "state": "São Paulo",
+  "countryCode": "BR",
+  "website": "http://usinebra.com.br/",
+  "phone": "+55 19 3257-1999",
+  "phoneUnformatted": "+551932571999",
+  "location": {
+    "lat": -22.8136467,
+    "lng": -47.0321113
+  },
+  "totalScore": 5,
+  "permanentlyClosed": false,
+  "temporarilyClosed": false,
+  "placeId": "ChIJafgU2nHEyJQR_J3lcpOPvi4",
+  "categories": [
+    "Metallurgy company"
+  ],
+  "reviewsCount": 1,
+  "url": "https://www.google.com/maps/search/?api=1&query=Usinebra%20Metal%C3%BArgica&query_place_id=ChIJafgU2nHEyJQR_J3lcpOPvi4",
+  "searchString": "Metalúrgica",
+  "rank": 2,
+  "isAdvertisement": false
 }

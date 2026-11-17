@@ -14,6 +14,7 @@ import {
   STRUCTURED_WEBSITE_SOURCES,
   resolveAutodraftChannel,
   leadStatusToPipelineStage,
+  normalizeRegionCode,
   type LeadScoringInput,
   type ServiceOfferingIcp,
   type SocialLink,
@@ -50,15 +51,15 @@ export interface LeadScrapeGateways {
 }
 
 /**
- * Custo estimado por lead retornado, em USD, por fonte — usado SÓ para o
- * corte de orçamento (nunca para faturamento real; não é o custo exato
- * cobrado por cada provedor, é uma ordem de grandeza documentada aqui pra
- * ser fácil de corrigir depois com números reais):
- *   - Apify (plano Free): US$0,006/lead — scrape base (US$0,004/lead) + place
- *     details (US$0,002/lead), os DOIS passos que o pipeline automático usa
- *     por lead, então a constante soma os dois (a Task 1 enumerou as duas
- *     parcelas mas gravou só a primeira — corrigido aqui; subestimar custo
- *     faz a organização gastar acima do teto que configurou).
+ * Custo estimado por RESULTADO devolvido pela fonte (não por lead mantido:
+ * o provedor cobra tudo que devolve, inclusive o que o filtro
+ * `onlyWithoutWebsite` descarta depois), em USD — alimenta o corte de
+ * orçamento e a razão de custos:
+ *   - Apify (`compass/google-maps-extractor`, tier Free): US$0,005 por lugar,
+ *     conferido contra execuções reais (30 lugares = US$0,15005, incluindo
+ *     US$0,00005 de start). O pipeline não liga `scrapePlaceDetailPage`, então
+ *     o add-on de place details (US$0,002) não é cobrado. Tiers pagos da
+ *     Apify cobram menos; esta é a estimativa conservadora.
  *     CRÍTICO: Os add-ons de enrichment da Apify (company contacts, social
  *     profiles, emails) custam ~US$0,10/lead (17x mais) e NUNCA devem ser
  *     usados pelo pipeline automático — causariam esgotamento de orçamento
@@ -73,7 +74,7 @@ export interface LeadScrapeGateways {
  *   - MANUAL: 0 — nunca gera custo (nem chega a rodar, ver registry abaixo).
  */
 const SCRAPING_COST_PER_LEAD_USD: Record<ScrapeSourceType, number> = {
-  APIFY_GOOGLE_MAPS: 0.006,
+  APIFY_GOOGLE_MAPS: 0.005,
   EXPLORIUM_BUSINESS_SEARCH: 0.05,
   CAMOFOX_GOOGLE_SEARCH: 0.001,
   CAMOFOX_REDDIT_SEARCH: 0.001,
@@ -179,7 +180,7 @@ function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
     name: r.name,
     address: r.address,
     city: r.city,
-    state: r.state,
+    state: normalizeRegionCode(r.state, typeof r.raw.countryCode === 'string' ? r.raw.countryCode : null),
     phone: r.phone,
     website: r.website,
     // Google Maps (via Apify) expõe um campo de site de verdade na própria
@@ -1740,7 +1741,7 @@ export async function processLeadScrapeJob(
       }
     }
 
-    const cost = leadsFound * SCRAPING_COST_PER_LEAD_USD[scrapeJob.sourceType];
+    const cost = rawCandidates.length * SCRAPING_COST_PER_LEAD_USD[scrapeJob.sourceType];
     return await finalizeJob(prisma, redis, data, { status: 'COMPLETED', leadsFound, cost, enrichmentCost });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
