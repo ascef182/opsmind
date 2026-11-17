@@ -14,6 +14,8 @@ import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { RevenueCoreModule } from './modules/revenue/revenue-core.module';
+import { HarveyCoreModule } from './modules/harvey/harvey-core.module';
+import { HarveyModule } from './modules/harvey/harvey.module';
 import { RevenueModule } from './modules/revenue/revenue.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { MembershipsModule } from './modules/memberships/memberships.module';
@@ -67,6 +69,8 @@ import { TenantContextInterceptor } from './shared/interceptors/tenant-context.i
     StorageModule,
     AuditModule,
     RevenueCoreModule,
+    HarveyCoreModule,
+    HarveyModule,
     RevenueModule,
     UsersModule,
     AuthModule,

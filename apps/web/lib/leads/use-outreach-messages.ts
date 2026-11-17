@@ -156,6 +156,19 @@ export function useSendOutreach(organizationId: string, leadId: string) {
   });
 }
 
+// Envio sem confirmação do provedor: a pessoa conferiu no provedor se saiu.
+export function useResolveUnknownSend(organizationId: string, leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ messageId, outcome }: { messageId: string; outcome: 'SENT' | 'NOT_SENT' }) =>
+      apiFetch<OutreachMessage>(`/organizations/${organizationId}/outreach-messages/${messageId}/resolve-unknown`, {
+        method: 'POST',
+        body: { outcome },
+      }),
+    onSuccess: () => invalidateOutreachDomain(queryClient, organizationId, leadId),
+  });
+}
+
 export function useMarkOutreachSent(organizationId: string, leadId: string) {
   const queryClient = useQueryClient();
   return useMutation({

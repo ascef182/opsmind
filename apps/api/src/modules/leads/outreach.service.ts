@@ -1,9 +1,7 @@
 import {
   BadRequestException,
-  Inject,
   Injectable,
   NotFoundException,
-  ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type {
@@ -14,7 +12,6 @@ import type {
   Prisma,
   ServiceOffering,
 } from '@opsmind/database';
-import { recordCostEvent } from '@opsmind/database';
 import {
   checkOutreachGate,
   classifyBusinessWebsite,
@@ -35,10 +32,7 @@ import type {
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PipelineHistoryService, type PipelineActor } from '../revenue/pipeline-history.service';
-import { RevenueSettingsService } from '../revenue/revenue-settings.service';
 import { OrganizationsService } from '../organizations/organizations.service';
-import { EMAIL_SERVICE, type EmailService } from '../../infrastructure/email/email.service';
-import { EmailWarmupService } from '../../infrastructure/email/email-warmup.service';
 import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 import { CAZATECH_PRODUCTS, OutreachQualityReviewer, type QualityReview } from './outreach-quality-reviewer';
 import { LeadsService } from './leads.service';
@@ -223,10 +217,7 @@ export class OutreachService {
     private readonly auditService: AuditService,
     private readonly leadsService: LeadsService,
     private readonly serviceOfferingsService: ServiceOfferingsService,
-    @Inject(EMAIL_SERVICE) private readonly emailService: EmailService,
-    private readonly emailWarmupService: EmailWarmupService,
     private readonly pipelineHistory: PipelineHistoryService,
-    private readonly revenueSettings: RevenueSettingsService,
   ) {}
 
   // `actor`: quem pediu a geração — `{ type: 'USER', userId }` (chamador
@@ -535,125 +526,6 @@ export class OutreachService {
       },
       { type: 'USER', userId },
     );
-  }
-
-  /**
-   * `POST .../outreach-messages/:messageId/send` — envio REAL (não um
-   * checkbox manual como `markSent`), só para o canal EMAIL (plano
-   * pensando-como-empresa-com-agile-beaver.md, sprint de envio real de
-   * outreach). WhatsApp/LinkedIn/Reddit DM continuam exigindo `markSent`
-   * manual — nenhuma integração de envio existe para esses canais ainda.
-   *
-   * Continua exigindo `userId` de uma request HTTP autenticada, igual a
-   * toda outra transição deste service (ver comentário da classe) — nunca
-   * existe (nem pode existir) uma AI tool que chame `send`/`markSent`
-   * diretamente, aprovação e envio são sempre humanos.
-   */
-  async send(organizationId: string, messageId: string, userId: string): Promise<OutreachMessage> {
-    const message = await this.findByIdOrThrow(organizationId, messageId);
-    // Pausa (global e da organização) e teto diário antes de qualquer outra
-    // checagem: com o outreach pausado, nada mais importa.
-    await this.revenueSettings.assertCanSendOutreach(organizationId);
-    if (message.channel !== 'EMAIL') {
-      throw new BadRequestException(
-        'Envio automático só está disponível para o canal EMAIL — use "marcar como enviada" para os demais canais.',
-      );
-    }
-
-    const lead = await this.leadsService.findByIdOrThrow(organizationId, message.leadId);
-    if (!lead.email) {
-      throw new BadRequestException('Lead não tem e-mail cadastrado — não é possível enviar automaticamente.');
-    }
-    // Opt-out (CAN-SPAM/LGPD) — nunca envia pra um lead que já pediu pra
-    // parar, pra sempre nesta organização (ver LeadsService.unsubscribe).
-    if (lead.unsubscribedAt) {
-      throw new BadRequestException(
-        'Este lead pediu para não receber mais mensagens (unsubscribedAt setado) — envio bloqueado.',
-      );
-    }
-
-    // Endereço físico é exigido por lei em todo e-mail de outreach
-    // (CAN-SPAM) — sem isso configurado pela organização, recusa enviar em
-    // vez de mandar um e-mail não-conforme.
-    const organization = await this.organizationsService.findById(organizationId);
-    if (!organization?.outreachPhysicalAddress) {
-      throw new BadRequestException(
-        'Configure o endereço físico de correspondência da organização (outreachPhysicalAddress) antes de enviar outreach por e-mail — exigido por lei (CAN-SPAM).',
-      );
-    }
-
-    // Aquecimento de domínio + pausa automática por reputação (bounce/
-    // reclamação) — ver EmailWarmupService.
-    const warmupStatus = await this.emailWarmupService.checkCanSend();
-    if (warmupStatus.blocked) {
-      throw new ServiceUnavailableException(warmupStatus.reason);
-    }
-
-    const sendResult = await this.emailService.sendEmail({
-      to: lead.email,
-      subject: message.subject ?? `Contato — ${lead.name}`,
-      html: this.renderOutreachHtml(message.body, organization.outreachPhysicalAddress),
-      idempotencyKey: `outreach-message/${messageId}`,
-    });
-    await this.emailWarmupService.recordSent();
-    await recordCostEvent(this.prisma, {
-      organizationId,
-      category: 'EMAIL',
-      provider: this.emailService.providerName,
-      operation: 'outreach.send',
-      agent: 'outreach-copywriting',
-      amountUsd: this.emailService.costPerMessageUsd,
-      leadId: lead.id,
-    });
-
-    const updated = await this.applyTransition(
-      organizationId,
-      messageId,
-      'APPROVED',
-      { status: 'SENT', sentAt: new Date(), providerMessageId: sendResult.id },
-      'enviar',
-    );
-    await this.setLeadStatus(organizationId, updated.leadId, 'CONTACTED', { type: 'USER', id: userId });
-
-    await this.auditService.log({
-      actorType: 'USER',
-      actorId: userId,
-      organizationId,
-      action: 'outreach.send',
-      resource: messageId,
-    });
-
-    return updated;
-  }
-
-  // `body` é texto livre gerado pela IA (ou editado manualmente, ver
-  // `edit()`) — nunca HTML de verdade. Escapa antes de embutir em `<p>` por
-  // linha: o texto pode conter dados de terceiros (nome/categoria do lead,
-  // scraping) e não deve virar HTML executável dentro do cliente de email do
-  // destinatário.
-  //
-  // `physicalAddress` é sempre não-nulo aqui (garantido por `send()`, que
-  // recusa enviar sem isso configurado) — parâmetro obrigatório em vez de
-  // opcional pra deixar essa invariante visível na assinatura, não só num
-  // comentário. Rodapé de compliance (CAN-SPAM/LGPD): endereço físico +
-  // opt-out por resposta (ver `LeadsService.unsubscribe` pra como isso é
-  // honrado). Reply-based em vez de link de um clique — suficiente pro
-  // volume/estágio atual; se o volume crescer o bastante pra exigir cumprir
-  // as regras de "bulk sender" do Gmail/Yahoo, isso precisa virar um link
-  // com header `List-Unsubscribe`/`List-Unsubscribe-Post` de verdade.
-  private renderOutreachHtml(body: string, physicalAddress: string): string {
-    const escape = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const bodyHtml = body
-      .split('\n')
-      .map((line) => `<p>${escape(line)}</p>`)
-      .join('');
-    const footerHtml = [
-      '<hr/>',
-      `<p style="font-size:12px;color:#666;">${escape(physicalAddress)}</p>`,
-      '<p style="font-size:12px;color:#666;">Se preferir não receber mais mensagens como esta, é só responder este e-mail pedindo para parar.</p>',
-    ].join('');
-    return bodyHtml + footerHtml;
   }
 
   async markSent(organizationId: string, messageId: string, userId: string): Promise<OutreachMessage> {

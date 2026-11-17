@@ -61,6 +61,7 @@ export class LeadSignalsService {
       leadId,
       actorType: 'USER',
       actorId: actorUserId,
+      trigger: 'MANUAL',
     });
   }
 

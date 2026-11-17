@@ -32,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useCampaigns } from '@/lib/harvey/use-harvey';
 
 // `sourceType` só oferece as fontes automatizáveis (nunca MANUAL) — mesma
 // regra de create-scrape-job.dto.ts/create-prospecting-target.dto.ts,
@@ -48,6 +49,7 @@ const targetFormSchema = z.object({
   limit: z.coerce.number().int().min(1, 'Mínimo 1').max(200, 'Máximo 200'),
   cooldownDays: z.coerce.number().int().min(1, 'Mínimo 1').max(90, 'Máximo 90'),
   isActive: z.boolean().optional(),
+  campaignId: z.string().optional(),
 });
 type TargetFormValues = z.infer<typeof targetFormSchema>;
 
@@ -60,6 +62,7 @@ const DEFAULT_VALUES: TargetFormValues = {
   limit: 50,
   cooldownDays: 7,
   isActive: true,
+  campaignId: undefined,
 };
 
 export default function ProspectingTargetsPage() {
@@ -73,6 +76,10 @@ export default function ProspectingTargetsPage() {
   const updateTarget = useUpdateProspectingTarget(organizationId);
   const removeTarget = useRemoveProspectingTarget(organizationId);
   const runNow = useRunProspectingTargetNow(organizationId);
+  // Campanha (Harvey): com uma só, o seletor e a coluna ficam ocultos.
+  const campaigns = useCampaigns(organizationId);
+  const multipleCampaigns = (campaigns.data?.length ?? 0) > 1;
+  const campaignName = (id: string | undefined) => campaigns.data?.find((campaign) => campaign.id === id)?.name ?? '—';
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingTarget, setEditingTarget] = useState<ProspectingTarget | null>(null);
@@ -102,6 +109,7 @@ export default function ProspectingTargetsPage() {
       limit: target.limit,
       cooldownDays: target.cooldownDays,
       isActive: target.isActive,
+      campaignId: target.campaignId,
     });
     setDialogOpen(true);
   }
@@ -167,6 +175,18 @@ export default function ProspectingTargetsPage() {
             <DialogTitle>{editingTarget ? 'Editar alvo de prospecção' : 'Novo alvo de prospecção'}</DialogTitle>
           </DialogHeader>
           <form onSubmit={onSubmit} className="flex flex-col gap-4">
+            {multipleCampaigns && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Campanha</label>
+                <Select {...register('campaignId')}>
+                  {campaigns.data?.map((campaign) => (
+                    <option key={campaign.id} value={campaign.id}>
+                      {campaign.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
             <div>
               <label className="mb-1 block text-xs font-medium text-muted-foreground">Fonte</label>
               <Select {...register('sourceType')}>
@@ -241,6 +261,7 @@ export default function ProspectingTargetsPage() {
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
+                {multipleCampaigns && <TableHead>Campanha</TableHead>}
                 <TableHead>Cidade/Estado</TableHead>
                 <TableHead>Tipo de negócio</TableHead>
                 <TableHead>Fonte</TableHead>
@@ -254,6 +275,9 @@ export default function ProspectingTargetsPage() {
             <TableBody>
               {targets.data.map((target) => (
                 <TableRow key={target.id}>
+                  {multipleCampaigns && (
+                    <TableCell className="text-foreground/80">{campaignName(target.campaignId)}</TableCell>
+                  )}
                   <TableCell className="font-medium text-foreground">
                     {target.city}/{target.state}
                   </TableCell>

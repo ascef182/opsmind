@@ -147,6 +147,11 @@ enum OutreachStatus {
   REJECTED
   SENT
   REPLIED
+  // Envio reivindicado e em andamento no provedor.
+  SENDING
+  // O provedor pode ter recebido, mas não houve confirmação: aguarda
+  // reconciliação (reenvio idempotente) ou decisão humana. Nunca reenvio cego.
+  SEND_UNKNOWN
 }
 
 enum MarketOpportunityStatus {
@@ -248,6 +253,10 @@ model Organization {
   pipelineTransitions   PipelineStageTransition[]
   costEvents            CostEvent[]
   revenueSettings       OrganizationRevenueSettings?
+  salesCampaigns        SalesCampaign[]
+  harveyAgent           HarveyAgent?
+  harveyRuns            HarveyRun[]
+  harveyActivities      HarveyActivity[]
 
   @@map("organizations")
 }
@@ -275,6 +284,7 @@ model User {
   authoredInternalNotes    InternalNote[]           @relation("InternalNoteAuthor")
   dealsOwned               Deal[]                   @relation("DealOwner")
   assignedLeads            Lead[]                   @relation("LeadAssignee")
+  harveyControlChanges     HarveyAgent[]            @relation("HarveyControlChangedBy")
 
   @@map("users")
 }
@@ -889,27 +899,27 @@ model DocumentChunk {
 // humana).
 
 model ServiceOffering {
-  id               String   @id @default(uuid())
-  organizationId   String   @map("organization_id")
+  id               String        @id @default(uuid())
+  organizationId   String        @map("organization_id")
   name             String
   description      String?
-  signals          String[] @default([])
-  targetIndustries String[] @default([]) @map("target_industries")
-  minEmployees     Int?     @map("min_employees")
-  maxEmployees     Int?     @map("max_employees")
-  minRevenueUsd    Int?     @map("min_revenue_usd")
-  maxRevenueUsd    Int?     @map("max_revenue_usd")
-  isActive         Boolean  @default(true) @map("is_active")
+  signals          String[]      @default([])
+  targetIndustries String[]      @default([]) @map("target_industries")
+  minEmployees     Int?          @map("min_employees")
+  maxEmployees     Int?          @map("max_employees")
+  minRevenueUsd    Int?          @map("min_revenue_usd")
+  maxRevenueUsd    Int?          @map("max_revenue_usd")
+  isActive         Boolean       @default(true) @map("is_active")
   // Tipo de produto: permite escolher a oferta pela abordagem do contato
   // (`selectOutreachStrategy`) sem adivinhar pelo nome definido pelo usuário.
   kind             OfferingKind?
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
-  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  suggestedForLeads   Lead[]              @relation("SuggestedOffering")
-  outreachMessages    OutreachMessage[]
-  marketOpportunities MarketOpportunity[]
+  organization          Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  suggestedForLeads     Lead[]              @relation("SuggestedOffering")
+  outreachMessages      OutreachMessage[]
+  marketOpportunities   MarketOpportunity[]
   defaultForSignalCodes SignalCode[]
 
   @@unique([organizationId, name])
@@ -946,12 +956,23 @@ model ScrapeJob {
   fallbackOfScrapeJob   ScrapeJob?  @relation("ScrapeJobFallback", fields: [fallbackOfScrapeJobId], references: [id], onDelete: SetNull)
   fallbackScrapeJobs    ScrapeJob[] @relation("ScrapeJobFallback")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  leads        Lead[]
+  // Busca criada pelo Harvey: campanha, alvo e ciclo de origem. O índice único
+  // parcial (harvey_run_id, prospecting_target_id) fica no SQL da migration.
+  campaignId          String?            @map("campaign_id")
+  prospectingTargetId String?            @map("prospecting_target_id")
+  harveyRunId         String?            @map("harvey_run_id")
+  campaign            SalesCampaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  prospectingTarget   ProspectingTarget? @relation(fields: [prospectingTargetId], references: [id], onDelete: SetNull)
+  harveyRun           HarveyRun?         @relation(fields: [harveyRunId], references: [id], onDelete: SetNull)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads            Lead[]
+  harveyActivities HarveyActivity[]
 
   @@index([organizationId, status])
   @@index([organizationId, createdAt])
   @@index([fallbackOfScrapeJobId])
+  @@index([harveyRunId])
   @@map("scrape_jobs")
 }
 
@@ -1027,6 +1048,8 @@ model Lead {
   actorType           AuditActorType   @map("actor_type")
   actorId             String?          @map("actor_id")
   discoveredAt        DateTime         @default(now()) @map("discovered_at")
+  // Campanha de origem (busca do Harvey). Nulo para lead manual.
+  campaignId          String?          @map("campaign_id")
   createdAt           DateTime         @default(now()) @map("created_at")
   updatedAt           DateTime         @updatedAt @map("updated_at")
 
@@ -1040,6 +1063,8 @@ model Lead {
   signals           LeadSignal[]
   deals             Deal[]
   internalNotes     InternalNote[]
+  campaign          SalesCampaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  harveyActivities  HarveyActivity[]
 
   @@unique([organizationId, placeId])
   @@index([organizationId, status])
@@ -1048,6 +1073,7 @@ model Lead {
   @@index([scrapeJobId])
   @@index([convertedCustomerId])
   @@index([organizationId, assignedUserId])
+  @@index([organizationId, campaignId, status])
   @@map("leads")
 }
 
@@ -1111,16 +1137,24 @@ model OutreachMessage {
   qualityReview      Json?           @map("quality_review")
   originalBody       String?         @map("original_body") @db.Text
   promptVersion      String?         @map("prompt_version")
+  // Envio idempotente: momento da reivindicação, quem iniciou (USER/HARVEY),
+  // payload exato enviado ao provedor (reenviado igual na reconciliação) e
+  // último erro do provedor.
+  sendClaimedAt      DateTime?       @map("send_claimed_at")
+  sendInitiator      String?         @map("send_initiator")
+  sendRequest        Json?           @map("send_request")
+  sendError          String?         @map("send_error")
   actorType          AuditActorType  @map("actor_type")
   actorId            String?         @map("actor_id")
   createdAt          DateTime        @default(now()) @map("created_at")
   updatedAt          DateTime        @updatedAt @map("updated_at")
 
-  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  lead            Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  serviceOffering ServiceOffering? @relation(fields: [serviceOfferingId], references: [id], onDelete: SetNull)
-  approvedBy      User?            @relation("OutreachApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
-  readBy          User?            @relation("OutreachReadBy", fields: [readByUserId], references: [id], onDelete: SetNull)
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead             Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  serviceOffering  ServiceOffering? @relation(fields: [serviceOfferingId], references: [id], onDelete: SetNull)
+  approvedBy       User?            @relation("OutreachApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  readBy           User?            @relation("OutreachReadBy", fields: [readByUserId], references: [id], onDelete: SetNull)
+  harveyActivities HarveyActivity[]
 
   @@index([organizationId, status])
   @@index([leadId])
@@ -1145,12 +1179,16 @@ model ProspectingTarget {
   limit              Int              @default(50)
   isActive           Boolean          @default(true) @map("is_active")
   cooldownDays       Int              @default(7) @map("cooldown_days")
+  campaignId         String           @map("campaign_id")
   createdAt          DateTime         @default(now()) @map("created_at")
   updatedAt          DateTime         @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign     SalesCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  scrapeJobs   ScrapeJob[]
 
   @@unique([organizationId, city, state, businessType, sourceType])
+  @@index([campaignId])
   @@index([organizationId, isActive])
   @@map("prospecting_targets")
 }
@@ -1219,30 +1257,30 @@ model MarketOpportunity {
 // observações do Harvey (ethanplusai/harvey, MIT), reconstruído nativamente
 // — ver docs/planning/2026-11-06-harvey-inteligencia-comercial.md.
 model LeadSignal {
-  id             String              @id @default(uuid())
-  organizationId String              @map("organization_id")
-  leadId         String              @map("lead_id")
-  signalCode     String              @map("signal_code")
-  value          String?
+  id                  String              @id @default(uuid())
+  organizationId      String              @map("organization_id")
+  leadId              String              @map("lead_id")
+  signalCode          String              @map("signal_code")
+  value               String?
   // 0.00–1.00, sempre atribuída por regra fixa do coletor (nunca um float
   // livre gerado por IA) — mantém o scoring 100% auditável.
-  confidence     Decimal             @db.Decimal(3, 2)
-  collector      LeadSignalCollector
-  evidenceUrl    String?             @map("evidence_url")
+  confidence          Decimal             @db.Decimal(3, 2)
+  collector           LeadSignalCollector
+  evidenceUrl         String?             @map("evidence_url")
   // Trecho MÍNIMO que bateu a extração, nunca o texto inteiro da página —
   // minimização de dado pessoal (PRD-v2 §9.1): truncado na extração (ver
   // MAX_EVIDENCE_QUOTE_LENGTH em signal-extractors.ts), não cortado depois
   // de já ter guardado tudo.
-  evidenceQuote  String?             @map("evidence_quote")
+  evidenceQuote       String?             @map("evidence_quote")
   // Base legal de tratamento (PRD-v2 §9.1) — o profiler só toca o site
   // público da própria empresa, então o default cobre o caso normal.
-  collectionBasis String             @default("dado_publico") @map("collection_basis")
+  collectionBasis     String              @default("dado_publico") @map("collection_basis")
   // Agrupa todos os sinais de uma mesma execução do profiler — junto com o
   // @@unique abaixo, garante que reprocessar a MESMA execução nunca duplica,
   // enquanto execuções diferentes (runId novo) preservam histórico.
-  runId          String              @map("run_id")
-  observedAt     DateTime            @default(now()) @map("observed_at")
-  marketOpportunityId String?        @map("market_opportunity_id")
+  runId               String              @map("run_id")
+  observedAt          DateTime            @default(now()) @map("observed_at")
+  marketOpportunityId String?             @map("market_opportunity_id")
 
   organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   lead              Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -1635,4 +1673,157 @@ model OrganizationRevenueSettings {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@map("organization_revenue_settings")
+}
+
+// ─── Harvey (agente do Revenue Engine) ──────────────────────────────────────
+// Ver docs/superpowers/specs/2026-11-17-harvey-fase1-controle-design.md.
+
+enum CampaignStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum HarveyControlState {
+  STOPPED
+  ACTIVE
+  PAUSED
+}
+
+enum HarveyRunStatus {
+  RUNNING
+  PAUSED
+  STOPPED
+  COMPLETED
+}
+
+enum HarveyPhase {
+  RESEARCHING
+  QUALIFYING
+  PREPARING_OUTREACH
+  SENDING
+  RESPONDING
+  CONTROL
+}
+
+enum HarveyActivityStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+  SKIPPED
+  CANCELLED
+}
+
+model SalesCampaign {
+  id                          String            @id @default(uuid())
+  organizationId              String            @map("organization_id")
+  name                        String
+  status                      CampaignStatus    @default(ACTIVE)
+  country                     String
+  regionLabel                 String?           @map("region_label")
+  language                    String
+  timezone                    String
+  workingDays                 Int[]             @default([1, 2, 3, 4, 5]) @map("working_days")
+  workStartMinute             Int               @default(540) @map("work_start_minute")
+  workEndMinute               Int               @default(1080) @map("work_end_minute")
+  dailyResearchGoal           Int               @default(30) @map("daily_research_goal")
+  dailyQualifiedGoal          Int               @default(15) @map("daily_qualified_goal")
+  dailyOutreachGoal           Int               @default(10) @map("daily_outreach_goal")
+  enabledChannels             OutreachChannel[] @default([EMAIL]) @map("enabled_channels")
+  monthlyBudgetUsd            Decimal?          @map("monthly_budget_usd") @db.Decimal(10, 2)
+  requireFirstContactApproval Boolean           @default(true) @map("require_first_contact_approval")
+  createdAt                   DateTime          @default(now()) @map("created_at")
+  updatedAt                   DateTime          @updatedAt @map("updated_at")
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospectingTargets ProspectingTarget[]
+  scrapeJobs         ScrapeJob[]
+  leads              Lead[]
+  runs               HarveyRun[]
+  activities         HarveyActivity[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, status])
+  @@map("sales_campaigns")
+}
+
+model HarveyAgent {
+  organizationId         String             @id @map("organization_id")
+  controlState           HarveyControlState @default(STOPPED) @map("control_state")
+  controlChangedAt       DateTime?          @map("control_changed_at")
+  controlChangedByUserId String?            @map("control_changed_by_user_id")
+  version                Int                @default(0)
+  createdAt              DateTime           @default(now()) @map("created_at")
+  updatedAt              DateTime           @updatedAt @map("updated_at")
+
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  controlChangedBy User?        @relation("HarveyControlChangedBy", fields: [controlChangedByUserId], references: [id], onDelete: SetNull)
+
+  @@map("harvey_agents")
+}
+
+model HarveyRun {
+  id               String          @id @default(uuid())
+  organizationId   String          @map("organization_id")
+  campaignId       String          @map("campaign_id")
+  cycleDate        DateTime        @map("cycle_date") @db.Date
+  status           HarveyRunStatus @default(RUNNING)
+  endReason        String?         @map("end_reason")
+  goals            Json
+  startedAt        DateTime        @default(now()) @map("started_at")
+  endedAt          DateTime?       @map("ended_at")
+  pausedAt         DateTime?       @map("paused_at")
+  pausedMs         BigInt          @default(0) @map("paused_ms")
+  lastErrorAt      DateTime?       @map("last_error_at")
+  lastErrorMessage String?         @map("last_error_message")
+  lastSuccessAt    DateTime?       @map("last_success_at")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign     SalesCampaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  scrapeJobs   ScrapeJob[]
+  activities   HarveyActivity[]
+
+  @@unique([campaignId, cycleDate])
+  @@index([organizationId, status])
+  @@map("harvey_runs")
+}
+
+model HarveyActivity {
+  id                String               @id @default(uuid())
+  organizationId    String               @map("organization_id")
+  campaignId        String?              @map("campaign_id")
+  runId             String?              @map("run_id")
+  type              String
+  phase             HarveyPhase
+  title             String
+  status            HarveyActivityStatus
+  startedAt         DateTime             @default(now()) @map("started_at")
+  finishedAt        DateTime?            @map("finished_at")
+  leadId            String?              @map("lead_id")
+  scrapeJobId       String?              @map("scrape_job_id")
+  outreachMessageId String?              @map("outreach_message_id")
+  channel           OutreachChannel?
+  result            Json?
+  rationale         Json?
+  errorMessage      String?              @map("error_message")
+  queueJobId        String?              @map("queue_job_id")
+  idempotencyKey    String               @map("idempotency_key")
+  actorType         AuditActorType       @map("actor_type")
+  actorId           String?              @map("actor_id")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign        SalesCampaign?   @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  run             HarveyRun?       @relation(fields: [runId], references: [id], onDelete: SetNull)
+  lead            Lead?            @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  scrapeJob       ScrapeJob?       @relation(fields: [scrapeJobId], references: [id], onDelete: SetNull)
+  outreachMessage OutreachMessage? @relation(fields: [outreachMessageId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, startedAt(sort: Desc)])
+  @@index([organizationId, leadId])
+  @@index([runId, type, status])
+  @@map("harvey_activities")
 }

@@ -25,11 +25,12 @@ import { ConfigService } from '@nestjs/config';
 import { Worker, type Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData } from '@opsmind/shared-types';
-import { getEngineBudgetStatus } from '@opsmind/database';
+import { HARVEY_SKIP_REASON_LABELS, checkHarveyMayProceed, getEngineBudgetStatus, markRunError, markRunSuccess } from '@opsmind/database';
 import type { Env } from '@opsmind/config/env/schema';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { OutreachDraftNotCreatedException, OutreachService } from './outreach.service';
 import { AiRefusalException } from '../ai/services/ai-one-shot-runner';
+import { HarveyActivityRecorder } from '../harvey/harvey-activity.recorder';
 
 /**
  * Consumer BullMQ da fila `outreach-autodraft` — gerada por
@@ -63,6 +64,7 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
     private readonly configService: ConfigService<Env, true>,
     private readonly outreachService: OutreachService,
     private readonly prisma: PrismaService,
+    private readonly recorder: HarveyActivityRecorder,
   ) {
     this.connection = new IORedis(this.configService.get('REDIS_URL', { infer: true }), {
       maxRetriesPerRequest: null,
@@ -84,7 +86,7 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
     });
   }
 
-  private async process(job: Job<OutreachAutodraftJobData>): Promise<void> {
+  async process(job: Job<OutreachAutodraftJobData>): Promise<void> {
     const { organizationId, leadId, channel, serviceOfferingId } = job.data;
 
     // Guarda contra rollback (Fix 2 do review final, Harvey Fase 7): este
@@ -143,6 +145,35 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
 
     // Teto mensal do Revenue Engine: rascunho automático é gasto autônomo e
     // para quando o teto estoura (um humano ainda pode gerar manualmente).
+    // Só o rascunho automático depende do estado do Harvey; um pedido manual
+    // (trigger MANUAL) roda mesmo com o agente pausado.
+    const trigger = job.data.trigger ?? 'AUTOMATIC';
+    let runId: string | null = null;
+    if (trigger === 'AUTOMATIC') {
+      const check = await checkHarveyMayProceed(this.prisma, {
+        organizationId,
+        campaignId: lead.campaignId,
+        step: 'outreach_draft',
+      });
+      if (!check.ok) {
+        await this.recorder.event({
+          organizationId,
+          type: 'outreach.draft',
+          phase: 'PREPARING_OUTREACH',
+          title: `Abordagem para ${lead.name} adiada — ${HARVEY_SKIP_REASON_LABELS[check.reason]}`,
+          idempotencyKey: `outreach.draft:${leadId}:skipped:${check.reason}:${new Date().toISOString().slice(0, 10)}`,
+          status: 'SKIPPED',
+          leadId,
+          campaignId: lead.campaignId,
+          channel,
+          queueJobId: job.id ?? null,
+          result: { reason: check.reason },
+        });
+        return;
+      }
+      runId = check.runId;
+    }
+
     if ((await getEngineBudgetStatus(this.prisma, organizationId)).exceeded) {
       this.logger.warn(
         `rascunho automático de outreach pulado (organizationId=${organizationId}, leadId=${leadId}) — teto mensal do Revenue Engine atingido`,
@@ -150,40 +181,90 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
       return;
     }
 
+    const activity = await this.recorder.start({
+      organizationId,
+      type: 'outreach.draft',
+      phase: 'PREPARING_OUTREACH',
+      title: `Preparando abordagem para ${lead.name}`,
+      idempotencyKey: `outreach.draft:${leadId}${runId ? `:${runId}` : ''}`,
+      runId,
+      campaignId: lead.campaignId,
+      leadId,
+      channel,
+      queueJobId: job.id ?? null,
+    });
+
+    const skip = async (reason: string, message: string) => {
+      await this.recorder.finish(activity.id, {
+        status: 'SKIPPED',
+        title: `Abordagem para ${lead.name} não criada`,
+        errorMessage: message.slice(0, 500),
+        result: { reason },
+      });
+    };
+
     try {
-      await this.outreachService.generateDraft(
+      const draft = await this.outreachService.generateDraft(
         organizationId,
         leadId,
         { channel, serviceOfferingId },
         { type: 'SYSTEM' },
       );
+      const review = (draft.qualityReview ?? null) as { status?: string; scores?: Record<string, number> } | null;
+      await this.recorder.finish(activity.id, {
+        status: 'SUCCEEDED',
+        title: `Abordagem preparada para ${lead.name}`,
+        result: { strategy: draft.strategy, promptVersion: draft.promptVersion, qualityStatus: review?.status ?? null },
+        rationale: {
+          summary: draft.strategy ? `Abordagem escolhida por regra: ${draft.strategy}` : undefined,
+          reasons: [
+            ...(draft.strategy ? [`Abordagem: ${draft.strategy}`] : []),
+            ...(review?.status ? [`Revisão de qualidade: ${review.status}`] : []),
+          ],
+        },
+      });
+      await this.recorder.event({
+        organizationId,
+        type: 'outreach.awaiting_approval',
+        phase: 'PREPARING_OUTREACH',
+        title: `Abordagem para ${lead.name} aguardando aprovação`,
+        idempotencyKey: `outreach.awaiting_approval:${draft.id}`,
+        status: 'SUCCEEDED',
+        runId,
+        campaignId: lead.campaignId,
+        leadId,
+        outreachMessageId: draft.id,
+        channel,
+      });
+      await markRunSuccess(this.prisma, runId);
     } catch (error) {
       if (error instanceof ForbiddenException) {
-        // Orçamento mensal de IA estourado — não relança: retentar não
-        // ajudaria até o orçamento resetar no mês seguinte. Job resolve
-        // normalmente (sem gerar rascunho nenhum desta vez).
+        // Orçamento mensal de IA estourado: retentar não ajuda até o mês virar.
         this.logger.warn(
           `rascunho automático de outreach pulado (organizationId=${organizationId}, leadId=${leadId}) — orçamento mensal de IA estourado`,
         );
+        await skip('AI_BUDGET_EXCEEDED', error.message);
         return;
       }
       if (error instanceof OutreachDraftNotCreatedException) {
-        // Abordagem despriorizada, sem oferta para ela, ou todas as versões
-        // afirmaram algo sem base na pesquisa: decisão, não falha
-        // transitória. Retentar só pagaria a geração de novo.
+        // Decisão, não falha transitória: retentar só pagaria a geração de novo.
         this.logger.warn(
           `rascunho automático de outreach não criado (organizationId=${organizationId}, leadId=${leadId}, motivo=${error.reason}): ${error.message}`,
         );
+        await skip(error.reason, error.message);
         return;
       }
       if (error instanceof AiRefusalException) {
-        // A mesma entrada tende a ser recusada de novo: retentar só pagaria
-        // cada tentativa outra vez. Um humano gera o rascunho manualmente.
+        // A mesma entrada tende a ser recusada de novo; um humano gera manualmente.
         this.logger.warn(
           `rascunho automático de outreach recusado pela IA (organizationId=${organizationId}, leadId=${leadId})`,
         );
+        await skip('AI_REFUSAL', 'O modelo recusou gerar este rascunho.');
         return;
       }
+      const message = error instanceof Error ? error.message : String(error);
+      await this.recorder.finish(activity.id, { status: 'FAILED', errorMessage: message.slice(0, 500) });
+      await markRunError(this.prisma, runId, message);
       throw error;
     }
   }

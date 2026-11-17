@@ -1,6 +1,18 @@
 import type { PrismaClient, Prisma, ScrapeJob, ScrapeSourceType, Lead, LeadStatus } from '@opsmind/database';
-import { recordCostEvent, recordStageTransition } from '@opsmind/database';
+import {
+  HARVEY_SKIP_REASON_LABELS,
+  checkHarveyMayProceed,
+  finishHarveyActivity,
+  markRunError,
+  markRunSuccess,
+  recordCostEvent,
+  recordHarveyEvent,
+  recordStageTransition,
+  startHarveyActivity,
+  type HarveyActivity,
+} from '@opsmind/database';
 import type {
+  LeadScoreBreakdown,
   LeadScrapeJobData,
   OutreachAutodraftJobData,
   WebsiteProfileJobData,
@@ -36,6 +48,7 @@ import * as Sentry from '@sentry/node';
 import { withTenantContext } from './tenant-context';
 import { isOverBudget, recordSpend } from './budget';
 import { loadConfirmedSignalsForScoring } from './website-profiler-processor';
+import { publishActivities, type HarveyPublish } from './harvey-events';
 
 // Duplicada de apps/api/src/shared/constants/roles.constant.ts de propósito
 // (worker não pode importar de apps/api) — mesma regra: todo papel exceto
@@ -1413,19 +1426,75 @@ export async function processLeadScrapeJob(
   enqueueAutodraft: (job: OutreachAutodraftJobData) => Promise<unknown> = async () => undefined,
   enqueueWebsiteProfile: (job: WebsiteProfileJobData) => Promise<unknown> = async () => undefined,
   enqueueFallbackScrape: (job: LeadScrapeJobData) => Promise<unknown> = async () => undefined,
+  context: { queueJobId?: string; publish?: HarveyPublish } = {},
 ): Promise<ScrapeJob> {
+  let activityId: string | null = null;
+  let harveyRunId: string | null = null;
   try {
+    const queued = await prisma.scrapeJob.findFirstOrThrow({
+      where: { id: data.scrapeJobId, organizationId: data.organizationId },
+    });
+    harveyRunId = queued.harveyRunId;
+
+    // Busca criada pelo Harvey só roda com o agente ativo e o ciclo aberto.
+    // Busca pedida por uma pessoa nunca depende do estado do agente.
+    if (queued.harveyRunId) {
+      const check = await checkHarveyMayProceed(prisma, {
+        organizationId: data.organizationId,
+        campaignId: queued.campaignId,
+        step: 'research',
+      });
+      if (!check.ok) {
+        const skipped = await withTenantContext(prisma, data.organizationId, async (tx) => {
+          await tx.scrapeJob.update({
+            where: { id: queued.id },
+            data: { status: 'CANCELLED', errorMessage: HARVEY_SKIP_REASON_LABELS[check.reason], finishedAt: new Date() },
+          });
+          return recordHarveyEvent(tx, {
+            organizationId: data.organizationId,
+            type: 'research.search',
+            phase: 'RESEARCHING',
+            title: `Pesquisa de ${queued.businessType} em ${queued.city}, ${queued.state} cancelada — ${HARVEY_SKIP_REASON_LABELS[check.reason]}`,
+            idempotencyKey: `research.search:${queued.id}`,
+            status: 'SKIPPED',
+            runId: queued.harveyRunId,
+            campaignId: queued.campaignId,
+            scrapeJobId: queued.id,
+            result: { reason: check.reason },
+          });
+        });
+        await publishActivities(context.publish, [{ activity: skipped }]);
+        return prisma.scrapeJob.findFirstOrThrow({ where: { id: queued.id, organizationId: data.organizationId } });
+      }
+    }
+
+    const jobStartedAt = new Date();
     // Passo 1 — tx curta: marca RUNNING (com retry — ver comentário acima).
     await markScrapeJobRunningWithRetry(prisma, data.organizationId, data.scrapeJobId);
 
-    // Passo 2 — FORA de qualquer transação: ver comentário da função acima.
-    // Lê via `prisma` direto (sem tx/tenant-context) — RLS permite (fallback
-    // "sem contexto = allow", ver migration `20260902120100_leads_prospecting_rls`),
-    // e o filtro explícito de `organizationId` abaixo garante o isolamento de
-    // qualquer forma (defesa em profundidade, igual ao resto do sistema).
+    // Passo 2 — FORA de qualquer transação (ver comentário da função acima);
+    // RLS permite sem contexto e o filtro explícito de organizationId isola.
     const scrapeJob = await prisma.scrapeJob.findFirstOrThrow({
       where: { id: data.scrapeJobId, organizationId: data.organizationId },
     });
+
+    const started = await withTenantContext(prisma, data.organizationId, (tx) =>
+      startHarveyActivity(tx, {
+        organizationId: data.organizationId,
+        type: 'research.search',
+        phase: 'RESEARCHING',
+        title: `Pesquisando ${scrapeJob.businessType} em ${scrapeJob.city}, ${scrapeJob.state}`,
+        idempotencyKey: `research.search:${scrapeJob.id}`,
+        runId: scrapeJob.harveyRunId,
+        campaignId: scrapeJob.campaignId,
+        scrapeJobId: scrapeJob.id,
+        queueJobId: context.queueJobId ?? null,
+        actorType: data.actorType,
+        actorId: data.actorId ?? null,
+      }),
+    );
+    activityId = started.id;
+    await publishActivities(context.publish, [{ activity: started }]);
 
     const organization = await prisma.organization.findUniqueOrThrow({
       where: { id: data.organizationId },
@@ -1577,6 +1646,8 @@ export async function processLeadScrapeJob(
     // Passo 3 — tx curta: persiste os leads (upsert + score + enrichment) e
     // acumula (sem enfileirar ainda — ver Passo 3.5) os jobs de rascunho
     // automático de outreach (B4/Task 11).
+    const leadActivities: { activity: HarveyActivity; leadName: string }[] = [];
+    let newLeads = 0;
     const { count: leadsFound, autodraftJobs, websiteProfileJobs } = await withTenantContext(
       prisma,
       data.organizationId,
@@ -1665,6 +1736,13 @@ export async function processLeadScrapeJob(
           }
           count += 1;
 
+          if (scrapeJob.campaignId && !lead.campaignId) {
+            lead = await tx.lead.update({ where: { id: lead.id }, data: { campaignId: scrapeJob.campaignId } });
+          }
+          const isNewLead = lead.createdAt >= jobStartedAt;
+          if (isNewLead) newLeads += 1;
+          leadActivities.push(...(await recordLeadActivities(tx, data, scrapeJob, lead, isNewLead)));
+
           // Gatilho por evento do rascunho automático de outreach (B4/Task
           // 11) — dispara no exato momento em que ESTE lead vira QUALIFIED
           // com pelo menos um canal de contato suportado, dentro do mesmo
@@ -1706,6 +1784,7 @@ export async function processLeadScrapeJob(
                   leadId: lead.id,
                   actorType: data.actorType,
                   actorId: data.actorId,
+                  trigger: 'AUTOMATIC',
                 });
               } else if (autodraftJobs.length < AUTODRAFT_MAX_PER_ORG_PER_JOB) {
                 const channel = resolveAutodraftChannel(lead);
@@ -1714,6 +1793,7 @@ export async function processLeadScrapeJob(
                     organizationId: data.organizationId,
                     leadId: lead.id,
                     channel,
+                    trigger: 'AUTOMATIC',
                   });
                 }
               }
@@ -1730,6 +1810,20 @@ export async function processLeadScrapeJob(
     // enfileirar (Redis indisponível, etc.) nunca derruba o `ScrapeJob`, que
     // já persistiu os leads corretamente no Passo 3 — só reporta e segue,
     // mesma disciplina do bookkeeping de `finalizeJob` mais abaixo.
+    await publishActivities(context.publish, leadActivities);
+
+    // Análise de site e rascunho são trabalho automático: com o Harvey pausado
+    // no meio da busca, os leads ficam gravados e o tick retoma depois.
+    const cascade = await checkHarveyMayProceed(prisma, {
+      organizationId: data.organizationId,
+      campaignId: scrapeJob.campaignId,
+      step: 'site_analysis',
+    });
+    if (!cascade.ok) {
+      autodraftJobs.length = 0;
+      websiteProfileJobs.length = 0;
+    }
+
     for (const autodraftJob of autodraftJobs) {
       try {
         await enqueueAutodraft(autodraftJob);
@@ -1772,12 +1866,142 @@ export async function processLeadScrapeJob(
     }
 
     const cost = rawCandidates.length * SCRAPING_COST_PER_LEAD_USD[scrapeJob.sourceType];
-    return await finalizeJob(prisma, redis, data, { status: 'COMPLETED', leadsFound, cost, enrichmentCost });
+    const finalized = await finalizeJob(prisma, redis, data, { status: 'COMPLETED', leadsFound, cost, enrichmentCost });
+    await finishSearchActivity(prisma, context.publish, data.organizationId, activityId, harveyRunId, {
+      status: 'SUCCEEDED',
+      title: `Pesquisa de ${scrapeJob.businessType} em ${scrapeJob.city}, ${scrapeJob.state}: ${newLeads} novos leads`,
+      result: {
+        found: rawCandidates.length,
+        saved: leadsFound,
+        newLeads,
+        duplicates: leadsFound - newLeads,
+        costUsd: cost + enrichmentCost,
+      },
+    });
+    return finalized;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-    return prisma.scrapeJob.update({
+    const failed = await prisma.scrapeJob.update({
       where: { id: data.scrapeJobId },
       data: { status: 'FAILED', errorMessage, finishedAt: new Date() },
     });
+    await finishSearchActivity(prisma, context.publish, data.organizationId, activityId, harveyRunId, {
+      status: 'FAILED',
+      title: `Pesquisa de ${failed.businessType} em ${failed.city}, ${failed.state} falhou`,
+      errorMessage,
+    }).catch(() => undefined);
+    return failed;
   }
+}
+
+async function finishSearchActivity(
+  prisma: PrismaClient,
+  publish: HarveyPublish | undefined,
+  organizationId: string,
+  activityId: string | null,
+  runId: string | null,
+  outcome: Parameters<typeof finishHarveyActivity>[2],
+): Promise<void> {
+  if (!activityId) return;
+  const finished = await withTenantContext(prisma, organizationId, async (tx) => {
+    const activity = await finishHarveyActivity(tx, activityId, outcome);
+    if (outcome.status === 'SUCCEEDED') await markRunSuccess(tx, runId);
+    if (outcome.status === 'FAILED') await markRunError(tx, runId, outcome.errorMessage ?? 'Falha na pesquisa');
+    return activity;
+  });
+  await publishActivities(publish, [{ activity: finished }]);
+}
+
+// Lead novo, qualificação e comparação com as ofertas, com a justificativa
+// tirada do próprio score (determinístico). Chave por ciclo (ou pela busca,
+// fora do Harvey) para não duplicar em retentativas.
+async function recordLeadActivities(
+  tx: Prisma.TransactionClient,
+  data: LeadScrapeJobData,
+  scrapeJob: ScrapeJob,
+  lead: Lead,
+  isNew: boolean,
+): Promise<{ activity: HarveyActivity; leadName: string }[]> {
+  const scope = scrapeJob.harveyRunId ?? scrapeJob.id;
+  const base = {
+    organizationId: data.organizationId,
+    runId: scrapeJob.harveyRunId,
+    campaignId: scrapeJob.campaignId,
+    scrapeJobId: scrapeJob.id,
+    leadId: lead.id,
+    actorType: data.actorType,
+    actorId: data.actorId ?? null,
+    status: 'SUCCEEDED' as const,
+  };
+  const recorded: { activity: HarveyActivity; leadName: string }[] = [];
+  if (isNew) {
+    recorded.push({
+      leadName: lead.name,
+      activity: await recordHarveyEvent(tx, {
+        ...base,
+        type: 'research.lead_found',
+        phase: 'RESEARCHING',
+        title: `Encontrou ${lead.name} (novo lead)`,
+        idempotencyKey: `research.lead_found:${lead.id}`,
+        result: { source: scrapeJob.sourceType, city: lead.city, state: lead.state, category: lead.googleCategory },
+      }),
+    });
+  }
+  if (lead.score === null || (lead.status !== 'QUALIFIED' && lead.status !== 'DISQUALIFIED')) return recorded;
+  const breakdown = (lead.scoreBreakdown ?? null) as unknown as LeadScoreBreakdown | null;
+  const qualified = lead.status === 'QUALIFIED';
+  recorded.push({
+    leadName: lead.name,
+    activity: await recordHarveyEvent(tx, {
+      ...base,
+      type: 'qualification.score',
+      phase: 'QUALIFYING',
+      title: `${lead.name} ${qualified ? 'qualificado' : 'não qualificado'} (${lead.score} pts)`,
+      idempotencyKey: `qualification.score:${lead.id}:${scope}`,
+      result: { score: lead.score, qualified },
+      rationale: { reasons: scoreReasons(breakdown, lead) },
+    }),
+  });
+  if (qualified && breakdown?.matchedOfferingId) {
+    const offering = await tx.serviceOffering.findFirst({
+      where: { id: breakdown.matchedOfferingId, organizationId: data.organizationId },
+      select: { name: true },
+    });
+    recorded.push({
+      leadName: lead.name,
+      activity: await recordHarveyEvent(tx, {
+        ...base,
+        type: 'qualification.offering_match',
+        phase: 'QUALIFYING',
+        title: `Comparou ${lead.name} com os produtos → ${offering?.name ?? 'oferta sugerida'}`,
+        idempotencyKey: `qualification.offering_match:${lead.id}:${scope}`,
+        result: { offeringId: breakdown.matchedOfferingId, offeringName: offering?.name ?? null },
+        rationale: {
+          reasons: breakdown.matchedSignals.length
+            ? breakdown.matchedSignals.map((signal) => `Sinal encontrado: ${signal}`)
+            : ['Perfil compatível com o público-alvo da oferta'],
+        },
+      }),
+    });
+  }
+  return recorded;
+}
+
+export function scoreReasons(
+  breakdown: LeadScoreBreakdown | null,
+  lead: Pick<Lead, 'rating' | 'reviewCount'>,
+): string[] {
+  if (!breakdown) return [];
+  const reasons: string[] = [];
+  if (breakdown.hasNoWebsitePoints > 0) reasons.push(`Sem site próprio (+${breakdown.hasNoWebsitePoints})`);
+  if (breakdown.icpFitPoints > 0) reasons.push(`Perfil compatível com o público-alvo (+${breakdown.icpFitPoints})`);
+  if (breakdown.activityPoints > 0) {
+    const reviews = lead.reviewCount ? ` · ${lead.rating ?? '?'}★ em ${lead.reviewCount} avaliações` : '';
+    reasons.push(`Negócio ativo${reviews} (+${breakdown.activityPoints})`);
+  }
+  if (breakdown.keywordMatchPoints > 0) reasons.push(`Palavras-chave da oferta (+${breakdown.keywordMatchPoints})`);
+  if (breakdown.signalFitPoints > 0) {
+    reasons.push(`Sinais do site: ${breakdown.matchedSignalCodes.join(', ')} (+${breakdown.signalFitPoints})`);
+  }
+  return reasons;
 }

@@ -26,7 +26,6 @@ import {
   scanDealStageStaleAutomations,
   scanDealSilentForAutomations,
 } from './automation-scan';
-import { scanProspectingTargets } from './prospecting-scan';
 import { scanRedditMiningTopics } from './reddit-mining-scan';
 import { processRedditTopicScanJob } from './reddit-topic-scan-processor';
 import { scanOutreachFollowups } from './outreach-followup-scan';
@@ -36,6 +35,14 @@ import { scanSpendAlerts } from './spend-alert-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
 import { processWebsiteProfileJob } from './website-profiler-processor';
+import { runHarveyTick } from './harvey-orchestrator';
+import { createHarveyPublisher } from './harvey-events';
+import {
+  createHarveyOrchestratorQueue,
+  createHarveyOrchestratorWorker,
+  createSendReconcileQueue,
+  registerHarveySchedulers,
+} from './harvey-orchestrator-queue';
 
 // Intervalo do scan (trigger) — curto o bastante pra ser responsivo em
 // dev/demo, sem martelar o Postgres à toa em produção real. Fixo por ora;
@@ -128,13 +135,7 @@ async function main(): Promise<void> {
   // em vez de falhar de forma confusa no primeiro job.
   const env = validateEnv(process.env);
   const logger = createLogger(env);
-  // Diferente de SCAN_INTERVAL_MS (fixo, ver comentário no topo do arquivo):
-  // este intervalo é configurável por ambiente desde já (ver
-  // packages/config/env/schema.ts) — um `ScrapeJob` automático tem custo
-  // real (orçamento de scraping), então cada ambiente pode querer um ritmo
-  // diferente sem precisar de rebuild.
-  const PROSPECTING_SCAN_INTERVAL_MS = env.PROSPECTING_SCAN_INTERVAL_MS;
-  // Mesmo racional de PROSPECTING_SCAN_INTERVAL_MS acima: cada busca via
+  // Configurável por ambiente: cada busca via
   // Camoufox tem custo (rate-limit próprio, ver CamofoxGatewayService), então
   // este intervalo também é configurável por ambiente desde já (ver
   // packages/config/env/schema.ts), default 1 dia.
@@ -174,6 +175,7 @@ async function main(): Promise<void> {
     contactEnrichment: createContactEnrichmentGateway(env),
   };
   const leadScrapeQueue = createLeadScrapeQueue(connection);
+  const harveyPublish = createHarveyPublisher(connection);
   // Fila `outreach-autodraft` (Task 11): só produtora aqui — quem consome é
   // `apps/api` (`outreach-autodraft.consumer.ts`). `processLeadScrapeJob`
   // enfileira nela logo depois de `upsertLead`, quando um lead qualifica com
@@ -214,13 +216,16 @@ async function main(): Promise<void> {
       gateways,
       connection,
       job.data,
-      (data) => outreachAutodraftQueue.add('autodraft', data),
-      (data) => websiteProfilerQueue.add('investigate', data),
+      (data) =>
+        outreachAutodraftQueue.add('autodraft', data, { deduplication: { id: `outreach-autodraft:${data.leadId}` } }),
+      (data) =>
+        websiteProfilerQueue.add('investigate', data, { deduplication: { id: `website-profile:${data.leadId}` } }),
       // Fallback automático Apify→Camofox (ver maybeEnqueueApifyFallback em
       // lead-scrape-processor.ts) — reaproveita a MESMA fila `leadScrapeQueue`
       // já instanciada acima (também usada por `runProspectingScan`), não uma
       // fila nova.
       (data) => leadScrapeQueue.add('scrape', data),
+      { queueJobId: job.id, publish: harveyPublish },
     ),
   );
 
@@ -237,7 +242,13 @@ async function main(): Promise<void> {
   // `investigate_company_website`). Ver
   // docs/planning/2026-11-06-harvey-inteligencia-comercial.md §5.
   const websiteProfilerWorker = createWebsiteProfilerWorker(connection, (job) =>
-    processWebsiteProfileJob(prisma, job.data, (data) => outreachAutodraftQueue.add('autodraft', data)),
+    processWebsiteProfileJob(
+      prisma,
+      job.data,
+      (data) =>
+        outreachAutodraftQueue.add('autodraft', data, { deduplication: { id: `outreach-autodraft:${data.leadId}` } }),
+      { queueJobId: job.id, publish: harveyPublish },
+    ),
   );
 
   websiteProfilerWorker.on('failed', (job, error) => {
@@ -325,25 +336,54 @@ async function main(): Promise<void> {
   await runMeetingReminderScan();
   setInterval(runMeetingReminderScan, SCAN_INTERVAL_MS);
 
-  // Scan de prospecção autônoma (Task 7) — mesmo formato de `runScan`
-  // acima, rodando contra a mesma fila `leadScrapeQueue`/`connection` já
-  // instanciadas nesta função (nenhuma fila/conexão nova).
-  async function runProspectingScan(): Promise<void> {
-    try {
-      const created = await scanProspectingTargets(prisma, connection, (job, data) =>
-        leadScrapeQueue.add('scrape', data),
-      );
-      if (created > 0) {
-        logger.info({ created }, 'scan de prospecção enfileirou jobs de scraping');
-      }
-    } catch (error) {
-      logger.error({ err: error }, 'scan de prospecção de alvos falhou');
-      Sentry.captureException(error);
+  // Harvey: a prospecção autônoma agora é o orquestrador (tick por minuto,
+  // agendado no BullMQ e único entre réplicas), que só trabalha com o agente
+  // ativo. O follow-up de outreach roda no mesmo agendamento.
+  const sendReconcileQueue = createSendReconcileQueue(connection);
+  const queuesByName = new Map<string, { getJob(id: string): Promise<{ getState(): Promise<string> } | undefined> }>([
+    [leadScrapeQueue.name, leadScrapeQueue],
+    [websiteProfilerQueue.name, websiteProfilerQueue],
+    [outreachAutodraftQueue.name, outreachAutodraftQueue],
+  ]);
+  const harveyQueue = createHarveyOrchestratorQueue(connection);
+  const harveyWorker = createHarveyOrchestratorWorker(connection, async (job) => {
+    if (job.name === 'followup') {
+      const notified = await scanOutreachFollowups(prisma, OUTREACH_FOLLOWUP_THRESHOLD_DAYS);
+      if (notified > 0) logger.info({ notified }, 'scan de follow-up de outreach notificou usuários');
+      return;
     }
-  }
-
-  await runProspectingScan();
-  setInterval(runProspectingScan, PROSPECTING_SCAN_INTERVAL_MS);
+    const summary = await runHarveyTick(
+      {
+        prisma,
+        kv: {
+          get: (key) => connection.get(key),
+          set: (key, value) => connection.set(key, value),
+          claim: async (key, ttlSeconds) => (await connection.set(key, '1', 'EX', ttlSeconds, 'NX')) === 'OK',
+        },
+        queues: {
+          leadScrape: leadScrapeQueue,
+          websiteProfile: websiteProfilerQueue,
+          outreachAutodraft: outreachAutodraftQueue,
+          sendReconcile: sendReconcileQueue,
+        },
+        isQueueJobAlive: async (queueName, jobId) => {
+          const found = await queuesByName.get(queueName)?.getJob(jobId);
+          if (!found) return false;
+          return ['active', 'waiting', 'delayed', 'prioritized', 'waiting-children'].includes(await found.getState());
+        },
+        publish: harveyPublish,
+      },
+      job.data.organizationId,
+    );
+    if (summary.scrapeJobs + summary.profiles + summary.drafts + summary.runsOpened + summary.runsClosed > 0) {
+      logger.info(summary, 'tick do Harvey');
+    }
+  });
+  harveyWorker.on('failed', (job, error) => {
+    logger.error({ jobId: job?.id, err: error }, 'tick do Harvey falhou');
+    Sentry.captureException(error, { extra: { jobId: job?.id } });
+  });
+  await registerHarveySchedulers(harveyQueue, OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS);
 
   // Scan de mineração no Reddit (Task 13) — mesmo formato de `runScan`/
   // `runProspectingScan` acima, rodando contra o gateway Camoufox já
@@ -367,26 +407,6 @@ async function main(): Promise<void> {
   await runRedditMiningScan();
   setInterval(runRedditMiningScan, REDDIT_MINING_SCAN_INTERVAL_MS);
 
-  // Scan de lembrete de follow-up (plano
-  // pensando-como-empresa-com-agile-beaver.md) — mesmo formato de
-  // `runScan`/`runProspectingScan`/`runRedditMiningScan` acima, mas sem fila
-  // (ver comentário de `scanOutreachFollowups`: ação local, sem chamada de
-  // rede externa).
-  async function runOutreachFollowupScan(): Promise<void> {
-    try {
-      const notified = await scanOutreachFollowups(prisma, OUTREACH_FOLLOWUP_THRESHOLD_DAYS);
-      if (notified > 0) {
-        logger.info({ notified }, 'scan de follow-up de outreach notificou usuários');
-      }
-    } catch (error) {
-      logger.error({ err: error }, 'scan de follow-up de outreach falhou');
-      Sentry.captureException(error);
-    }
-  }
-
-  await runOutreachFollowupScan();
-  setInterval(runOutreachFollowupScan, OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS);
-
   // Alertas de gasto (50/80/100% dos tetos de IA e do Revenue Engine). De
   // hora em hora: é aviso; o corte síncrono fica em cada caminho que gasta.
   const SPEND_ALERT_SCAN_INTERVAL_MS = 3_600_000;
@@ -408,7 +428,7 @@ async function main(): Promise<void> {
   logger.info(
     `OpsMind worker rodando — filas "${queue.name}" (scan a cada ${SCAN_INTERVAL_MS}ms), "${leadScrapeQueue.name}" e "${redditTopicScanWorker.name}"`,
   );
-  logger.info(`Scan de prospecção autônoma a cada ${PROSPECTING_SCAN_INTERVAL_MS}ms`);
+  logger.info('Harvey: tick a cada 60s via job scheduler do BullMQ (único entre réplicas)');
   logger.info(`Scan de mineração no Reddit a cada ${REDDIT_MINING_SCAN_INTERVAL_MS}ms`);
   logger.info(
     `Scan de follow-up de outreach a cada ${OUTREACH_FOLLOWUP_SCAN_INTERVAL_MS}ms (threshold ${OUTREACH_FOLLOWUP_THRESHOLD_DAYS} dias)`,

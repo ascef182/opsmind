@@ -4,6 +4,7 @@ import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { tenantContextStorage } from '../context/tenant-context.storage';
 import { TenantContextInterceptor } from './tenant-context.interceptor';
+import { runAfterCommit } from '../context/after-commit';
 
 function createContext(request: Record<string, unknown>, handler: () => void = () => undefined): ExecutionContext {
   return {
@@ -97,5 +98,42 @@ describe('TenantContextInterceptor', () => {
     await lastValueFrom(interceptor.intercept(createContext({ user: { id: 'user-1' } }, handler), next));
 
     expect(prisma.runInTransaction).toHaveBeenCalledWith(expect.any(Function), 60_000);
+  });
+
+  it('stream route skips tenant transaction', async () => {
+    const handler = () => undefined;
+    Reflect.defineMetadata('skipTenantTransaction', true, handler);
+    const next: CallHandler = { handle: jest.fn().mockReturnValue(of('stream')) };
+
+    const result = await lastValueFrom(
+      interceptor.intercept(createContext({ user: { id: 'user-1' }, membership: { organizationId: 'org-1' } }, handler), next),
+    );
+
+    expect(result).toBe('stream');
+    expect(prisma.runInTransaction).not.toHaveBeenCalled();
+  });
+
+  it('runs after-commit effects only when the transaction succeeds', async () => {
+    const effect = jest.fn();
+    const ok: CallHandler = {
+      handle: jest.fn(() => {
+        runAfterCommit(effect);
+        return of('ok');
+      }),
+    };
+    await lastValueFrom(interceptor.intercept(createContext({ user: { id: 'user-1' } }), ok));
+    expect(effect).toHaveBeenCalledTimes(1);
+
+    const lost = jest.fn();
+    const failing: CallHandler = {
+      handle: jest.fn(() => {
+        runAfterCommit(lost);
+        return throwError(() => new Error('falhou'));
+      }),
+    };
+    await expect(lastValueFrom(interceptor.intercept(createContext({ user: { id: 'user-1' } }), failing))).rejects.toThrow(
+      'falhou',
+    );
+    expect(lost).not.toHaveBeenCalled();
   });
 });

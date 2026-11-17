@@ -1,3 +1,4 @@
+import type { HarveyJobTrigger } from './harvey';
 import type { SocialLink } from './social-link.types';
 
 // Espelho do enum OutreachChannel do Prisma (packages/database/prisma/schema.prisma).
@@ -26,6 +27,9 @@ export interface OutreachAutodraftJobData {
   leadId: string;
   channel: OutreachChannel;
   serviceOfferingId?: string;
+  // Rascunho automático é sempre AUTOMATIC hoje; o campo existe para um pedido
+  // manual futuro pela fila não depender do estado do Harvey.
+  trigger?: HarveyJobTrigger;
 }
 
 /**

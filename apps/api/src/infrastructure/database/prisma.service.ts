@@ -7,6 +7,14 @@ import { tenantContextStorage } from '../../shared/context/tenant-context.storag
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+  // Transação própria, confirmada na hora, mesmo dentro de uma request: para
+  // registros que não podem sumir num rollback da request (ex.: reivindicação
+  // e resultado de um envio externo). Aplica o mesmo contexto de RLS.
+  readonly runDetachedTenantTransaction: <T>(
+    organizationId: string,
+    fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  ) => Promise<T>;
+
   constructor(configService: ConfigService<Env, true>) {
     // Role restrita (sem BYPASSRLS) — nunca a mesma conexão usada por
     // `prisma migrate`/seed. Ver infra/docker/init/02-app-role.sql.
@@ -18,6 +26,17 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     // chamada `prisma.customer.findMany()` feita por qualquer service passa
     // a enxergar a transação de request aberta pelo TenantContextInterceptor,
     // quando ela existir, sem nenhuma mudança nos services.
+    // Arrow function: `this` fica preso ao cliente original. O cliente de
+    // transação do Prisma expõe os métodos deste serviço, então um método comum
+    // chamado dentro de uma request receberia a transação como `this`.
+    this.runDetachedTenantTransaction = (organizationId, fn) =>
+      tenantContextStorage.exit(() =>
+        this.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_org_id', ${organizationId}, true)`;
+          return fn(tx);
+        }),
+      );
+
     return createTenantAwareProxy(this, tenantContextStorage);
   }
 
@@ -49,4 +68,5 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     }
     return this.$transaction(fn, { timeout: timeoutMs });
   }
+
 }

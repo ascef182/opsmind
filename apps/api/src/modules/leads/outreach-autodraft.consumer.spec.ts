@@ -43,12 +43,26 @@ describe('OutreachAutodraftConsumer', () => {
   // job commitou normalmente). O teste de guarda contra rollback (Fix 2 do
   // review final) sobrescreve isso para simular o caso em que a transação
   // nunca commitou.
-  function buildPrisma(leadOverrides: Partial<{ status: string }> = {}) {
+  function buildRecorder() {
     return {
+      start: jest.fn().mockResolvedValue({ id: 'act-1' }),
+      finish: jest.fn().mockResolvedValue({ id: 'act-1' }),
+      event: jest.fn().mockResolvedValue({ id: 'evt-1' }),
+    };
+  }
+
+  function buildPrisma(
+    leadOverrides: Partial<{ status: string }> = {},
+    controlState: 'ACTIVE' | 'PAUSED' | 'STOPPED' = 'ACTIVE',
+  ) {
+    return {
+      harveyAgent: { findUnique: jest.fn().mockResolvedValue({ controlState }) },
       lead: {
         findUnique: jest.fn().mockResolvedValue({
           id: jobData.leadId,
           organizationId: jobData.organizationId,
+          name: 'Smile Dental',
+          campaignId: null,
           status: 'QUALIFIED',
           ...leadOverrides,
         }),
@@ -79,6 +93,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       buildOutreachService() as never,
       buildPrisma() as never,
+      buildRecorder() as never,
     );
 
     consumer.onModuleInit();
@@ -93,6 +108,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       outreachService as never,
       buildPrisma() as never,
+      buildRecorder() as never,
     );
     consumer.onModuleInit();
 
@@ -132,6 +148,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       outreachService as never,
       prisma as never,
+      buildRecorder() as never,
     );
     consumer.onModuleInit();
 
@@ -154,6 +171,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       outreachService as never,
       prisma as never,
+      buildRecorder() as never,
     );
     consumer.onModuleInit();
 
@@ -176,6 +194,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       outreachService as never,
       buildPrisma() as never,
+      buildRecorder() as never,
     );
     consumer.onModuleInit();
 
@@ -194,6 +213,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       outreachService as never,
       prisma as never,
+      buildRecorder() as never,
     );
     consumer.onModuleInit();
 
@@ -210,6 +230,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       outreachService as never,
       buildPrisma() as never,
+      buildRecorder() as never,
     );
     consumer.onModuleInit();
 
@@ -226,6 +247,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       outreachService as never,
       buildPrisma() as never,
+      buildRecorder() as never,
     );
     consumer.onModuleInit();
 
@@ -239,6 +261,7 @@ describe('OutreachAutodraftConsumer', () => {
       buildConfigService() as never,
       buildOutreachService() as never,
       buildPrisma() as never,
+      buildRecorder() as never,
     );
     consumer.onModuleInit();
     const workerInstance = (Worker as unknown as jest.Mock).mock.results[0]!.value as {
@@ -248,5 +271,56 @@ describe('OutreachAutodraftConsumer', () => {
     await consumer.onModuleDestroy();
 
     expect(workerInstance.close).toHaveBeenCalled();
+  });
+
+  describe('Harvey', () => {
+    it('skips an automatic draft while Harvey is paused, recording why', async () => {
+      const outreachService = buildOutreachService();
+      const recorder = buildRecorder();
+      const consumer = new OutreachAutodraftConsumer(
+        buildConfigService() as never,
+        outreachService as never,
+        buildPrisma({}, 'PAUSED') as never,
+        recorder as never,
+      );
+      await consumer.process({ data: jobData, id: 'job-1', opts: {} } as never);
+      expect(outreachService.generateDraft).not.toHaveBeenCalled();
+      expect(recorder.event).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'outreach.draft', status: 'SKIPPED', result: { reason: 'AGENT_PAUSED' } }),
+      );
+    });
+
+    it('a manual draft request runs even while Harvey is paused', async () => {
+      const outreachService = buildOutreachService();
+      outreachService.generateDraft.mockResolvedValue({ id: 'msg-1', status: 'DRAFT' });
+      const consumer = new OutreachAutodraftConsumer(
+        buildConfigService() as never,
+        outreachService as never,
+        buildPrisma({}, 'PAUSED') as never,
+        buildRecorder() as never,
+      );
+      await consumer.process({ data: { ...jobData, trigger: 'MANUAL' }, id: 'job-1', opts: {} } as never);
+      expect(outreachService.generateDraft).toHaveBeenCalledTimes(1);
+    });
+
+    it('records outreach.draft STARTED→SUCCEEDED and the awaiting-approval event', async () => {
+      const outreachService = buildOutreachService();
+      outreachService.generateDraft.mockResolvedValue({ id: 'msg-9', status: 'DRAFT', strategy: 'NO_WEBSITE' });
+      const recorder = buildRecorder();
+      const consumer = new OutreachAutodraftConsumer(
+        buildConfigService() as never,
+        outreachService as never,
+        buildPrisma() as never,
+        recorder as never,
+      );
+      await consumer.process({ data: jobData, id: 'job-1', opts: {} } as never);
+      expect(recorder.start).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'outreach.draft', idempotencyKey: 'outreach.draft:lead-1', queueJobId: 'job-1' }),
+      );
+      expect(recorder.finish).toHaveBeenCalledWith('act-1', expect.objectContaining({ status: 'SUCCEEDED' }));
+      expect(recorder.event).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'outreach.awaiting_approval', outreachMessageId: 'msg-9' }),
+      );
+    });
   });
 });

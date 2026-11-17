@@ -5,6 +5,8 @@ import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { tenantContextStorage } from '../context/tenant-context.storage';
 import { TRANSACTION_TIMEOUT_KEY } from '../decorators/transaction-timeout.decorator';
+import { SKIP_TENANT_TRANSACTION_KEY } from '../decorators/skip-tenant-transaction.decorator';
+import { discardAfterCommit, flushAfterCommit } from '../context/after-commit';
 
 interface RequestWithTenantContext {
   user?: { id: string };
@@ -47,12 +49,17 @@ export class TenantContextInterceptor implements NestInterceptor {
     if (!request.user) {
       return next.handle();
     }
+    if (this.reflector.get<boolean | undefined>(SKIP_TENANT_TRANSACTION_KEY, context.getHandler())) {
+      return next.handle();
+    }
 
     const { user, membership } = request;
     const timeoutMs = this.reflector.get<number | undefined>(TRANSACTION_TIMEOUT_KEY, context.getHandler());
 
-    return from(
-      this.prisma.runInTransaction(async (tx) => {
+    let activeTx: object | undefined;
+    const run = this.prisma
+      .runInTransaction(async (tx) => {
+        activeTx = tx;
         return tenantContextStorage.run(tx, async () => {
           await tx.$executeRaw`SELECT set_config('app.current_user_id', ${user.id}, true)`;
           if (membership) {
@@ -60,7 +67,17 @@ export class TenantContextInterceptor implements NestInterceptor {
           }
           return firstValueFrom(next.handle());
         });
-      }, timeoutMs),
-    );
+      }, timeoutMs)
+      .then(
+        async (result) => {
+          if (activeTx) await flushAfterCommit(activeTx);
+          return result;
+        },
+        (error: unknown) => {
+          if (activeTx) discardAfterCommit(activeTx);
+          throw error;
+        },
+      );
+    return from(run);
   }
 }

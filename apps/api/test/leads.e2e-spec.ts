@@ -241,6 +241,15 @@ describe('Leads/Prospecção (e2e)', () => {
       endTurn('Abertura: Olá!\nPergunta de descoberta: Como chegam os pedidos hoje?\nPróximo passo: Posso mostrar um conceito?'),
     );
 
+    // O rascunho automático disparado pela qualificação é trabalho do Harvey:
+    // só acontece com o agente ativo (Harvey Fase 1). Lead manual não tem
+    // campanha, então vale só o estado do agente.
+    await request(app.getHttpServer())
+      .post(`/organizations/${organizationId}/revenue/harvey/commands`)
+      .set(auth)
+      .send({ command: 'START' })
+      .expect(201);
+
     const scoreRes = await request(app.getHttpServer())
       .post(`/organizations/${organizationId}/leads/${leadId}/score`)
       .set(auth)

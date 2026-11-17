@@ -1,4 +1,19 @@
+import { ServiceUnavailableException } from '@nestjs/common';
+
 export const EMAIL_SERVICE = Symbol('EMAIL_SERVICE');
+
+// Falha de envio com o desfecho conhecido: NOT_SENT = o provedor recusou
+// (nada saiu); UNKNOWN = pode ter saído (erro interno, rede, conflito de
+// idempotência) e precisa de reconciliação, nunca de reenvio cego.
+export class EmailSendError extends ServiceUnavailableException {
+  constructor(
+    message: string,
+    readonly code: string | null,
+    readonly outcome: 'NOT_SENT' | 'UNKNOWN',
+  ) {
+    super(message);
+  }
+}
 
 export interface SendInvitationEmailParams {
   to: string;

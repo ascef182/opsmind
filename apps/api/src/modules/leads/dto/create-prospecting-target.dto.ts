@@ -8,6 +8,7 @@ import {
   Max,
   MaxLength,
   Min,
+  IsUUID,
 } from 'class-validator';
 import type { ScrapeSourceType } from '@opsmind/database';
 import { AUTOMATABLE_SOURCE_TYPES } from './create-scrape-job.dto';
@@ -57,4 +58,8 @@ export class CreateProspectingTargetDto {
   @Min(1)
   @Max(90)
   cooldownDays?: number;
+
+  @IsOptional()
+  @IsUUID()
+  campaignId?: string;
 }

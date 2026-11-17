@@ -1,3 +1,4 @@
+import type { HarveyJobTrigger } from './harvey';
 import type { AuditActorType } from './audit.types';
 
 // Nome da fila BullMQ do profiler de site — compartilhada entre apps/api
@@ -21,4 +22,7 @@ export interface WebsiteProfileJobData {
   leadId: string;
   actorType: AuditActorType;
   actorId?: string;
+  // MANUAL = pedido explícito de uma pessoa (roda mesmo com o Harvey pausado).
+  // Ausente em jobs antigos: deduzido de actorType (USER → MANUAL).
+  trigger?: HarveyJobTrigger;
 }

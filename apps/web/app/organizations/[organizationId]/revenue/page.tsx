@@ -16,6 +16,7 @@ import {
 } from '@/components/revenue/revenue-ui';
 import { useRevenueOverview, useRevenueSettings } from '@/lib/revenue/use-revenue';
 import { CopyPerformanceSection } from '@/components/revenue/copy-performance';
+import { HarveyStatusStrip } from '@/components/harvey/harvey-status-strip';
 import type { RevenueKpiKey, RevenueOverview, RevenuePeriod } from '@/lib/revenue/types';
 import type { ApiError } from '@/lib/api-client';
 
@@ -58,6 +59,7 @@ export default function RevenueOverviewPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <HarveyStatusStrip organizationId={organizationId} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">{comparison}</p>
         <PeriodToggle value={period} onChange={setPeriod} />

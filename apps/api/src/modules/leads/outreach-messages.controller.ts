@@ -5,6 +5,8 @@ import { GenerateOutreachDto } from './dto/generate-outreach.dto';
 import { RejectOutreachDto } from './dto/reject-outreach.dto';
 import { EditOutreachDto } from './dto/edit-outreach.dto';
 import { ListOutreachMessagesQueryDto } from './dto/list-outreach-messages-query.dto';
+import { ResolveUnknownSendDto } from './dto/resolve-unknown-send.dto';
+import { OutreachDispatchService } from './outreach-dispatch.service';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 import { Roles } from '../../shared/decorators/roles.decorator';
@@ -26,7 +28,10 @@ const OUTREACH_DRAFT_TRANSACTION_TIMEOUT_MS = 90_000;
 @UseGuards(TenantGuard)
 @Controller('organizations/:organizationId')
 export class OutreachMessagesController {
-  constructor(private readonly outreachService: OutreachService) {}
+  constructor(
+    private readonly outreachService: OutreachService,
+    private readonly dispatchService: OutreachDispatchService,
+  ) {}
 
   @Roles(...WRITE_ROLES)
   @UseGuards(RolesGuard)
@@ -140,18 +145,32 @@ export class OutreachMessagesController {
     return this.outreachService.regenerate(organizationId, messageId, user.id);
   }
 
-  // Envio real (não um checkbox manual) — só para canal EMAIL, ver
-  // comentário de `OutreachService.send`. Continua sem contraparte de AI
-  // tool, mesma regra dura de toda transição deste controller.
+  // Envio real feito por uma pessoa (ver `OutreachDispatchService`). Não
+  // depende do estado do Harvey; continua sem contraparte de AI tool.
   @Roles(...WRITE_ROLES)
   @UseGuards(RolesGuard)
+  @TransactionTimeout(60_000)
   @Post('outreach-messages/:messageId/send')
   send(
     @Param('organizationId') organizationId: string,
     @Param('messageId') messageId: string,
     @CurrentUser() user: { id: string },
   ): Promise<OutreachMessage> {
-    return this.outreachService.send(organizationId, messageId, user.id);
+    return this.dispatchService.dispatch(organizationId, messageId, { type: 'USER', userId: user.id });
+  }
+
+  // Envio sem confirmação do provedor (SEND_UNKNOWN): a pessoa verificou no
+  // provedor e informa se saiu ou não.
+  @Roles(...WRITE_ROLES)
+  @UseGuards(RolesGuard)
+  @Post('outreach-messages/:messageId/resolve-unknown')
+  resolveUnknown(
+    @Param('organizationId') organizationId: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: { id: string },
+    @Body() dto: ResolveUnknownSendDto,
+  ): Promise<OutreachMessage> {
+    return this.dispatchService.resolveUnknown(organizationId, messageId, dto.outcome, user.id);
   }
 
   @Roles(...WRITE_ROLES)

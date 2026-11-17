@@ -10,7 +10,12 @@ describe('OrganizationsService', () => {
     runInTransaction: jest.Mock;
     organization: { findFirst: jest.Mock; findMany: jest.Mock };
   };
-  type Tx = { organization: { create: jest.Mock }; membership: { create: jest.Mock } };
+  type Tx = {
+    organization: { create: jest.Mock };
+    membership: { create: jest.Mock };
+    salesCampaign: { create: jest.Mock };
+    harveyAgent: { create: jest.Mock };
+  };
   let tx: Tx;
   let auditService: { log: jest.Mock };
 
@@ -18,6 +23,8 @@ describe('OrganizationsService', () => {
     tx = {
       organization: { create: jest.fn() },
       membership: { create: jest.fn() },
+      salesCampaign: { create: jest.fn() },
+      harveyAgent: { create: jest.fn() },
     };
     prisma = {
       runInTransaction: jest.fn((callback: (tx: Tx) => unknown) => callback(tx)),
@@ -53,6 +60,11 @@ describe('OrganizationsService', () => {
       expect(tx.membership.create).toHaveBeenCalledWith({
         data: { userId: 'user-1', organizationId: 'org-1', role: 'OWNER' },
       });
+      // Toda organização nasce com a campanha padrão e o Harvey parado.
+      expect(tx.salesCampaign.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ organizationId: 'org-1', name: 'Campanha padrão' }),
+      });
+      expect(tx.harveyAgent.create).toHaveBeenCalledWith({ data: { organizationId: 'org-1' } });
       expect(result).toBe(org);
     });
 

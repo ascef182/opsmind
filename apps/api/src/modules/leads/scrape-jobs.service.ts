@@ -4,6 +4,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { LeadScrapeQueueService } from '../../infrastructure/queue/lead-scrape-queue.service';
 import { CreateScrapeJobDto } from './dto/create-scrape-job.dto';
+import { CampaignsService } from '../harvey/campaigns.service';
 import { CreateScrapeJobBatchDto } from './dto/create-scrape-job-batch.dto';
 
 export interface ScrapeJobBatchResult {
@@ -33,16 +34,23 @@ export class ScrapeJobsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly leadScrapeQueueService: LeadScrapeQueueService,
+    private readonly campaignsService: CampaignsService,
   ) {}
 
   async create(
     organizationId: string,
     dto: CreateScrapeJobDto,
     actorUserId: string,
+    origin: { campaignId?: string; prospectingTargetId?: string } = {},
   ): Promise<ScrapeJob> {
+    // Busca manual também pertence a uma campanha, para os leads dela entrarem
+    // no acompanhamento do Harvey.
+    const campaignId = origin.campaignId ?? (await this.campaignsService.getDefault(organizationId)).id;
     const job = await this.prisma.scrapeJob.create({
       data: {
         organizationId,
+        campaignId,
+        prospectingTargetId: origin.prospectingTargetId ?? null,
         sourceType: dto.sourceType,
         city: dto.city,
         state: dto.state,

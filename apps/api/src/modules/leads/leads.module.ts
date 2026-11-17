@@ -21,6 +21,10 @@ import { LeadSignalsService } from './lead-signals.service';
 import { SignalCodesService } from './signal-codes.service';
 import { SignalCodesController } from './signal-codes.controller';
 import { OutreachAutodraftConsumer } from './outreach-autodraft.consumer';
+import { OutreachDispatchService } from './outreach-dispatch.service';
+import { OutreachSendReconcileConsumer } from './outreach-send-reconcile.consumer';
+import { CHANNEL_SENDERS, EmailChannelSender } from './channel-senders';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { BudgetService } from '../ai/services/budget.service';
 import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 import { AI_GATEWAY } from '../ai/gateway/ai-gateway.interface';
@@ -46,7 +50,15 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
  * são `@Global()`.
  */
 @Module({
-  imports: [ScrapingModule, QueueModule, EmailModule, OrganizationsModule, DealsModule, InternalNotesModule],
+  imports: [
+    ScrapingModule,
+    QueueModule,
+    EmailModule,
+    OrganizationsModule,
+    DealsModule,
+    InternalNotesModule,
+    NotificationsModule,
+  ],
   controllers: [
     ServiceOfferingsController,
     ScrapeJobsController,
@@ -66,6 +78,10 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     LeadSignalsService,
     SignalCodesService,
     OutreachAutodraftConsumer,
+    OutreachDispatchService,
+    OutreachSendReconcileConsumer,
+    EmailChannelSender,
+    { provide: CHANNEL_SENDERS, useFactory: (email: EmailChannelSender) => [email], inject: [EmailChannelSender] },
     BudgetService,
     AiOneShotRunner,
     { provide: AI_GATEWAY, useClass: ClaudeGatewayService },
@@ -78,6 +94,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     ScrapeJobsService,
     ProspectingTargetsService,
     OutreachService,
+    OutreachDispatchService,
     LeadAnalysisService,
     LeadSignalsService,
     SignalCodesService,

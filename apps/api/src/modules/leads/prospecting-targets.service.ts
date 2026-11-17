@@ -3,6 +3,7 @@ import type { ProspectingTarget, ScrapeJob } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScrapeJobsService } from './scrape-jobs.service';
+import { CampaignsService } from '../harvey/campaigns.service';
 import { CreateProspectingTargetDto } from './dto/create-prospecting-target.dto';
 import { UpdateProspectingTargetDto } from './dto/update-prospecting-target.dto';
 
@@ -31,6 +32,7 @@ export class ProspectingTargetsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly scrapeJobsService: ScrapeJobsService,
+    private readonly campaignsService: CampaignsService,
   ) {}
 
   async create(
@@ -38,10 +40,14 @@ export class ProspectingTargetsService {
     dto: CreateProspectingTargetDto,
     actorUserId: string,
   ): Promise<ProspectingTarget> {
+    const campaign = dto.campaignId
+      ? await this.campaignsService.findByIdOrThrow(organizationId, dto.campaignId)
+      : await this.campaignsService.getDefault(organizationId);
     try {
       const target = await this.prisma.prospectingTarget.create({
         data: {
           organizationId,
+          campaignId: campaign.id,
           city: dto.city,
           state: dto.state,
           businessType: dto.businessType,
@@ -112,6 +118,8 @@ export class ProspectingTargetsService {
     actorUserId: string,
   ): Promise<ProspectingTarget> {
     const existing = await this.findByIdOrThrow(organizationId, id);
+    // A campanha precisa ser da mesma organização (a FK aceitaria qualquer id).
+    if (dto.campaignId) await this.campaignsService.findByIdOrThrow(organizationId, dto.campaignId);
 
     try {
       const updated = await this.prisma.prospectingTarget.update({ where: { id }, data: dto });
@@ -191,6 +199,7 @@ export class ProspectingTargetsService {
           ...(target.limit !== null ? { limit: target.limit } : {}),
         },
         actorUserId,
+        { campaignId: target.campaignId, prospectingTargetId: target.id },
       );
     } catch (error) {
       this.logger.warn(

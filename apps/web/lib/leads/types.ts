@@ -83,7 +83,7 @@ export const OUTREACH_CHANNELS: OutreachChannel[] = [
   'OTHER',
 ];
 
-export type OutreachStatus = 'DRAFT' | 'APPROVED' | 'REJECTED' | 'SENT' | 'REPLIED';
+export type OutreachStatus = 'DRAFT' | 'APPROVED' | 'REJECTED' | 'SENT' | 'REPLIED' | 'SENDING' | 'SEND_UNKNOWN';
 
 // Espelha `SOCIAL_PLATFORMS`/`SocialLink` de
 // packages/shared-types/src/social-link.types.ts — duplicado localmente
@@ -191,6 +191,7 @@ export interface ProspectingTarget {
   limit: number;
   isActive: boolean;
   cooldownDays: number;
+  campaignId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -206,6 +207,7 @@ export interface CreateProspectingTargetInput {
   limit?: number;
   isActive?: boolean;
   cooldownDays?: number;
+  campaignId?: string;
 }
 
 // Espelha UpdateProspectingTargetDto.
@@ -260,6 +262,7 @@ export interface OutreachMessage {
   approvedAt: string | null;
   rejectedReason: string | null;
   sentAt: string | null;
+  sendError?: string | null;
   repliedAt: string | null;
   // Leitura COMPARTILHADA de equipe (Trilha B, inbox compartilhada) — nunca
   // por usuário, ver comentário de `OutreachMessage.readAt` no schema.

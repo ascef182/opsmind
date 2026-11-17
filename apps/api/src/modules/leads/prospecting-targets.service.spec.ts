@@ -14,6 +14,7 @@ describe('ProspectingTargetsService', () => {
   };
   let auditService: { log: jest.Mock };
   let scrapeJobsService: { create: jest.Mock };
+  let campaignsService: { getDefault: jest.Mock; findByIdOrThrow: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -27,7 +28,16 @@ describe('ProspectingTargetsService', () => {
     };
     auditService = { log: jest.fn() };
     scrapeJobsService = { create: jest.fn().mockResolvedValue({ id: 'job-1' }) };
-    service = new ProspectingTargetsService(prisma as never, auditService as never, scrapeJobsService as never);
+    campaignsService = {
+      getDefault: jest.fn().mockResolvedValue({ id: 'camp-1' }),
+      findByIdOrThrow: jest.fn().mockResolvedValue({ id: 'camp-1' }),
+    };
+    service = new ProspectingTargetsService(
+      prisma as never,
+      auditService as never,
+      scrapeJobsService as never,
+      campaignsService as never,
+    );
   });
 
   describe('create', () => {
@@ -51,6 +61,7 @@ describe('ProspectingTargetsService', () => {
       expect(prisma.prospectingTarget.create).toHaveBeenCalledWith({
         data: {
           organizationId: 'org-1',
+          campaignId: 'camp-1',
           city: 'São Paulo',
           state: 'SP',
           businessType: 'padaria',
@@ -142,6 +153,7 @@ describe('ProspectingTargetsService', () => {
           limit: 50,
         },
         'user-1',
+        expect.objectContaining({ prospectingTargetId: expect.any(String) }),
       );
     });
 
@@ -300,6 +312,7 @@ describe('ProspectingTargetsService', () => {
           limit: 50,
         },
         'user-1',
+        expect.objectContaining({ prospectingTargetId: expect.any(String) }),
       );
     });
 
@@ -352,6 +365,7 @@ describe('ProspectingTargetsService', () => {
           limit: 50,
         },
         'user-1',
+        expect.objectContaining({ prospectingTargetId: expect.any(String) }),
       );
       expect(result).toBe(job);
     });

@@ -142,10 +142,25 @@ describe('processLeadScrapeJob', () => {
     status: 'RUNNING' as const,
   };
 
+  function harveyActivityMock() {
+    const row = (data: Record<string, unknown>) => ({
+      id: `act-${String(data.idempotencyKey ?? 'x')}`,
+      startedAt: new Date(),
+      finishedAt: null,
+      ...data,
+    });
+    return {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => row(data)),
+      update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => row(data)),
+      upsert: jest.fn(async ({ create }: { create: Record<string, unknown> }) => row(create)),
+    };
+  }
+
   function buildTx() {
     return {
       scrapeJob: { update: jest.fn() },
-      serviceOffering: { findMany: jest.fn().mockResolvedValue([]) },
+      serviceOffering: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null) },
       lead: {
         upsert: jest.fn(),
         // `findUnique` (pré-check de dedup por placeId, antes de pontuar —
@@ -174,6 +189,9 @@ describe('processLeadScrapeJob', () => {
       // sempre null nos testes pré-Task 11, ver offerings=[] default).
       outreachMessage: { count: jest.fn().mockResolvedValue(0) },
       pipelineStageTransition: { create: jest.fn() },
+      // Atividades do Harvey (timeline) — default: registra sem erro.
+      harveyActivity: harveyActivityMock(),
+      harveyRun: { update: jest.fn() },
     };
   }
 
@@ -199,6 +217,8 @@ describe('processLeadScrapeJob', () => {
       // "nenhum lead existente encontrado", testes que não são sobre esse
       // pré-fetch não precisam mockar isto.
       lead: { findMany: jest.fn().mockResolvedValue([]) },
+      // Harvey ativo por padrão: a cascata automática segue como antes.
+      harveyAgent: { findUnique: jest.fn().mockResolvedValue({ controlState: 'ACTIVE' }) },
     };
   }
 
@@ -1524,6 +1544,7 @@ describe('processLeadScrapeJob', () => {
 
       expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
       expect(enqueueAutodraft).toHaveBeenCalledWith({
+        trigger: 'AUTOMATIC',
         organizationId: 'org-1',
         leadId: 'lead-place-autodraft',
         channel: 'WHATSAPP',
@@ -1574,6 +1595,7 @@ describe('processLeadScrapeJob', () => {
 
       expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
       expect(enqueueAutodraft).toHaveBeenCalledWith({
+        trigger: 'AUTOMATIC',
         organizationId: 'org-1',
         leadId: 'lead-place-autodraft',
         channel: 'PHONE',
@@ -1674,6 +1696,7 @@ describe('processLeadScrapeJob', () => {
 
         expect(enqueueWebsiteProfile).toHaveBeenCalledTimes(1);
         expect(enqueueWebsiteProfile).toHaveBeenCalledWith({
+          trigger: 'AUTOMATIC',
           organizationId: 'org-1',
           leadId: 'lead-place-autodraft',
           actorType: jobData.actorType,
@@ -2209,6 +2232,120 @@ describe('processLeadScrapeJob', () => {
 
       expect(prisma.scrapeJob.create).not.toHaveBeenCalled();
       expect(enqueueFallbackScrape).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Harvey', () => {
+    const harveyJob = { ...baseScrapeJob, status: 'QUEUED' as const, harveyRunId: 'run-1', campaignId: 'camp-1' };
+    const newCandidate = {
+      name: 'Clinica Nova',
+      address: null,
+      city: 'Campinas',
+      state: 'SP',
+      phone: null,
+      website: null,
+      googleCategory: 'Dentista',
+      rating: 4.8,
+      reviewCount: 120,
+      placeId: 'place-new',
+      raw: {},
+    };
+
+    it('skips job of a paused Harvey run: ScrapeJob CANCELLED + research.search SKIPPED, no provider call', async () => {
+      const tx = setupTx();
+      const prisma = buildPrisma();
+      prisma.harveyAgent.findUnique.mockResolvedValue({ controlState: 'PAUSED' });
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(harveyJob);
+      const gateways = fakeGateways();
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.apify.searchBusinesses).not.toHaveBeenCalled();
+      expect(tx.scrapeJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'CANCELLED' }) }),
+      );
+      expect(tx.harveyActivity.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ type: 'research.search', status: 'SKIPPED' }) }),
+      );
+    });
+
+    it('a search created by a person runs even while Harvey is paused', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.harveyAgent.findUnique.mockResolvedValue({ controlState: 'PAUSED' });
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-new', createdAt: new Date(), ...args.create }),
+      );
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([newCandidate]);
+
+      const result = await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(gateways.apify.searchBusinesses).toHaveBeenCalled();
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('records research.search STARTED→SUCCEEDED, research.lead_found for the new lead and sets its campaign', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue({ ...baseScrapeJob, campaignId: 'camp-1' });
+      Object.assign(prisma, { salesCampaign: { findFirst: jest.fn().mockResolvedValue(null) } });
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-new', createdAt: new Date(Date.now() + 1000), campaignId: null, ...args.create }),
+      );
+      tx.lead.update.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-new', name: 'Clinica Nova', createdAt: new Date(Date.now() + 1000), ...data }),
+      );
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([newCandidate]);
+      const publish = jest.fn();
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData, undefined, undefined, undefined, {
+        queueJobId: 'job-7',
+        publish,
+      });
+
+      expect(tx.harveyActivity.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ type: 'research.search', status: 'STARTED', queueJobId: 'job-7' }),
+      });
+      expect(tx.lead.update).toHaveBeenCalledWith({ where: { id: 'lead-new' }, data: { campaignId: 'camp-1' } });
+      expect(tx.harveyActivity.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ type: 'research.lead_found', leadId: 'lead-new' }) }),
+      );
+      expect(tx.harveyActivity.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SUCCEEDED' }) }),
+      );
+      expect(publish).toHaveBeenCalled();
+    });
+
+    it('does not enqueue profile/autodraft when Harvey is paused mid-job (leads still saved)', async () => {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.harveyAgent.findUnique.mockResolvedValue({ controlState: 'PAUSED' });
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-q', createdAt: new Date(), ...args.create, status: 'QUALIFIED', whatsapp: '5511999999999' }),
+      );
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([newCandidate]);
+      const enqueueAutodraft = jest.fn();
+      const enqueueProfile = jest.fn();
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData, enqueueAutodraft, enqueueProfile);
+
+      expect(tx.lead.upsert).toHaveBeenCalled();
+      expect(enqueueAutodraft).not.toHaveBeenCalled();
+      expect(enqueueProfile).not.toHaveBeenCalled();
     });
   });
 });

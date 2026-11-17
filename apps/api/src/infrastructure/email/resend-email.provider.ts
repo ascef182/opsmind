@@ -1,8 +1,35 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 import type { Env } from '@opsmind/config/env/schema';
-import type { EmailService, SendEmailParams, SendEmailResult, SendInvitationEmailParams } from './email.service';
+import {
+  EmailSendError,
+  type EmailService,
+  type SendEmailParams,
+  type SendEmailResult,
+  type SendInvitationEmailParams,
+} from './email.service';
+
+// Códigos em que o Resend garante que nada foi enviado.
+const NOT_SENT_CODES = new Set([
+  'invalid_idempotency_key',
+  'validation_error',
+  'missing_api_key',
+  'restricted_api_key',
+  'invalid_api_key',
+  'not_found',
+  'method_not_allowed',
+  'invalid_attachment',
+  'invalid_from_address',
+  'invalid_access',
+  'invalid_parameter',
+  'invalid_region',
+  'missing_required_field',
+  'monthly_quota_exceeded',
+  'daily_quota_exceeded',
+  'rate_limit_exceeded',
+  'security_error',
+]);
 
 /**
  * Implementação real via SDK oficial do Resend (resend:resend skill: SDK
@@ -48,14 +75,23 @@ export class ResendEmailProvider implements EmailService {
   }
 
   async sendEmail({ to, subject, html, idempotencyKey }: SendEmailParams): Promise<SendEmailResult> {
-    const { data, error } = await this.client.emails.send(
-      { from: this.from, to: [to], subject, html },
-      idempotencyKey ? { idempotencyKey } : undefined,
-    );
+    let response: Awaited<ReturnType<Resend['emails']['send']>>;
+    try {
+      response = await this.client.emails.send(
+        { from: this.from, to: [to], subject, html },
+        idempotencyKey ? { idempotencyKey } : undefined,
+      );
+    } catch (thrown) {
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      this.logger.error(`Falha de rede ao enviar email para ${to}: ${message}`);
+      throw new EmailSendError(`Falha ao enviar email: ${message}`, null, 'UNKNOWN');
+    }
+    const { data, error } = response;
 
     if (error) {
       this.logger.error(`Falha ao enviar email para ${to}: ${error.message}`);
-      throw new ServiceUnavailableException(`Falha ao enviar email: ${error.message}`);
+      const outcome = NOT_SENT_CODES.has(error.name) ? 'NOT_SENT' : 'UNKNOWN';
+      throw new EmailSendError(`Falha ao enviar email: ${error.message}`, error.name, outcome);
     }
 
     this.logger.log(`Email enviado a ${to} (id ${data?.id ?? 'desconhecido'})`);

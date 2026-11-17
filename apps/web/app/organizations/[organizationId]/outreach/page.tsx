@@ -27,6 +27,7 @@ const STATUS_OPTIONS: Array<{ value: OutreachStatus | ''; label: string }> = [
   { value: 'REJECTED', label: 'Rejeitadas' },
   { value: 'SENT', label: 'Enviadas' },
   { value: 'REPLIED', label: 'Respondidas' },
+  { value: 'SEND_UNKNOWN', label: 'Envio sem confirmação' },
   { value: '', label: 'Todas' },
 ];
 

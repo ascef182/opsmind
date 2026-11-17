@@ -46,6 +46,7 @@ describe('LeadSignalsService', () => {
       await service.requestInvestigation('org-1', 'lead-1', 'user-1');
 
       expect(websiteProfileQueueService.enqueue).toHaveBeenCalledWith({
+        trigger: 'MANUAL',
         organizationId: 'org-1',
         leadId: 'lead-1',
         actorType: 'USER',

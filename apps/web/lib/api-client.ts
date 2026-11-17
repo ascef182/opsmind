@@ -101,3 +101,13 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
   return (await response.json()) as T;
 }
+
+/** Renova o access token (mesmo fluxo de rotação do apiFetch). Usado pelo stream SSE. */
+export async function refreshSession(): Promise<string | null> {
+  const tokens = getStoredTokens();
+  return tokens ? refreshAccessToken(tokens) : null;
+}
+
+export function apiUrl(path: string): string {
+  return `${env.NEXT_PUBLIC_API_URL}${path}`;
+}

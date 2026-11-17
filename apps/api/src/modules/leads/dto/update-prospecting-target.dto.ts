@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 import type { ScrapeSourceType } from '@opsmind/database';
 import { AUTOMATABLE_SOURCE_TYPES } from './create-scrape-job.dto';
 
@@ -45,4 +45,8 @@ export class UpdateProspectingTargetDto {
   @Min(1)
   @Max(90)
   cooldownDays?: number;
+
+  @IsOptional()
+  @IsUUID()
+  campaignId?: string;
 }

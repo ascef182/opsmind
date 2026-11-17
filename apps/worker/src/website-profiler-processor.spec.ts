@@ -78,6 +78,13 @@ function buildTx() {
     auditLog: { create: jest.fn() },
     outreachMessage: { count: jest.fn().mockResolvedValue(0) },
     pipelineStageTransition: { create: jest.fn() },
+    harveyActivity: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'act-1', ...data })),
+      update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'act-1', ...data })),
+      upsert: jest.fn(async ({ create }: { create: Record<string, unknown> }) => ({ id: 'evt-1', ...create })),
+    },
+    harveyRun: { update: jest.fn() },
   };
 }
 
@@ -89,8 +96,11 @@ function setupTx() {
   return tx;
 }
 
-function buildPrisma(lead: unknown = buildLead()) {
-  return { lead: { findFirst: jest.fn().mockResolvedValue(lead) } };
+function buildPrisma(lead: unknown = buildLead(), controlState: 'ACTIVE' | 'PAUSED' | 'STOPPED' = 'ACTIVE') {
+  return {
+    lead: { findFirst: jest.fn().mockResolvedValue(lead) },
+    harveyAgent: { findUnique: jest.fn().mockResolvedValue({ controlState }) },
+  };
 }
 
 describe('processWebsiteProfileJob', () => {
@@ -110,13 +120,42 @@ describe('processWebsiteProfileJob', () => {
     await expect(processWebsiteProfileJob(prisma as never, jobData)).rejects.toThrow();
   });
 
-  it('não grava nada quando a busca da homepage falha (SSRF/timeout/DNS)', async () => {
+  it('não grava nada quando a busca da homepage falha (SSRF/timeout/DNS), só a atividade como FAILED', async () => {
+    const tx = setupTx();
     const prisma = buildPrisma();
     (ssrfSafeFetch as jest.Mock).mockRejectedValue(new SsrfSafeFetchError('bloqueado'));
 
     await processWebsiteProfileJob(prisma as never, jobData);
 
-    expect(withTenantContext).not.toHaveBeenCalled();
+    expect(tx.leadSignal.upsert).not.toHaveBeenCalled();
+    expect(tx.lead.update).not.toHaveBeenCalled();
+    expect(tx.harveyActivity.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
+    );
+  });
+
+  describe('Harvey', () => {
+    const automatic = { ...jobData, actorType: 'SYSTEM' as const, actorId: undefined, trigger: 'AUTOMATIC' as const };
+
+    it('skips with SKIPPED activity when paused', async () => {
+      const tx = setupTx();
+      const prisma = buildPrisma(buildLead(), 'PAUSED');
+      await processWebsiteProfileJob(prisma as never, automatic);
+      expect(ssrfSafeFetch).not.toHaveBeenCalled();
+      expect(tx.harveyActivity.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ type: 'research.site_analysis', status: 'SKIPPED' }),
+        }),
+      );
+    });
+
+    it('a manual analysis runs even while Harvey is paused', async () => {
+      setupTx();
+      const prisma = buildPrisma(buildLead(), 'PAUSED');
+      (ssrfSafeFetch as jest.Mock).mockRejectedValue(new SsrfSafeFetchError('bloqueado'));
+      await processWebsiteProfileJob(prisma as never, { ...jobData, trigger: 'MANUAL' });
+      expect(ssrfSafeFetch).toHaveBeenCalled();
+    });
   });
 
   it('propaga um erro que NÃO é SsrfSafeFetchError (não é condição esperada, deve subir)', async () => {
@@ -260,6 +299,7 @@ describe('processWebsiteProfileJob', () => {
 
       expect(enqueueAutodraft).toHaveBeenCalledTimes(1);
       expect(enqueueAutodraft).toHaveBeenCalledWith({
+        trigger: 'AUTOMATIC',
         organizationId: 'org-1',
         leadId: 'lead-1',
         channel: 'WHATSAPP',

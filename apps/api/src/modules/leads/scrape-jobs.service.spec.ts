@@ -11,7 +11,9 @@ describe('ScrapeJobsService', () => {
     prisma = { scrapeJob: { create: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() } };
     auditService = { log: jest.fn() };
     queueService = { enqueue: jest.fn() };
-    service = new ScrapeJobsService(prisma as never, auditService as never, queueService as never);
+    service = new ScrapeJobsService(prisma as never, auditService as never, queueService as never, {
+      getDefault: jest.fn().mockResolvedValue({ id: 'camp-1' }),
+    } as never);
   });
 
   describe('create', () => {
@@ -30,6 +32,8 @@ describe('ScrapeJobsService', () => {
       expect(prisma.scrapeJob.create).toHaveBeenCalledWith({
         data: {
           organizationId: 'org-1',
+          campaignId: 'camp-1',
+          prospectingTargetId: null,
           sourceType: 'APIFY_GOOGLE_MAPS',
           city: 'São Paulo',
           state: 'SP',

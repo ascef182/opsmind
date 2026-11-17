@@ -21,19 +21,24 @@ function configService(overrides: Record<string, string | undefined> = {}) {
 }
 
 function buildDeps(overrides: Record<string, string | undefined> = {}) {
-  const prisma = { outreachMessage: { findFirst: jest.fn() } };
+  const prisma = {
+    outreachMessage: { findFirst: jest.fn() },
+    lead: { findFirst: jest.fn().mockResolvedValue({ name: 'Lead', campaignId: null }) },
+  };
   const outreachService = { markRepliedFromWebhook: jest.fn().mockResolvedValue(undefined) };
   const emailWarmupService = {
     recordBounced: jest.fn().mockResolvedValue(undefined),
     recordComplained: jest.fn().mockResolvedValue(undefined),
   };
+  const recorder = { event: jest.fn().mockResolvedValue(undefined) };
   const service = new ResendWebhookService(
     configService(overrides),
     prisma as never,
     outreachService as never,
     emailWarmupService as never,
+    recorder as never,
   );
-  return { service, prisma, outreachService, emailWarmupService };
+  return { service, prisma, outreachService, emailWarmupService, recorder };
 }
 
 const rawBody = Buffer.from('{"type":"email.received"}');

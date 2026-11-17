@@ -225,6 +225,32 @@ Camada comercial por cima de leads/outreach/deals, sem pipeline paralelo. Roadma
 - Filas: opções de job por fila em `packages/shared-types/src/queue-job-options.ts`, aplicadas no construtor da
   `Queue` dos dois lados (API e worker). `lead-scrape` nunca retenta (pagaria o provedor de novo).
 
+### Harvey — agente do Revenue Engine (`apps/api/src/modules/harvey/`, `apps/worker/src/harvey-*.ts`)
+
+"Harvey" é o SDR do engine (Fase 1: controle). Não é um loop de LLM: é um **orquestrador determinístico** no worker
+(`runHarveyTick`, `harvey-orchestrator.ts`) agendado por job scheduler do BullMQ (`harvey-tick`, 60s, único entre
+réplicas) + trava `pg_try_advisory_xact_lock(hashtext('harvey:'||org))` (os comandos da API usam a mesma trava). O tick
+reconcilia o banco e enfileira os jobs que já existiam (`lead-scrape`, `website-profile`, `outreach-autodraft`). Spec:
+`docs/superpowers/specs/2026-11-17-harvey-fase1-controle-design.md` (seção 0 = ajustes que prevalecem).
+
+- **Estado**: `HarveyAgent.controlState` (`STOPPED|ACTIVE|PAUSED`, comando gravado) + `HarveyRun` (ciclo do dia por
+  campanha, único por `campaignId+cycleDate`). O estado exibido é **derivado** (`resolveHarveyStatus`, shared-types),
+  nunca gravado à parte. Parar não reinicia no dia seguinte; concluído (meta/horário/sem trabalho) sim.
+- **Campanhas** (`SalesCampaign`): país, idioma, fuso, dias/horário, metas diárias, canais, orçamento. `ProspectingTarget`
+  pertence a uma campanha; toda organização nasce com a "Campanha padrão".
+- **Regra dura**: todo trabalho **automático** novo passa por `checkHarveyMayProceed` (`@opsmind/database`) e registra
+  `HarveyActivity` (com `idempotencyKey`). Pedido **manual** (`trigger: 'MANUAL'`, ação HTTP de uma pessoa) nunca depende
+  do estado do agente. Job pulado por pausa grava SKIPPED com chave `...:skipped:...`; o tick o redescobre ao retomar.
+- **Envio** (`OutreachDispatchService`): reivindicação `APPROVED→SENDING` e resultado gravados em transação própria
+  (`PrismaService.runDetachedTenantTransaction`), chave de idempotência fixa por mensagem, `SEND_UNKNOWN` quando o
+  provedor não confirma. Reconciliação = reenvio do mesmo payload com a mesma chave dentro de 23h (consumer na API,
+  fila `outreach-send-reconcile`); fora disso, decisão humana (`POST .../resolve-unknown`). Nunca reenvio cego. Canais
+  são `ChannelSender`s (só e-mail registrado).
+- **Tempo real**: atividade gravada → publicada no Redis (`harvey:org:<id>`) após o commit (`runAfterCommit` na API) →
+  SSE em `GET .../revenue/harvey/stream` (`@SkipTenantTransaction`, sem transação na rota). O web lê via `fetch`
+  (`lib/sse.ts`, Bearer) e, ao reconectar, busca no banco o que mudou (`activities?after=`).
+- jobId customizado no BullMQ não pode ter ":" (`harveyScrapeJobId`).
+
 ### Env / config
 
 `packages/config/env/schema.ts` is the single Zod schema validated fail-fast at boot (`main.ts` and again via

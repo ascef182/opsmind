@@ -2,7 +2,7 @@ import { Transform } from 'class-transformer';
 import { IsBoolean, IsIn, IsOptional } from 'class-validator';
 import type { OutreachStatus } from '@opsmind/database';
 
-const OUTREACH_STATUSES: OutreachStatus[] = ['DRAFT', 'APPROVED', 'REJECTED', 'SENT', 'REPLIED'];
+const OUTREACH_STATUSES: OutreachStatus[] = ['DRAFT', 'APPROVED', 'REJECTED', 'SENT', 'REPLIED', 'SENDING', 'SEND_UNKNOWN'];
 
 // Inbox compartilhada de outreach (GET .../outreach-messages) — mesma rota
 // que já servia a fila de aprovação (?status=DRAFT), agora com dois filtros

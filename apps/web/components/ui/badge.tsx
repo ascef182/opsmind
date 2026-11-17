@@ -27,6 +27,8 @@ const COLORS: Record<string, string> = {
   APPROVED: 'bg-info-500/15 text-info-500',
   REJECTED: 'bg-negative-500/15 text-negative-500',
   SENT: 'bg-info-500/15 text-info-500',
+  SENDING: 'bg-info-500/15 text-info-500',
+  SEND_UNKNOWN: 'bg-negative-500/15 text-negative-500',
 
   // ScrapeJobStatus (packages/database/prisma/schema.prisma)
   QUEUED: 'bg-ink-800 text-ink-300',

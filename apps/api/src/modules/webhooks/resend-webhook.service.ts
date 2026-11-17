@@ -5,6 +5,7 @@ import type { Env } from '@opsmind/config/env/schema';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { EmailWarmupService } from '../../infrastructure/email/email-warmup.service';
 import { OutreachService } from '../leads/outreach.service';
+import { HarveyActivityRecorder } from '../harvey/harvey-activity.recorder';
 
 export interface ResendWebhookHeaders {
   'svix-id'?: string;
@@ -34,6 +35,7 @@ export class ResendWebhookService {
     private readonly prisma: PrismaService,
     private readonly outreachService: OutreachService,
     private readonly emailWarmupService: EmailWarmupService,
+    private readonly recorder: HarveyActivityRecorder,
   ) {}
 
   async handleEvent(rawBody: Buffer, headers: ResendWebhookHeaders): Promise<void> {
@@ -118,6 +120,22 @@ export class ResendWebhookService {
 
     try {
       await this.outreachService.markRepliedFromWebhook(message.organizationId, message.id);
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: message.leadId, organizationId: message.organizationId },
+        select: { name: true, campaignId: true },
+      });
+      await this.recorder.event({
+        organizationId: message.organizationId,
+        type: 'outreach.reply_received',
+        phase: 'RESPONDING',
+        title: `Resposta recebida de ${lead?.name ?? 'lead'}`,
+        idempotencyKey: `outreach.reply_received:${message.id}`,
+        status: 'SUCCEEDED',
+        leadId: message.leadId,
+        campaignId: lead?.campaignId ?? null,
+        outreachMessageId: message.id,
+        channel: message.channel,
+      });
     } catch (err) {
       // Idempotência: o Resend pode reentregar o mesmo evento, ou a mensagem
       // já pode ter sido marcada respondida manualmente nesse meio-tempo —

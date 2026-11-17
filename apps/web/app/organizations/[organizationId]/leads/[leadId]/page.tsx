@@ -21,6 +21,7 @@ import {
   useRegenerateOutreach,
   useRejectOutreach,
   useSendOutreach,
+  useResolveUnknownSend,
 } from '@/lib/leads/use-outreach-messages';
 import {
   OUTREACH_CHANNELS,
@@ -104,6 +105,7 @@ function OutreachMessageCard({
   const reject = useRejectOutreach(organizationId, leadId);
   const regenerate = useRegenerateOutreach(organizationId, leadId);
   const send = useSendOutreach(organizationId, leadId);
+  const resolveUnknown = useResolveUnknownSend(organizationId, leadId);
   const markSent = useMarkOutreachSent(organizationId, leadId);
   const markReplied = useMarkOutreachReplied(organizationId, leadId);
   const edit = useEditOutreach(organizationId, leadId);
@@ -243,6 +245,40 @@ function OutreachMessageCard({
             Marcar como enviada
           </Button>
           <FormError message={markSent.isError ? (markSent.error as ApiError).message : null} />
+        </div>
+      )}
+
+      {message.status === 'SENDING' && (
+        <p className="mt-3 text-xs text-muted-foreground">Enviando… o resultado aparece em instantes.</p>
+      )}
+
+      {message.status === 'SEND_UNKNOWN' && (
+        <div className="mt-3 flex flex-col gap-2 rounded-md border border-negative-500/40 p-3 text-sm">
+          <p>
+            O provedor não confirmou este envio. O sistema tenta confirmar sozinho sem enviar de novo; se não conseguir,
+            confira no painel do provedor e informe o resultado.
+          </p>
+          {message.sendError && <p className="text-xs text-muted-foreground">{message.sendError}</p>}
+          {canWrite && (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                disabled={resolveUnknown.isPending}
+                onClick={() => resolveUnknown.mutate({ messageId: message.id, outcome: 'SENT' })}
+              >
+                Confirmar que saiu
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={resolveUnknown.isPending}
+                onClick={() => resolveUnknown.mutate({ messageId: message.id, outcome: 'NOT_SENT' })}
+              >
+                Não saiu (liberar novo envio)
+              </Button>
+            </div>
+          )}
+          <FormError message={resolveUnknown.isError ? (resolveUnknown.error as ApiError).message : null} />
         </div>
       )}
 

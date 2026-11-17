@@ -4,6 +4,12 @@
 > Deviation from 1.6: the funnel tab is a table (one row per stage) instead of 15 read-only columns.
 > Not done in Phase 1: Step 0's PR for the Harvey Fase 7 branch (the new branch is stacked on it).
 
+> 2026-11-17: o pedido "Revenue Engine 2.0 — Harvey" reorganiza as próximas fases em Controle → Inteligência comercial
+> → Comunicação → Supervisão → Otimização. Fase 1 (controle do Harvey) feita no branch `feat/harvey-fase1-controle`:
+> spec `docs/superpowers/specs/2026-11-17-harvey-fase1-controle-design.md`. Mudou daqui: a prospecção autônoma e o
+> follow-up saíram do `setInterval` para o scheduler do Harvey; `dailyResearchLimit` foi substituído pela meta da
+> campanha; outreach ganhou `SENDING`/`SEND_UNKNOWN`.
+
 ## Context
 
 CazaTech wants OpsMind to become its internal acquisition engine for US local businesses (dentists, roofing,

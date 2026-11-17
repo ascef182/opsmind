@@ -18,6 +18,33 @@ export class NotificationsService {
     return this.prisma.notification.create({ data: input });
   }
 
+  // Aviso para quem decide pela organização (OWNER/ADMIN).
+  async notifyAdmins(organizationId: string, type: string, payload: Prisma.InputJsonValue): Promise<number> {
+    const admins = await this.prisma.membership.findMany({
+      where: { organizationId, role: { in: ['OWNER', 'ADMIN'] } },
+      select: { userId: true },
+    });
+    if (admins.length === 0) return 0;
+    await this.prisma.notification.createMany({
+      data: admins.map((admin) => ({ organizationId, userId: admin.userId, type, payload })),
+    });
+    return admins.length;
+  }
+
+  async notifyAdminsOnce(
+    organizationId: string,
+    type: string,
+    payload: Record<string, string>,
+    dedupField: string,
+  ): Promise<number> {
+    const existing = await this.prisma.notification.findFirst({
+      where: { organizationId, type, payload: { path: [dedupField], equals: payload[dedupField] } },
+      select: { id: true },
+    });
+    if (existing) return 0;
+    return this.notifyAdmins(organizationId, type, payload);
+  }
+
   listForUser(organizationId: string, userId: string): Promise<Notification[]> {
     return this.prisma.notification.findMany({
       where: { organizationId, userId },

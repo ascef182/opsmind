@@ -651,6 +651,7 @@ describe('LeadsService', () => {
 
         expect(result.status).toBe('QUALIFIED');
         expect(websiteProfileQueueService.enqueue).toHaveBeenCalledWith({
+          trigger: 'AUTOMATIC',
           organizationId: 'org-1',
           leadId: 'lead-1',
           actorType: 'USER',
@@ -672,6 +673,7 @@ describe('LeadsService', () => {
         await service.score('org-1', 'lead-1', 'user-1');
 
         expect(outreachAutodraftQueueService.enqueue).toHaveBeenCalledWith({
+          trigger: 'AUTOMATIC',
           organizationId: 'org-1',
           leadId: 'lead-1',
           channel: 'WHATSAPP',
@@ -691,6 +693,7 @@ describe('LeadsService', () => {
         await service.score('org-1', 'lead-1', 'user-1');
 
         expect(outreachAutodraftQueueService.enqueue).toHaveBeenCalledWith({
+          trigger: 'AUTOMATIC',
           organizationId: 'org-1',
           leadId: 'lead-1',
           channel: 'EMAIL',

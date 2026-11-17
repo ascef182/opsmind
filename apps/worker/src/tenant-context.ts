@@ -24,9 +24,13 @@ export function withTenantContext<T>(
   prisma: PrismaClient,
   organizationId: string,
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  timeoutMs?: number,
 ): Promise<T> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.current_org_id', ${organizationId}, true)`;
-    return fn(tx);
-  });
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_org_id', ${organizationId}, true)`;
+      return fn(tx);
+    },
+    timeoutMs ? { timeout: timeoutMs } : undefined,
+  );
 }

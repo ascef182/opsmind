@@ -27,7 +27,16 @@ import { withTenantContext } from './tenant-context';
 import { ssrfSafeFetch, SsrfSafeFetchError } from './ssrf-safe-fetch';
 import { extractWebsiteSignals, type FetchedPage } from './signal-extractors';
 import { leadStatusToPipelineStage, resolveAutodraftChannel } from '@opsmind/shared-types';
-import { recordStageTransition } from '@opsmind/database';
+import {
+  HARVEY_SKIP_REASON_LABELS,
+  checkHarveyMayProceed,
+  finishHarveyActivity,
+  markRunSuccess,
+  recordHarveyEvent,
+  recordStageTransition,
+  startHarveyActivity,
+} from '@opsmind/database';
+import { publishActivities, triggerOf, type HarveyPublish } from './harvey-events';
 
 // Mesmo racional de `PRE_QUALIFICATION_STATUSES` em `leads.service.ts`
 // (apps/api) — duplicada aqui, não importada, pelo mesmo motivo de
@@ -147,6 +156,7 @@ export async function processWebsiteProfileJob(
   prisma: PrismaClient,
   data: WebsiteProfileJobData,
   enqueueAutodraft: (job: OutreachAutodraftJobData) => Promise<unknown> = async () => undefined,
+  context: { queueJobId?: string; publish?: HarveyPublish } = {},
 ): Promise<void> {
   const lead: Lead | null = await prisma.lead.findFirst({
     where: { id: data.leadId, organizationId: data.organizationId },
@@ -159,13 +169,74 @@ export async function processWebsiteProfileJob(
     return;
   }
 
+  // Análise pedida por uma pessoa roda sempre; a automática depende do Harvey.
+  const trigger = triggerOf(data);
+  let harveyRunId: string | null = null;
+  if (trigger === 'AUTOMATIC') {
+    const check = await checkHarveyMayProceed(prisma, {
+      organizationId: data.organizationId,
+      campaignId: lead.campaignId,
+      step: 'site_analysis',
+    });
+    if (!check.ok) {
+      const skipped = await withTenantContext(prisma, data.organizationId, (tx) =>
+        recordHarveyEvent(tx, {
+          organizationId: data.organizationId,
+          type: 'research.site_analysis',
+          phase: 'RESEARCHING',
+          title: `Análise do site de ${lead.name} adiada — ${HARVEY_SKIP_REASON_LABELS[check.reason]}`,
+          idempotencyKey: `research.site_analysis:${lead.id}:skipped:${check.reason}:${new Date().toISOString().slice(0, 10)}`,
+          status: 'SKIPPED',
+          leadId: lead.id,
+          campaignId: lead.campaignId,
+          result: { reason: check.reason },
+        }),
+      );
+      await publishActivities(context.publish, [{ activity: skipped, leadName: lead.name }]);
+      return;
+    }
+    harveyRunId = check.runId;
+  }
+
+  const activity = await withTenantContext(prisma, data.organizationId, (tx) =>
+    startHarveyActivity(tx, {
+      organizationId: data.organizationId,
+      type: 'research.site_analysis',
+      phase: 'RESEARCHING',
+      title: `Analisando o site de ${lead.name}`,
+      idempotencyKey:
+        trigger === 'AUTOMATIC'
+          ? `research.site_analysis:${lead.id}`
+          : `research.site_analysis:${lead.id}:manual:${context.queueJobId ?? randomUUID()}`,
+      runId: harveyRunId,
+      campaignId: lead.campaignId,
+      leadId: lead.id,
+      queueJobId: context.queueJobId ?? null,
+      actorType: data.actorType,
+      actorId: data.actorId ?? null,
+    }),
+  );
+  await publishActivities(context.publish, [{ activity, leadName: lead.name }]);
+  const finish = async (outcome: Parameters<typeof finishHarveyActivity>[2]) => {
+    const finished = await withTenantContext(prisma, data.organizationId, async (tx) => {
+      const row = await finishHarveyActivity(tx, activity.id, outcome);
+      if (outcome.status === 'SUCCEEDED') await markRunSuccess(tx, harveyRunId);
+      return row;
+    });
+    await publishActivities(context.publish, [{ activity: finished, leadName: lead.name }]);
+  };
+
   const runId = randomUUID();
   const pages: FetchedPage[] = [];
 
   const homepage = await fetchPage(lead.website);
   if (!homepage) {
-    // Falha ao buscar a própria homepage é terminal para este lead nesta
-    // execução — sem página, sem sinal possível.
+    // Sem a homepage não há sinal possível nesta execução.
+    await finish({
+      status: 'FAILED',
+      title: `Site de ${lead.name} não respondeu`,
+      errorMessage: `Não foi possível abrir ${lead.website}`,
+    });
     return;
   }
   pages.push(homepage);
@@ -326,11 +397,26 @@ export async function processWebsiteProfileJob(
             organizationId: data.organizationId,
             leadId: data.leadId,
             channel,
+            trigger: 'AUTOMATIC',
           };
         }
       }
     }
     return autodraftJob;
+  });
+
+  await finish({
+    status: 'SUCCEEDED',
+    title: `Analisou o site de ${lead.name}: ${extractedAll.length} sinais`,
+    result: { pagesFetched: pages.length, signals: extractedAll.map((signal) => signal.signalCode) },
+    rationale: {
+      summary: extractedAll.length ? 'Possíveis gargalos comerciais vistos no site' : 'Nenhum gargalo evidente no site',
+      reasons: extractedAll.map((signal) => signal.signalCode),
+      evidence: extractedAll
+        .filter((signal) => signal.evidenceQuote)
+        .slice(0, 5)
+        .map((signal) => ({ quote: signal.evidenceQuote as string, url: signal.evidenceUrl })),
+    },
   });
 
   // Fora da tx — mesma disciplina de "rede nunca dentro da tx Postgres" de

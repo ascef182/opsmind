@@ -71,3 +71,24 @@ export {
   startOfUtcMonth,
 } from './revenue-ledger';
 export type { StageTransitionInput, CostEventInput, EngineBudgetStatus } from './revenue-ledger';
+export type {
+  SalesCampaign,
+  CampaignStatus,
+  HarveyAgent,
+  HarveyRun,
+  HarveyActivity,
+  HarveyControlState as HarveyControlStateEnum,
+} from '@prisma/client';
+export {
+  checkHarveyMayProceed,
+  getRunProgress,
+  getCampaignMonthSpendUsd,
+  startHarveyActivity,
+  finishHarveyActivity,
+  recordHarveyEvent,
+  markRunSuccess,
+  markRunError,
+  toHarveyActivityEvent,
+  HARVEY_SKIP_REASON_LABELS,
+} from './harvey';
+export type { HarveyStep, HarveySkipReason, HarveyCheckResult, RunProgress, StartActivityInput } from './harvey';

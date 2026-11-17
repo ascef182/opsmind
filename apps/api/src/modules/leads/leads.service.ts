@@ -533,6 +533,7 @@ export class LeadsService {
                 leadId: id,
                 actorType: 'USER',
                 actorId: actorUserId,
+                trigger: 'AUTOMATIC',
               }),
               QUALIFICATION_TRIGGER_ENQUEUE_TIMEOUT_MS,
             );
@@ -548,6 +549,7 @@ export class LeadsService {
                   organizationId,
                   leadId: id,
                   channel,
+                  trigger: 'AUTOMATIC',
                 }),
                 QUALIFICATION_TRIGGER_ENQUEUE_TIMEOUT_MS,
               );
