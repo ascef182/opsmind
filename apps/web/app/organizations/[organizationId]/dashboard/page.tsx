@@ -1,6 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
+import { DeltaBadge, type Delta } from '@/components/dashboard/delta-badge';
 import clsx from 'clsx';
 import Link from 'next/link';
 import {
@@ -107,10 +108,6 @@ function sumLastDays(series: DailyPoint[], count: number, offsetFromEnd: number)
   return series.slice(Math.max(0, start), Math.max(0, end)).reduce((sum, p) => sum + p.value, 0);
 }
 
-interface Delta {
-  diff: number;
-  pct: number | null;
-}
 
 function computeDelta(series: DailyPoint[]): Delta {
   const current = sumLastDays(series, DELTA_WINDOW_DAYS, 0);
@@ -134,29 +131,6 @@ function sumSeries(series: DailyPoint[]): number {
   return series.reduce((sum, p) => sum + p.value, 0);
 }
 
-function DeltaBadge({ delta, colorCoded = false }: { delta: Delta; colorCoded?: boolean }) {
-  const arrow = delta.diff > 0 ? '▲' : delta.diff < 0 ? '▼' : '→';
-  const diffLabel = `${delta.diff > 0 ? '+' : ''}${delta.diff}`;
-  const pctLabel =
-    delta.pct === null ? '' : ` (${delta.pct >= 0 ? '+' : ''}${Math.round(delta.pct * 100)}%)`;
-  const colorClass =
-    colorCoded && delta.diff > 0
-      ? 'bg-positive-500/10 text-positive-500'
-      : colorCoded && delta.diff < 0
-        ? 'bg-negative-500/10 text-negative-500'
-        : 'bg-muted text-muted-foreground';
-  return (
-    <span
-      className={clsx(
-        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium',
-        colorClass,
-      )}
-    >
-      {arrow} {diffLabel}
-      {pctLabel}
-    </span>
-  );
-}
 
 function KpiCard({
   label,
