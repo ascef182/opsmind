@@ -15,6 +15,7 @@ import {
   resolveAutodraftChannel,
   leadStatusToPipelineStage,
   normalizeRegionCode,
+  classifyBusinessWebsite,
   type LeadScoringInput,
   type ServiceOfferingIcp,
   type SocialLink,
@@ -162,9 +163,9 @@ interface RawCandidate {
   firmographics: LeadScoringInput['firmographics'];
   enrichmentSource: ExploriumBusinessResult | null;
   /**
-   * Campos de contato/redes (Task 9) — SEMPRE `null` na mapeação inicial do
-   * resultado bruto do gateway de busca (nenhuma das três fontes de busca
-   * devolve isto na própria busca); só passam a ter valor quando
+   * Campos de contato/redes (Task 9) — `null` na mapeação inicial, exceto
+   * quando a fonte estruturada mandou um perfil social no campo de site
+   * (`withSocialOnlyWebsiteAsAbsent`); fora isso só passam a ter valor quando
    * `discoverContactAndSocials` os encontra e MUTA o candidato diretamente
    * (ver essa função, mais abaixo). A condição "sem whatsapp/socialLinks
    * ainda preenchidos" do passo do worker é checada contra estes mesmos
@@ -175,8 +176,24 @@ interface RawCandidate {
   socialLinks: SocialLink[] | null;
 }
 
-function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
+// Fonte estruturada que manda um perfil social (ou "link na bio") no campo
+// de site: o negócio não tem site próprio. Vira ausência confirmada de site
+// e o link passa a ser canal de contato (ver `classifyBusinessWebsite`).
+function withSocialOnlyWebsiteAsAbsent(candidate: RawCandidate): RawCandidate {
+  if (!candidate.website) return candidate;
+  const classification = classifyBusinessWebsite(candidate.website);
+  if (classification.kind === 'website') return candidate;
   return {
+    ...candidate,
+    website: null,
+    websiteConfirmedAbsent: true,
+    socialLinks: [...(candidate.socialLinks ?? []), classification.link],
+    whatsapp: candidate.whatsapp ?? classification.whatsappNumber,
+  };
+}
+
+function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
+  return withSocialOnlyWebsiteAsAbsent({
     name: r.name,
     address: r.address,
     city: r.city,
@@ -200,11 +217,11 @@ function mapApifyResult(r: ApifyBusinessResult): RawCandidate {
     whatsapp: null,
     email: null,
     socialLinks: null,
-  };
+  });
 }
 
 function mapExploriumResult(r: ExploriumBusinessResult): RawCandidate {
-  return {
+  return withSocialOnlyWebsiteAsAbsent({
     name: r.name,
     address: null,
     city: null,
@@ -232,7 +249,7 @@ function mapExploriumResult(r: ExploriumBusinessResult): RawCandidate {
     whatsapp: null,
     email: null,
     socialLinks: null,
-  };
+  });
 }
 
 function mapCamofoxResult(r: CamofoxSearchResult): RawCandidate {
@@ -966,6 +983,20 @@ function toOfferingIcp(o: {
   };
 }
 
+// Une links já salvos (ex.: achados pela descoberta de contato numa passada
+// anterior) com os desta passada, sem duplicar URL. Um rescan nunca apaga
+// canal de contato já conhecido.
+function mergeSocialLinks(existing: unknown, incoming: SocialLink[]): SocialLink[] {
+  const previous = Array.isArray(existing)
+    ? existing.filter(
+        (link): link is SocialLink =>
+          !!link && typeof link === 'object' && typeof (link as SocialLink).url === 'string',
+      )
+    : [];
+  const seen = new Set(previous.map((link) => link.url));
+  return [...previous, ...incoming.filter((link) => !seen.has(link.url))];
+}
+
 const RESCAN_WRITABLE_STATUSES: LeadStatus[] = ['DISCOVERED', 'QUALIFIED', 'DISQUALIFIED'];
 
 async function upsertLead(
@@ -991,7 +1022,7 @@ async function upsertLead(
   const existingLead = candidate.placeId
     ? await tx.lead.findUnique({
         where: { organizationId_placeId: { organizationId: data.organizationId, placeId: candidate.placeId } },
-        select: { id: true, status: true },
+        select: { id: true, status: true, socialLinks: true },
       })
     : await (dedupUrl
         ? tx.lead.findFirst({
@@ -1000,7 +1031,7 @@ async function upsertLead(
               sourceType,
               rawSnapshot: { path: ['_dedupUrl'], equals: dedupUrl },
             },
-            select: { id: true, status: true },
+            select: { id: true, status: true, socialLinks: true },
           })
         : tx.lead.findFirst({
             where: {
@@ -1010,7 +1041,7 @@ async function upsertLead(
               city: candidate.city,
               state: candidate.state,
             },
-            select: { id: true, status: true },
+            select: { id: true, status: true, socialLinks: true },
           }));
 
   const confirmedSignals = existingLead
@@ -1077,7 +1108,7 @@ async function upsertLead(
     email: candidate.email ?? undefined,
     whatsapp: candidate.whatsapp ?? undefined,
     socialLinks: candidate.socialLinks
-      ? (candidate.socialLinks as unknown as Prisma.InputJsonValue)
+      ? (mergeSocialLinks(existingLead?.socialLinks, candidate.socialLinks) as unknown as Prisma.InputJsonValue)
       : undefined,
     // Sinal de PRIORIZAÇÃO, não confirmado — sempre recalculado (sem
     // `undefined`/preservação entre passadas, diferente de `whatsapp`/

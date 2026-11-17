@@ -359,6 +359,74 @@ describe('processLeadScrapeJob', () => {
     );
   });
 
+  describe('perfil social no campo de site (sem site próprio)', () => {
+    function setupSocialOnly(existing: { id: string; status: string; socialLinks: unknown } | null) {
+      const tx = setupTx();
+      (isOverBudget as jest.Mock).mockResolvedValue(false);
+      const prisma = buildPrisma();
+      prisma.scrapeJob.findFirstOrThrow.mockResolvedValue(baseScrapeJob);
+      prisma.organization.findUniqueOrThrow.mockResolvedValue({ scrapingMonthlyBudget: null });
+      tx.scrapeJob.update.mockResolvedValue({ ...baseScrapeJob, status: 'COMPLETED' });
+      tx.lead.findUnique.mockResolvedValue(existing);
+      tx.lead.upsert.mockImplementation((args: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'lead-1', ...args.create }),
+      );
+      const gateways = fakeGateways();
+      gateways.apify.searchBusinesses.mockResolvedValue([
+        {
+          name: 'Campsteel Comercio de Aço Inox',
+          address: null,
+          city: 'Campinas',
+          state: 'São Paulo',
+          phone: '+5519996016635',
+          website: 'https://www.facebook.com/www.campsteel.com.br?mibextid=ZbWKwL',
+          googleCategory: 'Metallurgy company',
+          rating: 5,
+          reviewCount: 1,
+          placeId: 'ChIJmY8-qUTByJQR12i3lXiUTWs',
+          raw: { countryCode: 'BR' },
+        },
+      ]);
+      gateways.explorium.matchBusiness.mockResolvedValue(null);
+      return { tx, prisma, gateways };
+    }
+
+    it('passa no filtro sem-site, grava sem site, com o Facebook como canal, e ganha os pontos de sem site', async () => {
+      const { tx, prisma, gateways } = setupSocialOnly(null);
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      expect(tx.lead.upsert).toHaveBeenCalledTimes(1);
+      const create = (tx.lead.upsert.mock.calls[0]![0] as { create: Record<string, unknown> }).create;
+      expect(create.website).toBeNull();
+      expect(create.socialLinks).toEqual([
+        { platform: 'FACEBOOK', url: 'https://www.facebook.com/www.campsteel.com.br?mibextid=ZbWKwL' },
+      ]);
+      expect(create.isWhatsappCandidate).toBe(true);
+      expect((create.scoreBreakdown as { hasNoWebsitePoints: number }).hasNoWebsitePoints).toBe(50);
+      expect(create.status).toBe('QUALIFIED');
+    });
+
+    it('rescan preserva links já conhecidos e não duplica o mesmo link', async () => {
+      const { tx, prisma, gateways } = setupSocialOnly({
+        id: 'lead-1',
+        status: 'DISCOVERED',
+        socialLinks: [
+          { platform: 'INSTAGRAM', url: 'https://instagram.com/campsteel' },
+          { platform: 'FACEBOOK', url: 'https://www.facebook.com/www.campsteel.com.br?mibextid=ZbWKwL' },
+        ],
+      });
+
+      await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
+
+      const update = (tx.lead.upsert.mock.calls[0]![0] as { update: Record<string, unknown> }).update;
+      expect(update.socialLinks).toEqual([
+        { platform: 'INSTAGRAM', url: 'https://instagram.com/campsteel' },
+        { platform: 'FACEBOOK', url: 'https://www.facebook.com/www.campsteel.com.br?mibextid=ZbWKwL' },
+      ]);
+    });
+  });
+
   it('rescan de um lead que já avançou (CONTACTED) não regride o status nem grava transição', async () => {
     const tx = setupTx();
     (isOverBudget as jest.Mock).mockResolvedValue(false);

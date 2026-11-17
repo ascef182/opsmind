@@ -149,8 +149,9 @@ No external spend. Nothing here sends anything.
   CTA, social-only presence, slow or non-mobile page).
 - Integration: Apify mapping verified (2026-11-17) against existing runs of `compass/google-maps-extractor` in the
   CazaTech Apify account, at no cost. Fixed then: full state names normalised to abbreviations, `""` phone/website
-  treated as absent, cost billed per returned place. Open: some places list a Facebook/Instagram page as their
-  "website" (2 of 30 in the sample); treat social-only URLs as "no website" plus a social link.
+  treated as absent, cost billed per returned place. Social-only "websites" (Facebook, Instagram,
+  WhatsApp, link-in-bio) now count as no website and become a social link (`classifyBusinessWebsite`); 21
+  existing leads that were wrongly DISQUALIFIED were reset to DISCOVERED for re-scoring.
 - Cost: US$0.005 per returned place on the Free tier (30 places = US$0.15). At ~40 places/day: ~US$6/month.
 - Acceptance: a daily run creates deduplicated US leads with source, timestamp and confidence; reruns create no
   duplicates; spend appears in `CostEvent`.
