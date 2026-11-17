@@ -7,6 +7,7 @@ jest.mock('bullmq', () => ({
 jest.mock('ioredis', () => jest.fn().mockImplementation(() => ({ disconnect: jest.fn() })));
 
 import { ForbiddenException } from '@nestjs/common';
+import { AiRefusalException } from '../ai/services/ai-one-shot-runner';
 import { Worker } from 'bullmq';
 import { OutreachAutodraftConsumer } from './outreach-autodraft.consumer';
 
@@ -182,7 +183,22 @@ describe('OutreachAutodraftConsumer', () => {
     expect(outreachService.markSent).not.toHaveBeenCalled();
   });
 
-  it('qualquer outro erro relança (deixa o retry padrão do BullMQ agir)', async () => {
+  it('recusa da IA resolve o job sem relançar (retentar pagaria cada tentativa de novo)', async () => {
+    const outreachService = buildOutreachService();
+    outreachService.generateDraft.mockRejectedValue(new AiRefusalException('outreach.draft'));
+    const consumer = new OutreachAutodraftConsumer(
+      buildConfigService() as never,
+      outreachService as never,
+      buildPrisma() as never,
+    );
+    consumer.onModuleInit();
+
+    const processor = getRegisteredProcessor();
+
+    await expect(processor({ data: jobData })).resolves.toBeUndefined();
+  });
+
+  it('qualquer outro erro relança (deixa o retry da fila agir)', async () => {
     const outreachService = buildOutreachService();
     const networkError = new Error('Falha de rede ao chamar o gateway de IA');
     outreachService.generateDraft.mockRejectedValue(networkError);

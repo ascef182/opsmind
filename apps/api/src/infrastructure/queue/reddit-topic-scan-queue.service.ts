@@ -2,7 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
-import { REDDIT_TOPIC_SCAN_QUEUE, type RedditTopicScanJobData } from '@opsmind/shared-types';
+import { REDDIT_TOPIC_SCAN_QUEUE, type RedditTopicScanJobData, RETRYABLE_JOB_OPTIONS } from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
 
 /**
@@ -24,6 +24,7 @@ export class RedditTopicScanQueueService implements OnModuleDestroy {
     });
     this.queue = new Queue<RedditTopicScanJobData>(REDDIT_TOPIC_SCAN_QUEUE, {
       connection: this.connection,
+      defaultJobOptions: RETRYABLE_JOB_OPTIONS,
     });
   }
 

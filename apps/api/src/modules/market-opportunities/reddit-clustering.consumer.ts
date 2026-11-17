@@ -19,25 +19,22 @@
 // `distinctAuthorCount` estimado pela IA); o outreach continua sempre
 // dirigido a negócios locais específicos via `OutreachService`
 // (`apps/api/src/modules/leads/outreach.service.ts`), nunca a partir daqui.
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { Worker, type Job } from 'bullmq';
 import IORedis from 'ioredis';
-import type Anthropic from '@anthropic-ai/sdk';
 import {
   REDDIT_CLUSTERING_QUEUE,
   isSafeHttpUrl,
   type RedditClusteringJobData,
 } from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
-import type { AIRequest, AIRequestStatus, MarketOpportunity } from '@opsmind/database';
-import { AI_MODEL_LABEL_UNKNOWN, estimateAiCostUsd } from '@opsmind/shared-types';
+import type { MarketOpportunity } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
-import { BudgetService } from '../ai/services/budget.service';
-import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
+import { AiBudgetExceededException, AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 
 // Limiar de "muita gente reclamando" — comparado sempre contra
 // `distinctAuthorCount`, nunca contra `mentionCount`/total de posts. Um
@@ -97,8 +94,7 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly organizationsService: OrganizationsService,
-    private readonly budgetService: BudgetService,
-    @Inject(AI_GATEWAY) private readonly gateway: AiGateway,
+    private readonly aiRunner: AiOneShotRunner,
   ) {
     this.connection = new IORedis(this.configService.get('REDIS_URL', { infer: true }), {
       maxRetriesPerRequest: null,
@@ -131,83 +127,40 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
     // faz sentido o BullMQ retentar antes do próximo mês).
     const organization = await this.organizationsService.findById(organizationId);
     const monthlyBudget = organization?.aiMonthlyBudget ? Number(organization.aiMonthlyBudget) : null;
-    if (await this.budgetService.isOverBudget(organizationId, monthlyBudget)) {
-      // Mesma disciplina de `OutreachService.generateDraft`: persiste um
-      // AIRequest BUDGET_EXCEEDED (0 tokens/custo) mesmo no corte — sem
-      // isso, `AiUsageService.getSummary`/`listRecent` (dashboard "AI
-      // Usage") nunca saberia que este job foi pulado, e o `monthSpend`
-      // do Redis (BudgetService, correto) divergeria silenciosamente da
-      // soma que o dashboard mostra a partir de `ai_requests`.
-      await this.persistAiRequest(organizationId, 'BUDGET_EXCEEDED', AI_MODEL_LABEL_UNKNOWN, 0, 0, 0, 0);
-      this.logger.warn(
-        `clustering de Reddit pulado (organizationId=${organizationId}, topicId=${topicId}) — orçamento mensal de IA estourado`,
-      );
-      return;
-    }
-
     if (candidatePosts.length === 0) {
       return;
     }
 
-    const prompt = this.buildPrompt(topicQuery, candidatePosts);
-
-    // Mesmo padrão de `OutreachService.generateDraft`: chamada ao gateway
-    // envolta em try/catch só para persistir um AIRequest ERROR antes de
-    // relançar — o erro em si continua propagando (deixa o retry padrão do
-    // BullMQ agir; diferente do corte de orçamento acima, que nunca lança).
-    const startedAt = Date.now();
-    let response: Anthropic.Message;
+    // Estouro de orçamento NUNCA lança aqui: o job roda sem humano pedindo,
+    // então é só motivo para pular desta vez (o runner já gravou o AIRequest
+    // BUDGET_EXCEEDED). Qualquer outro erro propaga para o retry do BullMQ.
+    let text: string;
     try {
-      response = await this.gateway.sendMessage({
-        system: CLUSTERING_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: prompt }],
-        tools: [],
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      await this.persistAiRequest(
+      ({ text } = await this.aiRunner.run({
         organizationId,
-        'ERROR',
-        AI_MODEL_LABEL_UNKNOWN,
-        0,
-        0,
-        Date.now() - startedAt,
-        0,
-        errorMessage,
-      );
+        monthlyBudget,
+        operation: 'market.reddit_clustering',
+        agent: 'market-research',
+        tier: 'routine',
+        actor: { type: 'AI' },
+        system: CLUSTERING_SYSTEM_PROMPT,
+        prompt: this.buildPrompt(topicQuery, candidatePosts),
+      }));
+    } catch (error) {
+      if (error instanceof AiBudgetExceededException) {
+        this.logger.warn(
+          `clustering de Reddit pulado (organizationId=${organizationId}, topicId=${topicId}) — orçamento mensal de IA estourado`,
+        );
+        return;
+      }
       throw error;
     }
-
-    const latencyMs = Date.now() - startedAt;
-    const cost = estimateAiCostUsd(
-      response.model,
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-    );
-    const text = this.extractText(response);
-
-    // A chamada à IA teve sucesso (respondeu, consumiu tokens) — grava
-    // SUCCESS aqui, ANTES do parse do JSON. Um parse malformado depois
-    // disso é uma falha de FORMATO da resposta, não uma falha da chamada
-    // em si; `recordSpend`/`AIRequest` continuam refletindo o custo real
-    // incorrido, igual já acontecia com `BudgetService.recordSpend`.
-    await this.persistAiRequest(
-      organizationId,
-      'SUCCESS',
-      response.model,
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-      latencyMs,
-      cost,
-    );
 
     const clusters = this.parseClusters(text, organizationId, topicId);
     if (clusters === null) {
       // JSON malformado/formato inesperado — já logado dentro de
-      // `parseClusters`. Ainda assim registra o gasto real com a IA (a
-      // chamada aconteceu e consumiu tokens, independente do parse ter
-      // funcionado) e resolve o job sem lançar.
-      await this.budgetService.recordSpend(organizationId, cost);
+      // `parseClusters`. O gasto real já foi registrado pelo runner; resolve
+      // o job sem lançar.
       return;
     }
 
@@ -217,8 +170,6 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
       }
       await this.upsertOpportunity(organizationId, cluster, candidatePosts);
     }
-
-    await this.budgetService.recordSpend(organizationId, cost);
 
     await this.auditService.log({
       actorType: 'AI',
@@ -413,50 +364,6 @@ export class RedditClusteringConsumer implements OnModuleInit, OnModuleDestroy {
       return slug;
     }
     return `topic-${createHash('sha256').update(label).digest('hex').slice(0, 16)}`;
-  }
-
-  private extractText(response: Anthropic.Message): string {
-    return response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-      .trim();
-  }
-
-  // Mesmo formato de `OutreachService.persistAiRequest`/`LeadAnalysisService
-  // .persistAiRequest` — sem essa gravação, `AiUsageService.getSummary`
-  // (dailySeries/avgLatencyMs/totalRequests) e `listRecent` (trilha "AI
-  // Requests" do dashboard AI Usage) nunca veriam nenhuma chamada deste
-  // consumer, mesmo com `BudgetService.recordSpend`/`AuditService.log`
-  // corretos — os dois leem de tabelas diferentes (`ai_requests` vs.
-  // Redis/`audit_logs`). `userId: null`/`actorType: 'AI'`/`actorId: null`
-  // porque não há humano por trás deste job automático — mesmo raciocínio
-  // do `actorType: 'AI'`/`actorId: null` já usado no audit log acima.
-  private persistAiRequest(
-    organizationId: string,
-    status: AIRequestStatus,
-    model: string,
-    inputTokens: number,
-    outputTokens: number,
-    latencyMs: number,
-    cost: number,
-    errorMessage?: string,
-  ): Promise<AIRequest> {
-    return this.prisma.aIRequest.create({
-      data: {
-        organizationId,
-        userId: null,
-        actorType: 'AI',
-        actorId: null,
-        model,
-        inputTokens,
-        outputTokens,
-        latencyMs,
-        estimatedCost: cost,
-        status,
-        errorMessage,
-      },
-    });
   }
 
   async onModuleDestroy(): Promise<void> {

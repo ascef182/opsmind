@@ -2,7 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
-import { LEAD_SCRAPE_QUEUE, type LeadScrapeJobData } from '@opsmind/shared-types';
+import { LEAD_SCRAPE_QUEUE, type LeadScrapeJobData, NON_RETRYABLE_JOB_OPTIONS } from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
 
 /**
@@ -28,6 +28,7 @@ export class LeadScrapeQueueService implements OnModuleDestroy {
     });
     this.queue = new Queue<LeadScrapeJobData>(LEAD_SCRAPE_QUEUE, {
       connection: this.connection,
+      defaultJobOptions: NON_RETRYABLE_JOB_OPTIONS,
     });
   }
 

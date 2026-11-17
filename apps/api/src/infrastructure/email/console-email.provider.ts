@@ -4,6 +4,9 @@ import type { EmailService, SendEmailParams, SendEmailResult, SendInvitationEmai
 /** Implementação de dev: loga o email em vez de enviar de verdade. */
 @Injectable()
 export class ConsoleEmailProvider implements EmailService {
+  readonly providerName = 'console';
+  readonly costPerMessageUsd = 0;
+
   private readonly logger = new Logger(ConsoleEmailProvider.name);
 
   async sendInvitationEmail({ to, organizationName, token }: SendInvitationEmailParams): Promise<void> {

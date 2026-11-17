@@ -1,6 +1,6 @@
 import { Queue, Worker, type Processor } from 'bullmq';
 import type IORedis from 'ioredis';
-import { LEAD_SCRAPE_QUEUE, type LeadScrapeJobData } from '@opsmind/shared-types';
+import { LEAD_SCRAPE_QUEUE, type LeadScrapeJobData, NON_RETRYABLE_JOB_OPTIONS } from '@opsmind/shared-types';
 
 /**
  * Mesmo padrão de `queue.ts` (fila de automations) — `createRedisConnection`
@@ -9,7 +9,7 @@ import { LEAD_SCRAPE_QUEUE, type LeadScrapeJobData } from '@opsmind/shared-types
  * mesma conexão em `main.ts`, não cria a sua própria.
  */
 export function createLeadScrapeQueue(connection: IORedis): Queue<LeadScrapeJobData> {
-  return new Queue<LeadScrapeJobData>(LEAD_SCRAPE_QUEUE, { connection });
+  return new Queue<LeadScrapeJobData>(LEAD_SCRAPE_QUEUE, { connection, defaultJobOptions: NON_RETRYABLE_JOB_OPTIONS });
 }
 
 export function createLeadScrapeWorker(

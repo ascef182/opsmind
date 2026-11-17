@@ -1,12 +1,9 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
-import type Anthropic from '@anthropic-ai/sdk';
-import type { AIRequest, AIRequestStatus, Deal } from '@opsmind/database';
-import { AI_MODEL_LABEL_UNKNOWN, estimateAiCostUsd } from '@opsmind/shared-types';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import type { Deal } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
-import { BudgetService } from '../ai/services/budget.service';
-import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 import { DealsService } from './deals.service';
 import { buildProposalPdf } from './utils/build-proposal-pdf';
 
@@ -34,8 +31,7 @@ const PROPOSAL_SYSTEM_PROMPT = [
 export class DealProposalService {
   constructor(
     private readonly prisma: PrismaService,
-    @Inject(AI_GATEWAY) private readonly gateway: AiGateway,
-    private readonly budgetService: BudgetService,
+    private readonly aiRunner: AiOneShotRunner,
     private readonly organizationsService: OrganizationsService,
     private readonly auditService: AuditService,
     private readonly dealsService: DealsService,
@@ -47,63 +43,17 @@ export class DealProposalService {
 
     const organization = await this.organizationsService.findById(organizationId);
     const monthlyBudget = organization?.aiMonthlyBudget ? Number(organization.aiMonthlyBudget) : null;
-    if (await this.budgetService.isOverBudget(organizationId, monthlyBudget)) {
-      await this.persistAiRequest(
-        organizationId,
-        userId,
-        'BUDGET_EXCEEDED',
-        AI_MODEL_LABEL_UNKNOWN,
-        0,
-        0,
-        0,
-        0,
-      );
-      throw new ForbiddenException('Orçamento mensal de IA desta organização foi atingido.');
-    }
-
-    const prompt = this.buildPrompt(deal, customer);
-
-    const startedAt = Date.now();
-    let response: Anthropic.Message;
-    try {
-      response = await this.gateway.sendMessage({
-        system: PROPOSAL_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: prompt }],
-        tools: [],
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      await this.persistAiRequest(
-        organizationId,
-        userId,
-        'ERROR',
-        AI_MODEL_LABEL_UNKNOWN,
-        0,
-        0,
-        Date.now() - startedAt,
-        0,
-        errorMessage,
-      );
-      throw error;
-    }
-
-    const latencyMs = Date.now() - startedAt;
-    const draft = this.extractText(response);
-    const cost = estimateAiCostUsd(
-      response.model,
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-    );
-    await this.persistAiRequest(
+    const { text: draft } = await this.aiRunner.run({
       organizationId,
-      userId,
-      'SUCCESS',
-      response.model,
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-      latencyMs,
-      cost,
-    );
+      monthlyBudget,
+      operation: 'deal.proposal',
+      agent: 'proposal',
+      tier: 'standard',
+      actor: { type: 'USER', userId },
+      system: PROPOSAL_SYSTEM_PROMPT,
+      prompt: this.buildPrompt(deal, customer),
+      dealId,
+    });
 
     const updated = await this.prisma.deal.update({
       where: { id: dealId },
@@ -172,41 +122,5 @@ export class DealProposalService {
     ]
       .filter((line): line is string => line !== null)
       .join('\n');
-  }
-
-  private extractText(response: Anthropic.Message): string {
-    return response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-      .trim();
-  }
-
-  private persistAiRequest(
-    organizationId: string,
-    userId: string,
-    status: AIRequestStatus,
-    model: string,
-    inputTokens: number,
-    outputTokens: number,
-    latencyMs: number,
-    cost: number,
-    errorMessage?: string,
-  ): Promise<AIRequest> {
-    return this.prisma.aIRequest.create({
-      data: {
-        organizationId,
-        userId,
-        actorType: 'USER',
-        actorId: userId,
-        model,
-        inputTokens,
-        outputTokens,
-        latencyMs,
-        estimatedCost: cost,
-        status,
-        errorMessage,
-      },
-    });
   }
 }

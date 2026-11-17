@@ -23,13 +23,18 @@ describe('OutreachAutodraftQueueService', () => {
     await service.enqueue(data);
 
     const queueInstance = (Queue as unknown as jest.Mock).mock.results[0]!.value;
-    expect(Queue).toHaveBeenCalledWith('outreach-autodraft', expect.anything());
-    // `attempts`/`backoff`: dá tempo pro `OutreachAutodraftConsumer` reconfirmar
-    // QUALIFIED no banco contra uma transação ainda não commitada (ver
-    // comentário em `enqueue()` e o fix report de Harvey Fase 7).
-    expect(queueInstance.add).toHaveBeenCalledWith('draft', data, {
-      attempts: 6,
-      backoff: { type: 'exponential', delay: 2000 },
-    });
+    // `attempts`/`backoff` na própria fila (não só no `add()` da API): dá
+    // tempo pro `OutreachAutodraftConsumer` reconfirmar QUALIFIED no banco
+    // contra uma transação ainda não commitada, venha o job da API ou do worker.
+    expect(Queue).toHaveBeenCalledWith(
+      'outreach-autodraft',
+      expect.objectContaining({
+        defaultJobOptions: expect.objectContaining({
+          attempts: 6,
+          backoff: { type: 'exponential', delay: 2000 },
+        }),
+      }),
+    );
+    expect(queueInstance.add).toHaveBeenCalledWith('draft', data);
   });
 });

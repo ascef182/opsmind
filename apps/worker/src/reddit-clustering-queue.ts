@@ -1,6 +1,6 @@
 import { Queue } from 'bullmq';
 import type IORedis from 'ioredis';
-import { REDDIT_CLUSTERING_QUEUE, type RedditClusteringJobData } from '@opsmind/shared-types';
+import { REDDIT_CLUSTERING_QUEUE, type RedditClusteringJobData, RETRYABLE_JOB_OPTIONS } from '@opsmind/shared-types';
 
 /**
  * Produtor da fila `reddit-clustering` — metade PRODUTORA apenas (mesma
@@ -16,5 +16,5 @@ import { REDDIT_CLUSTERING_QUEUE, type RedditClusteringJobData } from '@opsmind/
  * `outreach-autodraft-queue.ts`/`lead-scrape-queue.ts`.
  */
 export function createRedditClusteringQueue(connection: IORedis): Queue<RedditClusteringJobData> {
-  return new Queue<RedditClusteringJobData>(REDDIT_CLUSTERING_QUEUE, { connection });
+  return new Queue<RedditClusteringJobData>(REDDIT_CLUSTERING_QUEUE, { connection, defaultJobOptions: RETRYABLE_JOB_OPTIONS });
 }

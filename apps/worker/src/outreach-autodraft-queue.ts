@@ -1,6 +1,6 @@
 import { Queue } from 'bullmq';
 import type IORedis from 'ioredis';
-import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData } from '@opsmind/shared-types';
+import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData, AUTODRAFT_JOB_OPTIONS } from '@opsmind/shared-types';
 
 /**
  * Produtor da fila `outreach-autodraft` — metade PRODUTORA apenas (mesma
@@ -16,5 +16,5 @@ import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData } from '@opsmin
  * `queue.ts`) — não cria a sua própria, mesmo racional de `lead-scrape-queue.ts`.
  */
 export function createOutreachAutodraftQueue(connection: IORedis): Queue<OutreachAutodraftJobData> {
-  return new Queue<OutreachAutodraftJobData>(OUTREACH_AUTODRAFT_QUEUE, { connection });
+  return new Queue<OutreachAutodraftJobData>(OUTREACH_AUTODRAFT_QUEUE, { connection, defaultJobOptions: AUTODRAFT_JOB_OPTIONS });
 }

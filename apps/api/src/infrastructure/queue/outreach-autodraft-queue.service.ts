@@ -2,7 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
-import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData } from '@opsmind/shared-types';
+import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData, AUTODRAFT_JOB_OPTIONS } from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
 
 /**
@@ -24,6 +24,7 @@ export class OutreachAutodraftQueueService implements OnModuleDestroy {
     });
     this.queue = new Queue<OutreachAutodraftJobData>(OUTREACH_AUTODRAFT_QUEUE, {
       connection: this.connection,
+      defaultJobOptions: AUTODRAFT_JOB_OPTIONS,
     });
   }
 
@@ -46,7 +47,8 @@ export class OutreachAutodraftQueueService implements OnModuleDestroy {
     // residual aceito: um chat com IA patologicamente longo (muitas
     // iterações de tool call) ainda pode exceder essa janela e perder o
     // autodraft — risco limitado, não algo que este fix precise eliminar.
-    return this.queue.add('draft', data, { attempts: 6, backoff: { type: 'exponential', delay: 2000 } });
+    // Tentativas/backoff vêm de `AUTODRAFT_JOB_OPTIONS` na própria fila.
+    return this.queue.add('draft', data);
   }
 
   async onModuleDestroy(): Promise<void> {

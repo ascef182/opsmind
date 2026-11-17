@@ -41,6 +41,7 @@ import { MarketOpportunitiesService } from './market-opportunities.service';
 import { MarketOpportunitiesController } from './market-opportunities.controller';
 import { RedditClusteringConsumer } from './reddit-clustering.consumer';
 import { BudgetService } from '../ai/services/budget.service';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 import { AI_GATEWAY } from '../ai/gateway/ai-gateway.interface';
 import { ClaudeGatewayService } from '../ai/gateway/claude-gateway.service';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
@@ -54,6 +55,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     MarketOpportunitiesService,
     RedditClusteringConsumer,
     BudgetService,
+    AiOneShotRunner,
     { provide: AI_GATEWAY, useClass: ClaudeGatewayService },
     TenantGuard,
     RolesGuard,

@@ -28,6 +28,7 @@ import { OUTREACH_AUTODRAFT_QUEUE, type OutreachAutodraftJobData } from '@opsmin
 import type { Env } from '@opsmind/config/env/schema';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { OutreachService } from './outreach.service';
+import { AiRefusalException } from '../ai/services/ai-one-shot-runner';
 
 /**
  * Consumer BullMQ da fila `outreach-autodraft` — gerada por
@@ -43,10 +44,10 @@ import { OutreachService } from './outreach.service';
  * `ForbiddenException` (orçamento mensal de IA estourado, lançado por
  * `OutreachService.generateDraft`) resolve o job SEM relançar — não faz
  * sentido o BullMQ retentar antes do próximo mês. Qualquer outro erro
- * relança, deixando o retry padrão do BullMQ agir (rede instável, erro
- * transitório do gateway de IA, etc.) — isso só passou a ter efeito de
- * verdade depois do fix de `attempts`/`backoff` em
- * `OutreachAutodraftQueueService.enqueue()` (review final, Harvey Fase 7):
+ * relança, deixando o retry da fila agir (rede instável, erro transitório do
+ * gateway de IA, etc.; `AUTODRAFT_JOB_OPTIONS` em @opsmind/shared-types) —
+ * isso só passou a ter efeito de verdade depois do fix de `attempts`/`backoff`
+ * (review final, Harvey Fase 7):
  * antes disso o default do BullMQ (`attempts: 1`) fazia qualquer relance
  * aqui ser, na prática, código morto — o job simplesmente ia pra `failed`
  * sem nenhuma segunda tentativa.
@@ -153,6 +154,14 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
         // normalmente (sem gerar rascunho nenhum desta vez).
         this.logger.warn(
           `rascunho automático de outreach pulado (organizationId=${organizationId}, leadId=${leadId}) — orçamento mensal de IA estourado`,
+        );
+        return;
+      }
+      if (error instanceof AiRefusalException) {
+        // A mesma entrada tende a ser recusada de novo: retentar só pagaria
+        // cada tentativa outra vez. Um humano gera o rascunho manualmente.
+        this.logger.warn(
+          `rascunho automático de outreach recusado pela IA (organizationId=${organizationId}, leadId=${leadId})`,
         );
         return;
       }

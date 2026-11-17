@@ -37,6 +37,10 @@ export interface SendEmailResult {
  * um segundo mecanismo de envio paralelo.
  */
 export interface EmailService {
+  // Identificação e custo estimado por mensagem, para a razão de custos
+  // (`CostEvent`) do Revenue Engine.
+  readonly providerName: string;
+  readonly costPerMessageUsd: number;
   sendInvitationEmail(params: SendInvitationEmailParams): Promise<void>;
   sendEmail(params: SendEmailParams): Promise<SendEmailResult>;
 }

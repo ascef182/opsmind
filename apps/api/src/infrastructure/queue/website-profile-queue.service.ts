@@ -2,7 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
-import { WEBSITE_PROFILE_QUEUE, type WebsiteProfileJobData } from '@opsmind/shared-types';
+import { WEBSITE_PROFILE_QUEUE, type WebsiteProfileJobData, RETRYABLE_JOB_OPTIONS } from '@opsmind/shared-types';
 import type { Env } from '@opsmind/config/env/schema';
 
 /**
@@ -26,6 +26,7 @@ export class WebsiteProfileQueueService implements OnModuleDestroy {
     });
     this.queue = new Queue<WebsiteProfileJobData>(WEBSITE_PROFILE_QUEUE, {
       connection: this.connection,
+      defaultJobOptions: RETRYABLE_JOB_OPTIONS,
     });
   }
 

@@ -1,11 +1,13 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { LeadAnalysisService } from './lead-analysis.service';
 import type { AiGateway } from '../ai/gateway/ai-gateway.interface';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 
 function buildDeps() {
   const prisma = {
     lead: { findFirst: jest.fn() },
     aIRequest: { create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }) },
+    costEvent: { create: jest.fn() },
     leadEnrichment: { create: jest.fn() },
   };
   // Ver comentário em PrismaOutOfBandService / outreach.service.spec.ts.
@@ -22,11 +24,10 @@ function buildDeps() {
   };
   const auditService = { log: jest.fn().mockResolvedValue(undefined) };
 
+  const aiRunner = new AiOneShotRunner(prismaOutOfBand as never, gateway, budgetService as never);
   const service = new LeadAnalysisService(
     prisma as never,
-    prismaOutOfBand as never,
-    gateway,
-    budgetService as never,
+    aiRunner,
     organizationsService as never,
     auditService as never,
   );

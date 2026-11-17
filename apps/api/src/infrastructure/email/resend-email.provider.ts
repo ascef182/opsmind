@@ -18,6 +18,11 @@ import type { EmailService, SendEmailParams, SendEmailResult, SendInvitationEmai
  */
 @Injectable()
 export class ResendEmailProvider implements EmailService {
+  readonly providerName = 'resend';
+  // Estimativa pelo plano Pro (US$20 por 50 mil e-mails). No plano grátis o
+  // custo marginal é zero, então isto superestima de leve, nunca subestima.
+  readonly costPerMessageUsd = 0.0004;
+
   private readonly logger = new Logger(ResendEmailProvider.name);
   private readonly client: Resend;
   private readonly from: string;

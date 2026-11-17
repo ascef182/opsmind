@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { DealProposalService } from './deal-proposal.service';
 import type { AiGateway } from '../ai/gateway/ai-gateway.interface';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 
 function mockGatewayResponse(
   text: string,
@@ -22,17 +23,24 @@ function buildDeps() {
     deal: { update: jest.fn() },
     customer: { findFirst: jest.fn() },
     aIRequest: { create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }) },
+    costEvent: { create: jest.fn() },
+  };
+  const prismaOutOfBand = {
+    runOutsideTransaction: jest.fn((_organizationId: string, fn: (tx: typeof prisma) => unknown) => fn(prisma)),
   };
   const gateway: jest.Mocked<AiGateway> = { sendMessage: jest.fn() };
-  const budgetService = { isOverBudget: jest.fn().mockResolvedValue(false) };
+  const budgetService = {
+    isOverBudget: jest.fn().mockResolvedValue(false),
+    recordSpend: jest.fn().mockResolvedValue(undefined),
+  };
   const organizationsService = { findById: jest.fn().mockResolvedValue({ id: 'org-1', aiMonthlyBudget: null }) };
   const auditService = { log: jest.fn().mockResolvedValue(undefined) };
   const dealsService = { findByIdOrThrow: jest.fn() };
 
+  const aiRunner = new AiOneShotRunner(prismaOutOfBand as never, gateway, budgetService as never);
   const service = new DealProposalService(
     prisma as never,
-    gateway,
-    budgetService as never,
+    aiRunner,
     organizationsService as never,
     auditService as never,
     dealsService as never,
@@ -94,6 +102,28 @@ describe('DealProposalService.generate', () => {
         data: expect.objectContaining({ model: 'claude-sonnet-5', estimatedCost: 12 }),
       }),
     );
+  });
+
+  it('debita o custo da proposta no orçamento e grava a linha na razão de custos (antes não debitava)', async () => {
+    const { service, prisma, gateway, dealsService, budgetService } = buildDeps();
+    dealsService.findByIdOrThrow.mockResolvedValue(baseDeal);
+    prisma.customer.findFirst.mockResolvedValue(baseCustomer);
+    gateway.sendMessage.mockResolvedValue(mockGatewayResponse('ok', 1_000_000, 1_000_000, 'claude-sonnet-5'));
+    prisma.deal.update.mockResolvedValue({ ...baseDeal, proposalDraft: 'ok' });
+
+    await service.generate('org-1', 'deal-1', 'user-1');
+
+    expect(budgetService.recordSpend).toHaveBeenCalledWith('org-1', 12);
+    expect(gateway.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ tier: 'standard' }));
+    expect(prisma.costEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        category: 'AI',
+        operation: 'deal.proposal',
+        dealId: 'deal-1',
+        aiRequestId: 'ai-req-1',
+        amountUsd: 12,
+      }),
+    });
   });
 
   it('rejeita quando o cliente vinculado não é encontrado (soft-deletado ou de outra org)', async () => {

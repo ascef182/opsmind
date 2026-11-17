@@ -1,13 +1,9 @@
-import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type Anthropic from '@anthropic-ai/sdk';
-import type { AIRequest, AIRequestStatus, Lead, LeadEnrichment, Prisma } from '@opsmind/database';
-import { AI_MODEL_LABEL_UNKNOWN, estimateAiCostUsd } from '@opsmind/shared-types';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import type { Lead, LeadEnrichment, Prisma } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
-import { PrismaOutOfBandService } from '../../infrastructure/database/prisma-out-of-band.service';
 import { AuditService } from '../audit/audit.service';
 import { OrganizationsService } from '../organizations/organizations.service';
-import { BudgetService } from '../ai/services/budget.service';
-import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 
 const ANALYSIS_SYSTEM_PROMPT = [
   'Você analisa o potencial de um lead de prospecção B2B para o OpsMind, um CRM para pequenas equipes.',
@@ -40,9 +36,7 @@ const ANALYSIS_SYSTEM_PROMPT = [
 export class LeadAnalysisService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly prismaOutOfBand: PrismaOutOfBandService,
-    @Inject(AI_GATEWAY) private readonly gateway: AiGateway,
-    private readonly budgetService: BudgetService,
+    private readonly aiRunner: AiOneShotRunner,
     private readonly organizationsService: OrganizationsService,
     private readonly auditService: AuditService,
   ) {}
@@ -57,71 +51,20 @@ export class LeadAnalysisService {
       throw new NotFoundException('Lead não encontrado');
     }
 
-    // Mesmo corte de orçamento (e mesma disciplina de persistir um
-    // AIRequest BUDGET_EXCEEDED mesmo no corte) de `OutreachService
-    // .generateDraft`/`AiService.chat`.
+    // Corte de orçamento, AIRequest e razão de custos ficam no runner.
     const organization = await this.organizationsService.findById(organizationId);
     const monthlyBudget = organization?.aiMonthlyBudget ? Number(organization.aiMonthlyBudget) : null;
-    if (await this.budgetService.isOverBudget(organizationId, monthlyBudget)) {
-      await this.persistAiRequest(
-        organizationId,
-        userId,
-        'BUDGET_EXCEEDED',
-        AI_MODEL_LABEL_UNKNOWN,
-        0,
-        0,
-        0,
-        0,
-      );
-      throw new ForbiddenException('Orçamento mensal de IA desta organização foi atingido.');
-    }
-
-    const prompt = this.buildPrompt(lead);
-
-    const startedAt = Date.now();
-    let response: Anthropic.Message;
-    try {
-      response = await this.gateway.sendMessage({
-        system: ANALYSIS_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: prompt }],
-        tools: [],
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      // Nunca houve resposta real da API aqui — sem modelo pra gravar.
-      await this.persistAiRequest(
-        organizationId,
-        userId,
-        'ERROR',
-        AI_MODEL_LABEL_UNKNOWN,
-        0,
-        0,
-        Date.now() - startedAt,
-        0,
-        errorMessage,
-      );
-      throw error;
-    }
-
-    const latencyMs = Date.now() - startedAt;
-    const text = this.extractText(response);
-    const cost = estimateAiCostUsd(
-      response.model,
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-    );
-
-    await this.persistAiRequest(
+    const { text } = await this.aiRunner.run({
       organizationId,
-      userId,
-      'SUCCESS',
-      response.model,
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-      latencyMs,
-      cost,
-    );
-    await this.budgetService.recordSpend(organizationId, cost);
+      monthlyBudget,
+      operation: 'lead.analysis',
+      agent: 'business-intelligence',
+      tier: 'standard',
+      actor: { type: 'USER', userId },
+      system: ANALYSIS_SYSTEM_PROMPT,
+      prompt: this.buildPrompt(lead),
+      leadId,
+    });
 
     const enrichment = await this.prisma.leadEnrichment.create({
       data: {
@@ -169,47 +112,5 @@ export class LeadAnalysisService {
       '',
       'Explique por que este lead é (ou não) um bom alvo de prospecção, citando os dados acima.',
     ].join('\n');
-  }
-
-  private extractText(response: Anthropic.Message): string {
-    return response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-      .trim();
-  }
-
-  // `runOutsideTransaction`, não `this.prisma.aIRequest.create` direto —
-  // mesmo racional (e mesmo bug corrigido) de
-  // `OutreachService.persistAiRequest`/`DealProposalService.persistAiRequest`:
-  // sem isso, o registro de uma tentativa ERROR/BUDGET_EXCEEDED nunca
-  // sobrevivia ao rollback da transação da request quando
-  // `analyzeLeadPotential` relança o erro logo em seguida.
-  private persistAiRequest(
-    organizationId: string,
-    userId: string,
-    status: AIRequestStatus,
-    model: string,
-    inputTokens: number,
-    outputTokens: number,
-    latencyMs: number,
-    cost: number,
-    errorMessage?: string,
-  ): Promise<AIRequest> {
-    return this.prismaOutOfBand.runOutsideTransaction(organizationId, (tx) =>
-      tx.aIRequest.create({
-        data: {
-          organizationId,
-          userId,
-          model,
-          inputTokens,
-          outputTokens,
-          latencyMs,
-          estimatedCost: cost,
-          status,
-          errorMessage,
-        },
-      }),
-    );
   }
 }

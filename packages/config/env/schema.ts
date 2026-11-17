@@ -122,6 +122,18 @@ export const envSchema = z.object({
   // usar claude-sonnet-5 (mais barato, ainda suporta thinking adaptativo)
   // sem tocar em código; produção continua em claude-opus-5 por default.
   ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
+  // Tiers de modelo do Revenue Engine (`AiModelTier` no AI Gateway): redação
+  // e personalização usam o `STANDARD`; classificação e extração em volume
+  // usam o `ROUTINE`. Trocar de modelo é só mudar a env.
+  ANTHROPIC_MODEL_STANDARD: z.string().default('claude-sonnet-5-5'),
+  ANTHROPIC_MODEL_ROUTINE: z.string().default('claude-haiku-5-5'),
+  // Freio de emergência de infraestrutura: `true` bloqueia TODO envio real de
+  // outreach, de qualquer organização, sem depender do banco. O controle do
+  // dia a dia é `OrganizationRevenueSettings.outreachPaused`.
+  OUTREACH_GLOBAL_PAUSE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
 
   // Documentos + RAG (Fase 4) — embeddings via OpenAI (Anthropic não tem
   // endpoint de embeddings; PRD §16 já lista "OpenAI/Anthropic" lado a lado

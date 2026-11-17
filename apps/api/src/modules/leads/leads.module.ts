@@ -21,6 +21,7 @@ import { SignalCodesService } from './signal-codes.service';
 import { SignalCodesController } from './signal-codes.controller';
 import { OutreachAutodraftConsumer } from './outreach-autodraft.consumer';
 import { BudgetService } from '../ai/services/budget.service';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 import { AI_GATEWAY } from '../ai/gateway/ai-gateway.interface';
 import { ClaudeGatewayService } from '../ai/gateway/claude-gateway.service';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
@@ -64,6 +65,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     SignalCodesService,
     OutreachAutodraftConsumer,
     BudgetService,
+    AiOneShotRunner,
     { provide: AI_GATEWAY, useClass: ClaudeGatewayService },
     TenantGuard,
     RolesGuard,

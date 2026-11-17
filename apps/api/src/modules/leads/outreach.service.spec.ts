@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { OutreachService } from './outreach.service';
 import type { AiGateway } from '../ai/gateway/ai-gateway.interface';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 
 function buildDeps() {
   const prisma = {
@@ -16,12 +17,12 @@ function buildDeps() {
       findFirst: jest.fn().mockResolvedValue({ status: 'QUALIFIED' }),
     },
     aIRequest: { create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }) },
+    costEvent: { create: jest.fn() },
   };
   // `PrismaOutOfBandService` mock: invoca `fn` com o mock de `aIRequest`
   // acima — simplificação de teste (não importa aqui que seja uma
   // transação genuinamente separada, isso é coberto por
-  // prisma-out-of-band.service.spec.ts), só que `persistAiRequest` chame
-  // este serviço (não `prisma.aIRequest.create` direto).
+  // prisma-out-of-band.service.spec.ts).
   const prismaOutOfBand = {
     runOutsideTransaction: jest.fn((_organizationId: string, fn: (tx: typeof prisma) => unknown) => fn(prisma)),
   };
@@ -45,7 +46,12 @@ function buildDeps() {
 
   const leadsService = { findByIdOrThrow: jest.fn() };
   const serviceOfferingsService = { findByIdOrThrow: jest.fn() };
-  const emailService = { sendEmail: jest.fn().mockResolvedValue({ id: null }) };
+  const emailService = {
+    providerName: 'resend',
+    costPerMessageUsd: 0.0004,
+    sendEmail: jest.fn().mockResolvedValue({ id: null }),
+  };
+  const revenueSettings = { assertCanSendOutreach: jest.fn().mockResolvedValue(undefined) };
   const emailWarmupService = {
     checkCanSend: jest.fn().mockResolvedValue({ blocked: false }),
     recordSent: jest.fn().mockResolvedValue(undefined),
@@ -53,11 +59,10 @@ function buildDeps() {
 
   const pipelineHistory = { leadStatusChanged: jest.fn().mockResolvedValue(undefined), dealStageChanged: jest.fn().mockResolvedValue(undefined) };
 
+  const aiRunner = new AiOneShotRunner(prismaOutOfBand as never, gateway, budgetService as never);
   const service = new OutreachService(
     prisma as never,
-    prismaOutOfBand as never,
-    gateway,
-    budgetService as never,
+    aiRunner,
     organizationsService as never,
     auditService as never,
     leadsService as never,
@@ -65,9 +70,11 @@ function buildDeps() {
     emailService as never,
     emailWarmupService as never,
     pipelineHistory as never,
+    revenueSettings as never,
   );
 
   return {
+    revenueSettings,
     pipelineHistory,
     service,
     prisma,
@@ -760,6 +767,33 @@ describe('OutreachService', () => {
         expect.objectContaining({ action: 'outreach.send', resource: 'msg-1' }),
       );
       expect(result.status).toBe('SENT');
+      expect(prisma.costEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          organizationId: 'org-1',
+          category: 'EMAIL',
+          provider: 'resend',
+          operation: 'outreach.send',
+          amountUsd: 0.0004,
+          leadId: 'lead-1',
+        }),
+      });
+    });
+
+    it('outreach pausado (ou teto diário atingido): recusa antes de qualquer outra checagem e nunca envia', async () => {
+      const { service, prisma, emailService, revenueSettings, leadsService } = buildDeps();
+      prisma.outreachMessage.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        leadId: 'lead-1',
+        channel: 'EMAIL',
+        status: 'APPROVED',
+      });
+      revenueSettings.assertCanSendOutreach.mockRejectedValueOnce(new ForbiddenException('pausado'));
+
+      await expect(service.send('org-1', 'msg-1', 'user-1')).rejects.toThrow(ForbiddenException);
+      expect(revenueSettings.assertCanSendOutreach).toHaveBeenCalledWith('org-1');
+      expect(leadsService.findByIdOrThrow).not.toHaveBeenCalled();
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
+      expect(prisma.outreachMessage.updateMany).not.toHaveBeenCalled();
     });
 
     it('rejeita canais diferentes de EMAIL (sem integração real de envio)', async () => {

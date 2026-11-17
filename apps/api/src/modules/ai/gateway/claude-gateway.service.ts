@@ -2,7 +2,7 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Env } from '@opsmind/config/env/schema';
-import type { AiGateway, AiGatewayRequest } from './ai-gateway.interface';
+import type { AiGateway, AiGatewayRequest, AiModelTier } from './ai-gateway.interface';
 
 const MAX_TOKENS = 4096;
 
@@ -27,13 +27,24 @@ export class ClaudeGatewayService implements AiGateway {
   async sendMessage(request: AiGatewayRequest): Promise<Anthropic.Message> {
     const client = this.getClient();
     return client.messages.create({
-      model: this.configService.get('ANTHROPIC_MODEL', { infer: true }),
-      max_tokens: MAX_TOKENS,
+      model: this.resolveModel(request.tier),
+      max_tokens: request.maxTokens ?? MAX_TOKENS,
       thinking: { type: 'adaptive' },
+      ...(request.effort ? { output_config: { effort: request.effort } } : {}),
       system: request.system,
       messages: request.messages,
       tools: request.tools,
     }) as Promise<Anthropic.Message>;
+  }
+
+  private resolveModel(tier: AiModelTier = 'default'): string {
+    if (tier === 'routine') {
+      return this.configService.get('ANTHROPIC_MODEL_ROUTINE', { infer: true });
+    }
+    if (tier === 'standard') {
+      return this.configService.get('ANTHROPIC_MODEL_STANDARD', { infer: true });
+    }
+    return this.configService.get('ANTHROPIC_MODEL', { infer: true });
   }
 
   private getClient(): Anthropic {

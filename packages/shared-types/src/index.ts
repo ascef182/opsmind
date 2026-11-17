@@ -16,3 +16,4 @@ export * from './finance';
 export * from './ai-model-pricing';
 export * from './deal-risk';
 export * from './revenue-pipeline';
+export * from './queue-job-options';

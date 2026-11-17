@@ -13,6 +13,13 @@ export interface AiModelPricing {
 export const AI_MODEL_PRICING: Record<string, AiModelPricing> = {
   'claude-opus-5': { inputPerMillionUsd: 5, outputPerMillionUsd: 25 },
   'claude-sonnet-5': { inputPerMillionUsd: 2, outputPerMillionUsd: 10 },
+  'claude-opus-5-5': { inputPerMillionUsd: 4, outputPerMillionUsd: 20 },
+  'claude-sonnet-5-5': { inputPerMillionUsd: 2, outputPerMillionUsd: 10 },
+  // Preço para prompts de até 100K tokens (acima disso, 0,50/2,50) — as
+  // chamadas de rotina deste produto ficam muito abaixo desse tamanho.
+  'claude-haiku-5-5': { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.5 },
+  // Juiz da suíte de eval (`apps/api/eval`).
+  'claude-haiku-4-5': { inputPerMillionUsd: 1, outputPerMillionUsd: 5 },
 };
 
 const DEFAULT_PRICING: AiModelPricing = { inputPerMillionUsd: 5, outputPerMillionUsd: 25 };

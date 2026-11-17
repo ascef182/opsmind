@@ -1,15 +1,11 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import type Anthropic from '@anthropic-ai/sdk';
 import type {
-  AIRequest,
-  AIRequestStatus,
   Lead,
   LeadStatus,
   OutreachMessage,
@@ -17,17 +13,17 @@ import type {
   Prisma,
   ServiceOffering,
 } from '@opsmind/database';
-import { AI_MODEL_LABEL_UNKNOWN, checkOutreachGate, estimateAiCostUsd } from '@opsmind/shared-types';
+import { recordCostEvent } from '@opsmind/database';
+import { checkOutreachGate } from '@opsmind/shared-types';
 import type { LeadScoreBreakdown, SocialLink, SocialPlatform } from '@opsmind/shared-types';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
-import { PrismaOutOfBandService } from '../../infrastructure/database/prisma-out-of-band.service';
 import { AuditService } from '../audit/audit.service';
 import { PipelineHistoryService, type PipelineActor } from '../revenue/pipeline-history.service';
+import { RevenueSettingsService } from '../revenue/revenue-settings.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EMAIL_SERVICE, type EmailService } from '../../infrastructure/email/email.service';
 import { EmailWarmupService } from '../../infrastructure/email/email-warmup.service';
-import { BudgetService } from '../ai/services/budget.service';
-import { AI_GATEWAY, type AiGateway } from '../ai/gateway/ai-gateway.interface';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 import { LeadsService } from './leads.service';
 import { ServiceOfferingsService } from './service-offerings.service';
 import { GenerateOutreachDto } from './dto/generate-outreach.dto';
@@ -151,9 +147,7 @@ export type OutreachMessageWithLead = OutreachMessage & {
 export class OutreachService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly prismaOutOfBand: PrismaOutOfBandService,
-    @Inject(AI_GATEWAY) private readonly gateway: AiGateway,
-    private readonly budgetService: BudgetService,
+    private readonly aiRunner: AiOneShotRunner,
     private readonly organizationsService: OrganizationsService,
     private readonly auditService: AuditService,
     private readonly leadsService: LeadsService,
@@ -161,6 +155,7 @@ export class OutreachService {
     @Inject(EMAIL_SERVICE) private readonly emailService: EmailService,
     private readonly emailWarmupService: EmailWarmupService,
     private readonly pipelineHistory: PipelineHistoryService,
+    private readonly revenueSettings: RevenueSettingsService,
   ) {}
 
   // `actor`: quem pediu a geração — `{ type: 'USER', userId }` (chamador
@@ -185,88 +180,30 @@ export class OutreachService {
     }
     const offering = await this.serviceOfferingsService.findByIdOrThrow(organizationId, offeringId);
 
-    // Corte de orçamento **antes** de gastar qualquer coisa com a IA — esta
-    // chamada não passa pelo loop de `AiService.chat`, então precisa repetir
-    // a mesma checagem aqui (ver ai.service.ts:chat + budget.service.ts).
-    // Mesma disciplina de `AiService.chat`: persiste um `AIRequest`
-    // BUDGET_EXCEEDED (0 tokens/custo) mesmo no corte — dá visibilidade de
-    // "quantas tentativas foram bloqueadas" na mesma tabela de
-    // observabilidade, sem custo real associado.
+    // Corte de orçamento (antes de gastar), AIRequest em toda tentativa e
+    // razão de custos ficam no `AiOneShotRunner`.
     const organization = await this.organizationsService.findById(organizationId);
     const monthlyBudget = organization?.aiMonthlyBudget ? Number(organization.aiMonthlyBudget) : null;
-    if (await this.budgetService.isOverBudget(organizationId, monthlyBudget)) {
-      await this.persistAiRequest(
-        organizationId,
-        actor,
-        'BUDGET_EXCEEDED',
-        AI_MODEL_LABEL_UNKNOWN,
-        0,
-        0,
-        0,
-        0,
-      );
-      throw new ForbiddenException('Orçamento mensal de IA desta organização foi atingido.');
-    }
-
     const evidenceQuotes = this.extractEvidenceQuotes(lead);
     const prompt = this.buildPrompt(lead, offering, dto.channel, evidenceQuotes);
     const system = this.buildSystemPrompt(organization?.outreachVoiceGuide ?? null);
 
-    // Chamada de completion única e direta ao gateway — sem `tools`, sem
-    // loop de iterações (diferente de `AiService.chat`). A IA não tem como
-    // chamar de volta nada além de produzir texto aqui.
-    const startedAt = Date.now();
-    let response: Anthropic.Message;
-    try {
-      response = await this.gateway.sendMessage({
-        system,
-        messages: [{ role: 'user', content: prompt }],
-        tools: [],
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      await this.persistAiRequest(
-        organizationId,
-        actor,
-        'ERROR',
-        AI_MODEL_LABEL_UNKNOWN,
-        0,
-        0,
-        Date.now() - startedAt,
-        0,
-        errorMessage,
-      );
-      throw error;
-    }
-
-    const latencyMs = Date.now() - startedAt;
-    const rawText = this.extractText(response);
-    // Só EMAIL pede uma linha de assunto no system prompt (ver
-    // OUTREACH_SYSTEM_PROMPT_LINES) — pros demais canais, `subject` fica
-    // `undefined`/null (mesmo default que já existia antes desta task).
-    // Sem este parsing, `subject` nunca era preenchido pela IA: `send()`
-    // sempre caía no fallback genérico `Contato — ${lead.name}`, mesmo
-    // quando o rascunho já tinha um assunto específico ao negócio.
-    const { subject, body } = this.parseGeneratedMessage(rawText, dto.channel);
-    const cost = estimateAiCostUsd(
-      response.model,
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-    );
-
-    // Cria o AIRequest ANTES do OutreachMessage para poder linkar
-    // `OutreachMessage.aiRequestId` já na criação (observabilidade de custo
-    // por lead — o campo é documentado no schema para exatamente isso).
-    const aiRequest = await this.persistAiRequest(
+    // Chamada única ao gateway, sem `tools`: a IA só produz texto aqui.
+    const { text: rawText, model, aiRequest } = await this.aiRunner.run({
       organizationId,
+      monthlyBudget,
+      operation: 'outreach.draft',
+      agent: 'outreach-copywriting',
+      tier: 'standard',
       actor,
-      'SUCCESS',
-      response.model,
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-      latencyMs,
-      cost,
-    );
+      system,
+      prompt,
+      leadId,
+    });
+    // Só EMAIL pede uma linha de assunto no system prompt (ver
+    // OUTREACH_SYSTEM_PROMPT_LINES); nos demais canais `subject` fica
+    // `undefined` e `send()` usa o fallback `Contato — ${lead.name}`.
+    const { subject, body } = this.parseGeneratedMessage(rawText, dto.channel);
 
     const message = await this.prisma.outreachMessage.create({
       data: {
@@ -278,14 +215,12 @@ export class OutreachService {
         body,
         evidenceQuotes: evidenceQuotes as unknown as Prisma.InputJsonValue,
         status: 'DRAFT',
-        generatedByModel: response.model,
+        generatedByModel: model,
         aiRequestId: aiRequest.id,
         actorType: 'AI',
         actorId: null,
       },
     });
-
-    await this.budgetService.recordSpend(organizationId, cost);
 
     if (PRE_OUTREACH_DRAFTED_STATUSES.includes(lead.status)) {
       await this.setLeadStatus(organizationId, leadId, 'OUTREACH_DRAFTED', {
@@ -483,6 +418,9 @@ export class OutreachService {
    */
   async send(organizationId: string, messageId: string, userId: string): Promise<OutreachMessage> {
     const message = await this.findByIdOrThrow(organizationId, messageId);
+    // Pausa (global e da organização) e teto diário antes de qualquer outra
+    // checagem: com o outreach pausado, nada mais importa.
+    await this.revenueSettings.assertCanSendOutreach(organizationId);
     if (message.channel !== 'EMAIL') {
       throw new BadRequestException(
         'Envio automático só está disponível para o canal EMAIL — use "marcar como enviada" para os demais canais.',
@@ -525,6 +463,15 @@ export class OutreachService {
       idempotencyKey: `outreach-message/${messageId}`,
     });
     await this.emailWarmupService.recordSent();
+    await recordCostEvent(this.prisma, {
+      organizationId,
+      category: 'EMAIL',
+      provider: this.emailService.providerName,
+      operation: 'outreach.send',
+      agent: 'outreach-copywriting',
+      amountUsd: this.emailService.costPerMessageUsd,
+      leadId: lead.id,
+    });
 
     const updated = await this.applyTransition(
       organizationId,
@@ -877,14 +824,6 @@ export class OutreachService {
     return lines.join(' ');
   }
 
-  private extractText(response: Anthropic.Message): string {
-    return response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-      .trim();
-  }
-
   // Extrai a linha `Assunto: ...` que o system prompt pede só pro canal
   // EMAIL (ver OUTREACH_SYSTEM_PROMPT_LINES). Nunca lança por formato
   // inesperado: se o modelo não seguir o formato pedido (ou o canal não for
@@ -907,57 +846,5 @@ export class OutreachService {
       return { subject: undefined, body: text };
     }
     return { subject: subject.trim(), body: body.trim() };
-  }
-
-  // Mesmo formato de `AIRequest` que `AiService.persistRequest` grava — sem
-  // `AIRequestToolCall` (este fluxo nunca chama tools) e sem envolver
-  // explicitamente `runInTransaction`: já roda dentro da transação
-  // ambiente por request aberta por `TenantContextInterceptor`, então um
-  // `create` simples já participa dela.
-  //
-  // `userId`/`actorType`/`actorId` derivam de `actor`: um pedido humano
-  // grava o `userId` real nas três colunas relevantes (`userId` e
-  // `actorId`, redundantes de propósito — `userId` é a FK/coluna legada já
-  // consultada por telas de custo por usuário, `actorId` é a coluna
-  // genérica compartilhada com `AuditLog`/`Lead`/`LeadEnrichment`); um
-  // pedido do sistema (Task 11) nunca inventa um usuário — `userId`/
-  // `actorId` ficam `null`, só `actorType: 'SYSTEM'` identifica a origem.
-  // Escreve fora da transação da request (`runOutsideTransaction`, não
-  // `this.prisma.aIRequest.create` direto) — chamado tanto no caminho de
-  // sucesso quanto logo antes de relançar um erro (`generateDraft` acima).
-  // Sem isso, o registro de uma tentativa ERROR/BUDGET_EXCEEDED nunca
-  // sobrevivia: a transação da request inteira sofre rollback quando o
-  // método relança o erro, descartando junto o `AIRequest` que documentaria
-  // essa falha (achado ao vivo, plano
-  // pensando-como-empresa-com-agile-beaver.md — ver comentário completo em
-  // `PrismaService.runOutsideTransaction`).
-  private persistAiRequest(
-    organizationId: string,
-    actor: OutreachDraftActor,
-    status: AIRequestStatus,
-    model: string,
-    inputTokens: number,
-    outputTokens: number,
-    latencyMs: number,
-    cost: number,
-    errorMessage?: string,
-  ): Promise<AIRequest> {
-    return this.prismaOutOfBand.runOutsideTransaction(organizationId, (tx) =>
-      tx.aIRequest.create({
-        data: {
-          organizationId,
-          userId: actor.type === 'USER' ? actor.userId : null,
-          actorType: actor.type,
-          actorId: actor.type === 'SYSTEM' ? null : actor.userId,
-          model,
-          inputTokens,
-          outputTokens,
-          latencyMs,
-          estimatedCost: cost,
-          status,
-          errorMessage,
-        },
-      }),
-    );
   }
 }

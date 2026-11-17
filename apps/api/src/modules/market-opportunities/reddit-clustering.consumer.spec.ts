@@ -9,6 +9,7 @@ jest.mock('ioredis', () => jest.fn().mockImplementation(() => ({ disconnect: jes
 import { Worker } from 'bullmq';
 import type { RedditClusteringJobData } from '@opsmind/shared-types';
 import { RedditClusteringConsumer } from './reddit-clustering.consumer';
+import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 
 function buildConfigService() {
   return { get: jest.fn().mockReturnValue('redis://localhost:6379') };
@@ -23,6 +24,7 @@ function buildPrisma() {
     aIRequest: {
       create: jest.fn().mockResolvedValue({ id: 'ai-req-1' }),
     },
+    costEvent: { create: jest.fn() },
   };
 }
 
@@ -81,13 +83,16 @@ function buildConsumer(opts: {
   const budgetService = opts.budgetService ?? buildBudgetService();
   const gateway = opts.gateway ?? buildGateway('[]');
 
+  const prismaOutOfBand = {
+    runOutsideTransaction: jest.fn((_organizationId: string, fn: (tx: typeof prisma) => unknown) => fn(prisma)),
+  };
+  const aiRunner = new AiOneShotRunner(prismaOutOfBand as never, gateway as never, budgetService as never);
   const consumer = new RedditClusteringConsumer(
     buildConfigService() as never,
     prisma as never,
     auditService as never,
     organizationsService as never,
-    budgetService as never,
-    gateway as never,
+    aiRunner,
   );
   consumer.onModuleInit();
 
@@ -157,6 +162,7 @@ describe('RedditClusteringConsumer', () => {
         organizationId: 'org-1',
         userId: null,
         actorType: 'AI',
+        operation: 'market.reddit_clustering',
         actorId: null,
         model: 'claude-opus-5',
         inputTokens: 100,
@@ -376,6 +382,7 @@ describe('RedditClusteringConsumer', () => {
         organizationId: 'org-1',
         userId: null,
         actorType: 'AI',
+        operation: 'market.reddit_clustering',
         actorId: null,
         // Nunca houve resposta real da API aqui — sem modelo pra gravar.
         model: 'unknown',
@@ -402,6 +409,7 @@ describe('RedditClusteringConsumer', () => {
         organizationId: 'org-1',
         userId: null,
         actorType: 'AI',
+        operation: 'market.reddit_clustering',
         actorId: null,
         // Nunca houve resposta real da API aqui — sem modelo pra gravar.
         model: 'unknown',
