@@ -275,3 +275,15 @@ go through `canAssignRole()`, not a raw hierarchy comparison in the controller.
 Sentry (`@sentry/nestjs`, `@sentry/node`) wired as `SentryGlobalFilter`, first `APP_FILTER` registered.
 Structured logging via `nestjs-pino` (`infrastructure/logging/logger-options.ts` — JSON in production,
 `pino-pretty` in dev).
+
+### OpsGov — Company & Compliance + licitações (`apps/api/src/modules/opsgov/`, `apps/web/.../opsgov`)
+
+Plano: `docs/superpowers/plans/2026-11-18-opsgov.md`. Estrutura da empresa com histórico (cadastro, regime, CNAEs),
+receita por atividade, simulador do Simples, obrigações/certidões, espaço do contador e prontidão para licitar.
+- **Vigência, nunca sobrescrita**: `[validFrom, validTo)`, `validTo` nulo = vigente. Mudança fecha o anterior e abre o
+  novo na mesma transação (advisory lock + `planPeriodChange`); o banco garante com `EXCLUDE USING gist` (btree_gist).
+- Cálculos (vigência, Simples por anexo/Fator R, status de certidão, readiness de edital) são funções puras em
+  `packages/shared-types`. Tabelas do Simples versionadas por vigência; status de certidão é calculado, nunca gravado.
+- Leituras com dado financeiro exigem `FINANCE_READ_ROLE` (MANAGER+); `PERSONAL` nunca entra em faturamento/RBT12.
+- **A IA só lê e sugere**: não há tool que mude regime, valide certidão, crie requisito ou avance licitação; requisitos
+  sugeridos de edital só viram `ProcurementRequirement` por confirmação humana via HTTP.
