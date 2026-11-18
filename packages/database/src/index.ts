@@ -92,3 +92,14 @@ export {
   HARVEY_SKIP_REASON_LABELS,
 } from './harvey';
 export type { HarveyStep, HarveySkipReason, HarveyCheckResult, RunProgress, StartActivityInput } from './harvey';
+export type {
+  CompanyProfile,
+  CompanyRegistrationPeriod,
+  TaxRegimePeriod,
+  CompanyActivity,
+  NaturezaJuridica,
+  TaxRegime,
+  IbsCbsMode,
+  AnexoSimples,
+  RevenueGroup,
+} from '@prisma/client';

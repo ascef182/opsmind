@@ -257,6 +257,10 @@ model Organization {
   harveyAgent           HarveyAgent?
   harveyRuns            HarveyRun[]
   harveyActivities      HarveyActivity[]
+  companyProfile        CompanyProfile?
+  registrationPeriods   CompanyRegistrationPeriod[]
+  taxRegimePeriods      TaxRegimePeriod[]
+  companyActivities     CompanyActivity[]
 
   @@map("organizations")
 }
@@ -859,6 +863,10 @@ model Document {
   customer     Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   uploadedBy   User            @relation(fields: [uploadedByUserId], references: [id])
   chunks       DocumentChunk[]
+
+  registrationPeriods CompanyRegistrationPeriod[] @relation("RegistrationPeriodDocument")
+  taxRegimePeriods    TaxRegimePeriod[]           @relation("TaxRegimePeriodDocument")
+  companyActivities   CompanyActivity[]           @relation("CompanyActivityDocument")
 
   @@index([organizationId, status])
   @@index([organizationId, customerId])
@@ -1826,4 +1834,132 @@ model HarveyActivity {
   @@index([organizationId, leadId])
   @@index([runId, type, status])
   @@map("harvey_activities")
+}
+
+// ── OpsGov: perfil da empresa e histórico de regime ──────────────────────
+// Ver migration 20261118150000_opsgov_company_profile. Cadastro e regime
+// usam vigência [valid_from, valid_to) — nunca sobrescritos; o banco impede
+// sobreposição por EXCLUDE USING gist.
+
+enum NaturezaJuridica {
+  MEI
+  EI
+  SLU
+  LTDA
+}
+
+enum TaxRegime {
+  SIMEI
+  SIMPLES_NACIONAL
+  LUCRO_PRESUMIDO
+  LUCRO_REAL
+}
+
+enum IbsCbsMode {
+  DENTRO_DAS
+  REGULAR
+  NAO_SE_APLICA
+}
+
+enum AnexoSimples {
+  I
+  II
+  III
+  IV
+  V
+  FATOR_R
+  NAO_DEFINIDO
+}
+
+enum RevenueGroup {
+  TECNOLOGIA
+  TRADUCAO_LEGENDAGEM
+  OUTROS
+}
+
+model CompanyProfile {
+  id                 String         @id @default(uuid())
+  organizationId     String         @unique @map("organization_id")
+  razaoSocial        String         @map("razao_social")
+  nomeFantasia       String?        @map("nome_fantasia")
+  // CNPJ do cadastro vigente fica em CompanyRegistrationPeriod; este é só o
+  // atual, para exibição rápida, e é atualizado junto com a troca de cadastro.
+  cnpj               String?
+  enderecoFiscal     String?        @map("endereco_fiscal")
+  municipio          String?
+  uf                 String?        @db.Char(2)
+  inscricaoMunicipal String?        @map("inscricao_municipal")
+  inscricaoEstadual  String?        @map("inscricao_estadual")
+  actorType          AuditActorType @map("actor_type")
+  actorId            String?        @map("actor_id")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("company_profiles")
+}
+
+model CompanyRegistrationPeriod {
+  id               String           @id @default(uuid())
+  organizationId   String           @map("organization_id")
+  naturezaJuridica NaturezaJuridica @map("natureza_juridica")
+  cnpj             String
+  validFrom        DateTime         @map("valid_from") @db.Date
+  validTo          DateTime?        @map("valid_to") @db.Date
+  notes            String?          @db.Text
+  documentId       String?          @map("document_id")
+  actorType        AuditActorType   @map("actor_type")
+  actorId          String?          @map("actor_id")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     Document?    @relation("RegistrationPeriodDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, validFrom])
+  @@map("company_registration_periods")
+}
+
+model TaxRegimePeriod {
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
+  regime         TaxRegime
+  ibsCbsMode     IbsCbsMode     @map("ibs_cbs_mode")
+  validFrom      DateTime       @map("valid_from") @db.Date
+  validTo        DateTime?      @map("valid_to") @db.Date
+  notes          String?        @db.Text
+  documentId     String?        @map("document_id")
+  actorType      AuditActorType @map("actor_type")
+  actorId        String?        @map("actor_id")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     Document?    @relation("TaxRegimePeriodDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, validFrom])
+  @@map("tax_regime_periods")
+}
+
+model CompanyActivity {
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
+  // Formato da Receita: 0000-0/00.
+  cnae           String
+  description    String
+  isPrimary      Boolean        @default(false) @map("is_primary")
+  anexoSimples   AnexoSimples   @default(NAO_DEFINIDO) @map("anexo_simples")
+  revenueGroup   RevenueGroup   @default(OUTROS) @map("revenue_group")
+  validFrom      DateTime       @map("valid_from") @db.Date
+  validTo        DateTime?      @map("valid_to") @db.Date
+  notes          String?        @db.Text
+  documentId     String?        @map("document_id")
+  actorType      AuditActorType @map("actor_type")
+  actorId        String?        @map("actor_id")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     Document?    @relation("CompanyActivityDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, cnae, validFrom])
+  @@map("company_activities")
 }

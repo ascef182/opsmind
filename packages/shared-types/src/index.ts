@@ -21,3 +21,5 @@ export * from './region-codes';
 export * from './business-website';
 export * from './outreach-strategy';
 export * from './harvey';
+export * from './opsgov';
+export * from './opsgov-validity';

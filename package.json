@@ -14,7 +14,8 @@
     "test:e2e": "dotenv -e .env -- turbo run test:e2e",
     "db:migrate": "dotenv -e .env -- pnpm --filter @opsmind/database run migrate",
     "db:studio": "dotenv -e .env -- pnpm --filter @opsmind/database exec prisma studio",
-    "seed": "dotenv -e .env -- pnpm --filter @opsmind/database run seed"
+    "seed": "dotenv -e .env -- pnpm --filter @opsmind/database run seed",
+    "seed:opsgov": "dotenv -e .env -- pnpm --filter @opsmind/database run seed:opsgov"
   },
   "devDependencies": {
     "dotenv-cli": "^11.0.0",

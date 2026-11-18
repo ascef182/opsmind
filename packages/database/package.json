@@ -7,7 +7,8 @@
   "scripts": {
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "seed:opsgov": "tsx prisma/seed-opsgov.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
