@@ -6,11 +6,13 @@ import { CompanyProfileController } from './company-profile.controller';
 import { CompanyProfileService } from './company-profile.service';
 import { RevenueController } from './revenue.controller';
 import { RevenueService } from './revenue.service';
+import { SimplesController } from './simples.controller';
+import { SimplesService } from './simples.service';
 
 @Module({
   imports: [FinanceModule],
-  controllers: [CompanyProfileController, RevenueController],
-  providers: [CompanyProfileService, RevenueService, TenantGuard, RolesGuard],
-  exports: [CompanyProfileService, RevenueService],
+  controllers: [CompanyProfileController, RevenueController, SimplesController],
+  providers: [CompanyProfileService, RevenueService, SimplesService, TenantGuard, RolesGuard],
+  exports: [CompanyProfileService, RevenueService, SimplesService],
 })
 export class OpsGovModule {}

@@ -237,4 +237,45 @@ describe('OpsGov (e2e)', () => {
       expect(stillUnclassified.companyActivityId).toBeNull();
     });
   });
+
+  describe('Fase 3 — simulador do Simples', () => {
+    it('cenário livre reproduz os valores conhecidos e o real usa o RBT12 da organização', async () => {
+      const org = await newOrg('simples');
+      const simples = `/organizations/${org.organizationId}/opsgov/simples`;
+
+      const free = await request(app.getHttpServer())
+        .get(`${simples}/simulation?faturamentoMensalCents=2000000&inssSocioRateBp=1100`)
+        .set(org.auth)
+        .expect(200);
+      expect(free.body).toEqual(
+        expect.objectContaining({
+          anexoIII: { aliquotaEfetivaPpm: 73_000, dasCents: 146_000 },
+          anexoV: { aliquotaEfetivaPpm: 161_250, dasCents: 322_500 },
+          proLaboreMinimoCents: 560_000,
+          economiaMensalCents: 114_900,
+        }),
+      );
+      await request(app.getHttpServer()).get(`${simples}/simulation?faturamentoMensalCents=-5`).set(org.auth).expect(400);
+
+      const empty = await request(app.getHttpServer()).get(`${simples}/real`).set(org.auth).expect(200);
+      expect(empty.body.simulation).toBeNull();
+
+      const lastMonth = new Date();
+      lastMonth.setUTCDate(1);
+      lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1);
+      const day = lastMonth.toISOString().slice(0, 10);
+      await request(app.getHttpServer())
+        .post(`/organizations/${org.organizationId}/finance/entries`)
+        .set(org.auth)
+        .send({ direction: 'INCOME', category: 'PROJECT', description: 'Projeto', amountCents: 6_000_000, issueDate: day, dueDate: day })
+        .expect(201);
+
+      const real = await request(app.getHttpServer()).get(`${simples}/real`).set(org.auth).expect(200);
+      expect(real.body.rbt12.rbt12Cents).toBe(6_000_000);
+      expect(real.body.simulation).toEqual(expect.objectContaining({ rbt12Cents: 6_000_000, faturamentoMensalCents: 500_000 }));
+
+      const outsider = await newOrg('simples-out');
+      await request(app.getHttpServer()).get(`${simples}/real`).set(outsider.auth).expect(403);
+    });
+  });
 });

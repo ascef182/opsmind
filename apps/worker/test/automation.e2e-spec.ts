@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { validateEnv } from '@opsmind/config/env/schema';
-import { automationJobId } from '@opsmind/shared-types';
+import { automationJobId, type AutomationExecutionJobData } from '@opsmind/shared-types';
 import { createPrismaClient } from '../src/tenant-context';
 import { createAutomationQueue, createAutomationWorker, createRedisConnection } from '../src/queue';
 import { processAutomationJob } from '../src/automation-processor';
@@ -32,6 +32,27 @@ describe('Automations engine (e2e)', () => {
     connection.disconnect();
     await prisma.$disconnect();
   });
+
+  /**
+   * Os scans varrem TODAS as organizações do banco, que é compartilhado com
+   * outras suítes e2e (ex.: apps/api/test/automations.e2e-spec.ts deixa uma
+   * automação ativa com cliente inativo e fila mockada). Contar e enfileirar só
+   * os jobs da organização do próprio teste torna a asserção independente da
+   * ordem e do que já existe no banco.
+   */
+  async function scanOwn(
+    organizationId: string,
+    scan: typeof scanCustomerInactiveAutomations,
+    enqueue: (data: AutomationExecutionJobData) => Promise<unknown> | void,
+  ): Promise<number> {
+    let own = 0;
+    await scan(prisma, (data) => {
+      if (data.organizationId !== organizationId) return;
+      own += 1;
+      return enqueue(data);
+    });
+    return own;
+  }
 
   /** Espera o worker terminar (completed OU failed) um job para este customerId. */
   function waitForJobDone(customerId: string, timeoutMs = 10_000): Promise<void> {
@@ -85,7 +106,7 @@ describe('Automations engine (e2e)', () => {
   it('scan encontra o cliente inativo, o worker processa o job de verdade, e cria tarefa + notificação + log', async () => {
     const { organization, customer, automation, user } = await createFixtures(20);
 
-    const enqueued = await scanCustomerInactiveAutomations(prisma, (data) => queue.add('execute', data));
+    const enqueued = await scanOwn(organization.id, scanCustomerInactiveAutomations, (data) => queue.add('execute', data));
     expect(enqueued).toBe(1);
 
     await waitForJobDone(customer.id);
@@ -115,11 +136,11 @@ describe('Automations engine (e2e)', () => {
   it('não dispara de novo pro mesmo cliente numa segunda passada do scan (dedup)', async () => {
     const { organization, customer, automation } = await createFixtures(20);
 
-    const firstScan = await scanCustomerInactiveAutomations(prisma, (data) => queue.add('execute', data));
+    const firstScan = await scanOwn(organization.id, scanCustomerInactiveAutomations, (data) => queue.add('execute', data));
     expect(firstScan).toBe(1);
     await waitForJobDone(customer.id);
 
-    const secondScan = await scanCustomerInactiveAutomations(prisma, (data) => queue.add('execute', data));
+    const secondScan = await scanOwn(organization.id, scanCustomerInactiveAutomations, (data) => queue.add('execute', data));
     expect(secondScan).toBe(0);
 
     const tasks = await prisma.task.findMany({ where: { organizationId: organization.id, customerId: customer.id } });
@@ -202,9 +223,9 @@ describe('Automations engine (e2e)', () => {
   }, 20_000);
 
   it('não dispara para um cliente que teve atividade recente (dentro do período de inatividade)', async () => {
-    const { customer } = await createFixtures(2);
+    const { organization, customer } = await createFixtures(2);
 
-    const enqueued = await scanCustomerInactiveAutomations(prisma, jest.fn());
+    const enqueued = await scanOwn(organization.id, scanCustomerInactiveAutomations, jest.fn());
 
     expect(enqueued).toBe(0);
     const task = await prisma.task.findFirst({ where: { customerId: customer.id } });
@@ -262,7 +283,7 @@ describe('Automations engine (e2e)', () => {
   it('scan encontra o deal parado na etapa, o worker processa o job de verdade, e cria tarefa + notificação + log', async () => {
     const { organization, deal, automation, user } = await createDealStageStaleFixtures(100); // 100h > 72h (threshold de QUALIFICATION)
 
-    const enqueued = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    const enqueued = await scanOwn(organization.id, scanDealStageStaleAutomations, (data) => queue.add('execute', data));
     expect(enqueued).toBe(1);
 
     await waitForJobDone(deal.customerId);
@@ -292,11 +313,11 @@ describe('Automations engine (e2e)', () => {
   it('não dispara de novo pro mesmo deal numa segunda passada do scan (dedup) — Task criada uma única vez', async () => {
     const { organization, deal, automation } = await createDealStageStaleFixtures(100);
 
-    const firstScan = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    const firstScan = await scanOwn(organization.id, scanDealStageStaleAutomations, (data) => queue.add('execute', data));
     expect(firstScan).toBe(1);
     await waitForJobDone(deal.customerId);
 
-    const secondScan = await scanDealStageStaleAutomations(prisma, (data) => queue.add('execute', data));
+    const secondScan = await scanOwn(organization.id, scanDealStageStaleAutomations, (data) => queue.add('execute', data));
     expect(secondScan).toBe(0);
 
     const tasks = await prisma.task.findMany({ where: { organizationId: organization.id, customerId: deal.customerId } });

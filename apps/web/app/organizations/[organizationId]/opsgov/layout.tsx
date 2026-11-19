@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 const TABS = [
   { segment: 'empresa', label: 'Empresa', finance: false },
   { segment: 'receita', label: 'Receita', finance: true },
+  { segment: 'simulador', label: 'Simulador do Simples', finance: false },
 ];
 
 export default function OpsGovLayout({ children }: { children: React.ReactNode }) {

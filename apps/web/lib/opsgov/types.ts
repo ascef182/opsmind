@@ -1,4 +1,4 @@
-import type { Role } from '@opsmind/shared-types';
+import type { Role, SimulationResult } from '@opsmind/shared-types';
 
 // Tipos duplicados localmente de propósito (ver lib/customers/types.ts):
 // espelham as views de apps/api/src/modules/opsgov/opsgov.types.ts.
@@ -183,4 +183,14 @@ export interface Rbt12 {
   monthsConsidered: string[];
   basis: RevenueBasis;
   activityStartMonth: string | null;
+}
+
+// ── Fase 3: simulador do Simples ───────────────────────────────────────────
+// O resultado vem da função pura `simulate` de @opsmind/shared-types (a mesma
+// que a API usa); aqui só o envelope do cenário real.
+
+export interface RealSimulation {
+  rbt12: Rbt12;
+  regimeVigente: TaxRegimePeriod | null;
+  simulation: SimulationResult | null;
 }
