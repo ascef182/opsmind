@@ -111,3 +111,26 @@ export async function refreshSession(): Promise<string | null> {
 export function apiUrl(path: string): string {
   return `${env.NEXT_PUBLIC_API_URL}${path}`;
 }
+
+/**
+ * Variante sem JSON (upload multipart, download de arquivo) com o mesmo
+ * token + refresh silencioso do `apiFetch`. O Content-Type do FormData é
+ * definido pelo navegador (boundary), por isso não é fixado aqui.
+ */
+export async function apiRequestRaw(path: string, init: { method?: 'GET' | 'POST'; body?: FormData } = {}): Promise<Response> {
+  const send = (accessToken?: string) =>
+    fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
+      method: init.method ?? 'GET',
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      body: init.body,
+    });
+
+  const tokens = getStoredTokens();
+  let response = await send(tokens?.accessToken);
+  if (response.status === 401 && tokens) {
+    const newAccessToken = await refreshAccessToken(tokens);
+    if (newAccessToken) response = await send(newAccessToken);
+  }
+  if (!response.ok) throw new ApiError(await parseErrorMessage(response), response.status);
+  return response;
+}

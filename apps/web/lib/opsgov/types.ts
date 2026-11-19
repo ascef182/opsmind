@@ -279,4 +279,5 @@ export interface CreateCertificateInput {
   issuedOn: string;
   validUntil: string;
   notes?: string;
+  documentId?: string;
 }

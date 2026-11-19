@@ -27,6 +27,8 @@ async function bootstrap() {
   app.enableCors({
     origin: env.CORS_ORIGIN,
     credentials: true,
+    // A web baixa comprovantes via fetch (Bearer) e lê o nome original daqui.
+    exposedHeaders: ['Content-Disposition'],
   });
 
   // Validação de input em 100% dos DTOs desde o primeiro endpoint (checklist

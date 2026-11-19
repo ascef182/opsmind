@@ -10,6 +10,7 @@ import {
   useCreateObligation,
   useDismissObligation,
   useObligations,
+  useUpdateCertificate,
 } from '@/lib/opsgov/use-compliance';
 import {
   CERTIFICATE_STATUS_LABELS,
@@ -19,6 +20,7 @@ import {
   OPSGOV_WRITE_ROLES,
   RECURRENCE_LABELS,
   type CertificateStatus,
+  type Certificate,
   type CertificateType,
   type ComplianceObligationType,
   type Obligation,
@@ -33,6 +35,8 @@ import { Select } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Field } from '@/components/finance/finance-ui';
+import { DocumentField, DocumentLink } from '@/components/opsgov/document-field';
+import type { UploadedDocument } from '@/lib/documents/files';
 import { cn } from '@/lib/utils';
 
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
@@ -162,6 +166,7 @@ function NewCertificateDialog({ organizationId, open, onClose }: { organizationI
   const [code, setCode] = useState('');
   const [issuedOn, setIssuedOn] = useState(todayKey());
   const [validUntil, setValidUntil] = useState('');
+  const [proof, setProof] = useState<UploadedDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function submit(event: React.FormEvent) {
@@ -169,8 +174,12 @@ function NewCertificateDialog({ organizationId, open, onClose }: { organizationI
     setError(null);
     if (!validUntil) return setError('Informe a validade.');
     create.mutate(
-      { type, issuer: issuer.trim() || undefined, code: code.trim() || undefined, issuedOn, validUntil },
-      { onSuccess: onClose, onError: (e) => setError(errorText(e, 'Não foi possível registrar a certidão.')) },
+      { type, issuer: issuer.trim() || undefined, code: code.trim() || undefined, issuedOn, validUntil, documentId: proof?.id },
+      {
+        onSuccess: () => {
+          setProof(null);
+          onClose();
+        }, onError: (e) => setError(errorText(e, 'Não foi possível registrar a certidão.')) },
     );
   }
 
@@ -203,6 +212,7 @@ function NewCertificateDialog({ organizationId, open, onClose }: { organizationI
               <Input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
             </Field>
           </div>
+          <DocumentField organizationId={organizationId} value={proof} onChange={setProof} label="PDF da certidão (opcional)" />
           <FormError message={error} />
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={onClose}>
@@ -224,6 +234,9 @@ function ObligationRow({ organizationId, o, canWrite }: { organizationId: string
   const [error, setError] = useState<string | null>(null);
   const [dismissing, setDismissing] = useState(false);
   const [reason, setReason] = useState('');
+  const [completing, setCompleting] = useState(false);
+  const [completedOn, setCompletedOn] = useState(todayKey());
+  const [proof, setProof] = useState<UploadedDocument | null>(null);
   const pending = o.status === 'PENDENTE';
 
   return (
@@ -245,6 +258,12 @@ function ObligationRow({ organizationId, o, canWrite }: { organizationId: string
         {o.lastCompletion && (
           <span className="text-xs text-muted-foreground">
             Último cumprimento: vencimento {fmtDate(o.lastCompletion.dueDate)}, feito em {fmtDate(o.lastCompletion.completedOn)}
+            {o.lastCompletion.documentId && (
+              <>
+                {' · '}
+                <DocumentLink organizationId={organizationId} documentId={o.lastCompletion.documentId} />
+              </>
+            )}
           </span>
         )}
         <FormError message={error} />
@@ -254,15 +273,50 @@ function ObligationRow({ organizationId, o, canWrite }: { organizationId: string
           <Button
             size="sm"
             variant="secondary"
-            isLoading={complete.isPending}
-            onClick={() => complete.mutate({ id: o.id }, { onError: (e) => setError(errorText(e, 'Não foi possível marcar.')) })}
+            onClick={() => {
+              setDismissing(false);
+              setCompleting((v) => !v);
+            }}
           >
             Marcar cumprida
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setDismissing((v) => !v)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setCompleting(false);
+              setDismissing((v) => !v);
+            }}
+          >
             Dispensar
           </Button>
         </div>
+      )}
+      {canWrite && pending && completing && (
+        <form
+          className="flex w-full flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            complete.mutate(
+              { id: o.id, completedOn, documentId: proof?.id },
+              {
+                onSuccess: () => {
+                  setCompleting(false);
+                  setProof(null);
+                },
+                onError: (err) => setError(errorText(err, 'Não foi possível marcar.')),
+              },
+            );
+          }}
+        >
+          <Field label={`Cumprida em (vencimento ${fmtDate(o.nextDueDate)})`}>
+            <Input type="date" value={completedOn} onChange={(e) => setCompletedOn(e.target.value)} />
+          </Field>
+          <DocumentField organizationId={organizationId} value={proof} onChange={setProof} label="Guia ou recibo (PDF, opcional)" />
+          <Button type="submit" size="sm" variant="secondary" isLoading={complete.isPending}>
+            Confirmar
+          </Button>
+        </form>
       )}
       {canWrite && pending && dismissing && (
         <form
@@ -284,6 +338,44 @@ function ObligationRow({ organizationId, o, canWrite }: { organizationId: string
           </Button>
         </form>
       )}
+    </li>
+  );
+}
+
+function CertificateRow({ organizationId, c, canWrite }: { organizationId: string; c: Certificate; canWrite: boolean }) {
+  const update = useUpdateCertificate(organizationId);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <li className={cn('flex flex-wrap items-center justify-between gap-3 py-3', !c.isCurrent && 'opacity-60')}>
+      <div className="flex flex-col gap-0.5">
+        <span className="text-sm">{CERTIFICATE_TYPE_LABELS[c.type]}</span>
+        <span className="text-xs text-muted-foreground">
+          Emitida {fmtDate(c.issuedOn)} · válida até {fmtDate(c.validUntil)}
+          {c.issuer && ` · ${c.issuer}`}
+          {!c.isCurrent && ' · substituída'}
+        </span>
+        {c.documentId ? (
+          <DocumentLink organizationId={organizationId} documentId={c.documentId} label="PDF da certidão" />
+        ) : (
+          canWrite &&
+          c.isCurrent && (
+            <DocumentField
+              organizationId={organizationId}
+              value={null}
+              label="Sem PDF anexado"
+              onChange={(doc) =>
+                doc && update.mutate({ id: c.id, documentId: doc.id }, { onError: (e) => setError(errorText(e, 'Não foi possível anexar.')) })
+              }
+            />
+          )
+        )}
+        <FormError message={error} />
+      </div>
+      <span className={cn('rounded px-1.5 py-0.5 text-xs', CERT_STATUS_CLASS[c.status])}>
+        {CERTIFICATE_STATUS_LABELS[c.status]}
+        {c.isCurrent && c.status !== 'VENCIDA' && c.daysUntilExpiry <= 15 && ` · ${c.daysUntilExpiry} dia${c.daysUntilExpiry === 1 ? '' : 's'}`}
+      </span>
     </li>
   );
 }
@@ -336,20 +428,7 @@ export default function ObrigacoesPage() {
         ) : (
           <ul className="flex flex-col divide-y divide-border">
             {certificates.data!.map((c) => (
-              <li key={c.id} className={cn('flex flex-wrap items-center justify-between gap-3 py-3', !c.isCurrent && 'opacity-60')}>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-sm">{CERTIFICATE_TYPE_LABELS[c.type]}</span>
-                  <span className="text-xs text-muted-foreground">
-                    Emitida {fmtDate(c.issuedOn)} · válida até {fmtDate(c.validUntil)}
-                    {c.issuer && ` · ${c.issuer}`}
-                    {!c.isCurrent && ' · substituída'}
-                  </span>
-                </div>
-                <span className={cn('rounded px-1.5 py-0.5 text-xs', CERT_STATUS_CLASS[c.status])}>
-                  {CERTIFICATE_STATUS_LABELS[c.status]}
-                  {c.isCurrent && c.status !== 'VENCIDA' && c.daysUntilExpiry <= 15 && ` · ${c.daysUntilExpiry} dia${c.daysUntilExpiry === 1 ? '' : 's'}`}
-                </span>
-              </li>
+              <CertificateRow key={c.id} organizationId={organizationId} c={c} canWrite={canWrite} />
             ))}
           </ul>
         )}

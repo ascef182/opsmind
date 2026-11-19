@@ -37,6 +37,8 @@ import { Select } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { EmptyState, Field } from '@/components/finance/finance-ui';
+import { DocumentField, DocumentLink } from '@/components/opsgov/document-field';
+import type { UploadedDocument } from '@/lib/documents/files';
 
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 
@@ -173,6 +175,7 @@ function PeriodDialog({ organizationId, kind, onClose }: { organizationId: strin
   const [isPrimary, setIsPrimary] = useState(false);
   const [anexo, setAnexo] = useState<AnexoSimples>('NAO_DEFINIDO');
   const [group, setGroup] = useState<RevenueGroup>('OUTROS');
+  const [proof, setProof] = useState<UploadedDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const changing = kind && typeof kind === 'object' && 'change' in kind ? kind.change : null;
@@ -181,6 +184,7 @@ function PeriodDialog({ organizationId, kind, onClose }: { organizationId: strin
   useEffect(() => {
     setError(null);
     setNotes('');
+    setProof(null);
     setDate(todayKey());
     if (changing) {
       setDescription(changing.description);
@@ -210,7 +214,7 @@ function PeriodDialog({ organizationId, kind, onClose }: { organizationId: strin
     event.preventDefault();
     setError(null);
     const handlers = { onSuccess: onClose, onError: (e: unknown) => setError(errorText(e, 'Não foi possível salvar.')) };
-    const period = { validFrom: date, notes: notes.trim() || undefined };
+    const period = { validFrom: date, notes: notes.trim() || undefined, documentId: proof?.id };
     if (kind === 'registration') return registration.mutate({ ...period, naturezaJuridica: natureza, cnpj }, handlers);
     if (kind === 'regime') return regime.mutate({ ...period, regime: taxRegime, ibsCbsMode: ibsCbs }, handlers);
     if (kind === 'activity') {
@@ -300,6 +304,7 @@ function PeriodDialog({ organizationId, kind, onClose }: { organizationId: strin
             </div>
           )}
           {activityFields}
+          {!ending && <DocumentField organizationId={organizationId} value={proof} onChange={setProof} />}
           {!ending && (
             <Field label="Observações">
               <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex.: decidido com o contador em…" />
@@ -368,6 +373,7 @@ export default function EmpresaPage() {
                   </span>
                   <Vigencia from={p.validFrom} to={p.validTo} />
                   {p.notes && <span className="text-xs text-muted-foreground">{p.notes}</span>}
+                  {p.documentId && <DocumentLink organizationId={organizationId} documentId={p.documentId} />}
                 </li>
               ))}
             </ul>
@@ -386,6 +392,7 @@ export default function EmpresaPage() {
                   </span>
                   <Vigencia from={p.validFrom} to={p.validTo} />
                   {p.notes && <span className="text-xs text-muted-foreground">{p.notes}</span>}
+                  {p.documentId && <DocumentLink organizationId={organizationId} documentId={p.documentId} />}
                 </li>
               ))}
             </ul>
@@ -409,6 +416,7 @@ export default function EmpresaPage() {
                     {ANEXO_LABELS[a.anexoSimples]} · {REVENUE_GROUP_LABELS[a.revenueGroup]}
                   </span>
                   <Vigencia from={a.validFrom} to={a.validTo} />
+                  {a.documentId && <DocumentLink organizationId={organizationId} documentId={a.documentId} />}
                 </div>
                 {canWrite && a.validTo === null && (
                   <div className="flex gap-2">

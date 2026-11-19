@@ -39,8 +39,10 @@ export function useCreateObligation(organizationId: string) {
 }
 
 export function useCompleteObligation(organizationId: string) {
-  return useComplianceMutation(organizationId, ({ id, completedOn }: { id: string; completedOn?: string }) =>
-    apiFetch<Obligation>(`${base(organizationId)}/obligations/${id}/complete`, { method: 'POST', body: { completedOn } }),
+  return useComplianceMutation(
+    organizationId,
+    ({ id, ...body }: { id: string; completedOn?: string; documentId?: string; notes?: string }) =>
+      apiFetch<Obligation>(`${base(organizationId)}/obligations/${id}/complete`, { method: 'POST', body }),
   );
 }
 
@@ -53,5 +55,11 @@ export function useDismissObligation(organizationId: string) {
 export function useCreateCertificate(organizationId: string) {
   return useComplianceMutation(organizationId, (input: CreateCertificateInput) =>
     apiFetch<Certificate>(`${base(organizationId)}/certificates`, { method: 'POST', body: input }),
+  );
+}
+
+export function useUpdateCertificate(organizationId: string) {
+  return useComplianceMutation(organizationId, ({ id, ...body }: { id: string; documentId?: string; notes?: string }) =>
+    apiFetch<Certificate>(`${base(organizationId)}/certificates/${id}`, { method: 'PATCH', body }),
   );
 }
