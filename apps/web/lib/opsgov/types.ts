@@ -340,3 +340,190 @@ export interface AccountingDecision {
   status: AccountingDecisionStatus;
   updatedAt: string;
 }
+
+// ── Fase 6: licitações ─────────────────────────────────────────────────────
+export type ProcurementStatus = 'RADAR' | 'ANALISE' | 'PROPOSTA' | 'DISPUTA' | 'GANHA' | 'PERDIDA' | 'DESCARTADA';
+export type ProcurementModality =
+  | 'PREGAO_ELETRONICO'
+  | 'PREGAO_PRESENCIAL'
+  | 'CONCORRENCIA'
+  | 'DISPENSA'
+  | 'INEXIGIBILIDADE'
+  | 'CREDENCIAMENTO'
+  | 'OUTRA';
+export type ProcurementRequirementType = 'DOCUMENTO' | 'CERTIDAO' | 'ATESTADO' | 'CNAE' | 'DECLARACAO';
+export type ProcurementRequirementSource = 'MANUAL' | 'AI_SUGGESTION_CONFIRMED';
+
+export const PROCUREMENT_STATUS_LABELS: Record<ProcurementStatus, string> = {
+  RADAR: 'No radar',
+  ANALISE: 'Em análise',
+  PROPOSTA: 'Proposta',
+  DISPUTA: 'Em disputa',
+  GANHA: 'Ganha',
+  PERDIDA: 'Perdida',
+  DESCARTADA: 'Descartada',
+};
+export const PROCUREMENT_MODALITY_LABELS: Record<ProcurementModality, string> = {
+  PREGAO_ELETRONICO: 'Pregão eletrônico',
+  PREGAO_PRESENCIAL: 'Pregão presencial',
+  CONCORRENCIA: 'Concorrência',
+  DISPENSA: 'Dispensa',
+  INEXIGIBILIDADE: 'Inexigibilidade',
+  CREDENCIAMENTO: 'Credenciamento',
+  OUTRA: 'Outra',
+};
+export const REQUIREMENT_TYPE_LABELS: Record<ProcurementRequirementType, string> = {
+  CERTIDAO: 'Certidão',
+  CNAE: 'CNAE',
+  ATESTADO: 'Atestado técnico',
+  DOCUMENTO: 'Documento',
+  DECLARACAO: 'Declaração',
+};
+/** Encerrar sem vitória exige motivo (a API também cobra). */
+export const STATUSES_REQUIRING_REASON: ProcurementStatus[] = ['PERDIDA', 'DESCARTADA'];
+/** Converter em cliente + contrato segue o papel de escrita do Financeiro. */
+export const OPSGOV_CONVERT_ROLES: Role[] = ['OWNER', 'ADMIN'];
+
+export interface ReadinessSummary {
+  score: number;
+  metCount: number;
+  total: number;
+  blockerCount: number;
+  ready: boolean;
+}
+
+export interface OpportunitySummary {
+  id: string;
+  agency: string;
+  agencyCode: string | null;
+  processNumber: string | null;
+  modality: ProcurementModality;
+  object: string;
+  sessionDate: string | null;
+  proposalDeadline: string | null;
+  estimatedValueCents: number | null;
+  status: ProcurementStatus;
+  statusChangedAt: string;
+  converted: boolean;
+  readiness: ReadinessSummary;
+}
+
+export interface Requirement {
+  id: string;
+  type: ProcurementRequirementType;
+  description: string;
+  certificateType: CertificateType | null;
+  requiredCnae: string | null;
+  technicalCertificate: { id: string; issuer: string } | null;
+  manuallyMet: boolean;
+  documentId: string | null;
+  source: ProcurementRequirementSource;
+  notes: string | null;
+  met: boolean;
+  reason: string;
+}
+
+export interface OpportunityDetail extends Omit<OpportunitySummary, 'readiness'> {
+  editalUrl: string | null;
+  editalDocumentId: string | null;
+  notes: string | null;
+  customerId: string | null;
+  contractId: string | null;
+  convertedAt: string | null;
+  nextStatuses: ProcurementStatus[];
+  requirements: Requirement[];
+  readiness: {
+    referenceDate: string;
+    metCount: number;
+    total: number;
+    score: number;
+    blockers: string[];
+    ready: boolean;
+  };
+  statusChanges: Array<{
+    id: string;
+    fromStatus: ProcurementStatus | null;
+    toStatus: ProcurementStatus;
+    reason: string | null;
+    actorId: string | null;
+    createdAt: string;
+  }>;
+}
+
+export interface OpportunityInput {
+  agency: string;
+  agencyCode?: string;
+  processNumber?: string;
+  modality: ProcurementModality;
+  object: string;
+  editalUrl?: string;
+  sessionDate?: string;
+  proposalDeadline?: string;
+  estimatedValueCents?: number;
+  editalDocumentId?: string;
+  notes?: string;
+}
+
+export type OpportunityPatch = { [K in keyof OpportunityInput]?: OpportunityInput[K] | null };
+
+export interface RequirementInput {
+  type: ProcurementRequirementType;
+  description: string;
+  certificateType?: CertificateType;
+  requiredCnae?: string;
+  technicalCertificateId?: string;
+  notes?: string;
+}
+
+export interface RequirementPatch {
+  description?: string;
+  technicalCertificateId?: string | null;
+  manuallyMet?: boolean;
+  documentId?: string | null;
+}
+
+export interface ConvertInput {
+  customerId?: string;
+  title?: string;
+  billing: 'ONE_TIME' | 'MONTHLY';
+  valueCents: number;
+  startDate: string;
+  endDate?: string;
+  generateBilling?: boolean;
+}
+
+export interface TechnicalCertificate {
+  id: string;
+  issuer: string;
+  object: string;
+  periodStart: string;
+  periodEnd: string | null;
+  valueCents: number | null;
+  companyActivity: { id: string; cnae: string; description: string; revenueGroup: RevenueGroup } | null;
+  customer: { id: string; name: string } | null;
+  contractId: string | null;
+  documentId: string | null;
+  notes: string | null;
+  createdAt: string;
+}
+
+export interface TechnicalCertificateInput {
+  issuer: string;
+  object: string;
+  periodStart: string;
+  periodEnd?: string;
+  valueCents?: number;
+  companyActivityId?: string;
+  customerId?: string;
+  documentId?: string;
+  notes?: string;
+}
+
+export interface ProcurementOverview {
+  today: string;
+  issues: Array<{ severity: 'BLOCKER' | 'WARNING'; message: string }>;
+  certificates: Certificate[];
+  activeActivities: CompanyActivity[];
+  technicalCertificatesByGroup: Array<{ revenueGroup: RevenueGroup | null; count: number; totalValueCents: number }>;
+  openOpportunities: OpportunitySummary[];
+}

@@ -301,3 +301,8 @@ receita por atividade, simulador do Simples, obrigações/certidões, espaço do
 - Leituras com dado financeiro exigem `FINANCE_READ_ROLE` (MANAGER+); `PERSONAL` nunca entra em faturamento/RBT12.
 - **A IA só lê e sugere**: não há tool que mude regime, valide certidão, crie requisito ou avance licitação; requisitos
   sugeridos de edital só viram `ProcurementRequirement` por confirmação humana via HTTP.
+- **Licitações (Fase 6)**: `ProcurementOpportunity` com máquina de estados `PROCUREMENT_TRANSITIONS` (shared-types),
+  histórico em `ProcurementStatusChange`, checklist `ProcurementRequirement` (CERTIDAO aponta para o tipo; CHECK por
+  tipo) e prontidão calculada por `procurementReadiness` na data da sessão. GANHA→cliente+contrato reusa
+  `CustomersService` e `FinanceContractsService`, uma vez só (ADMIN+).
+

@@ -125,3 +125,13 @@ export type {
   ComplianceSubjectType,
 } from '@prisma/client';
 export type { AccountingProposal, AccountingDecision, AccountingScenario, AccountingDecisionStatus } from '@prisma/client';
+export type {
+  TechnicalCertificate,
+  ProcurementOpportunity,
+  ProcurementStatusChange,
+  ProcurementRequirement,
+  ProcurementStatus,
+  ProcurementModality,
+  ProcurementRequirementType,
+  ProcurementRequirementSource,
+} from '@prisma/client';

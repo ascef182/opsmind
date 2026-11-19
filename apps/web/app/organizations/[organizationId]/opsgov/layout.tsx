@@ -8,10 +8,13 @@ import { cn } from '@/lib/utils';
 
 // Abas crescem a cada fase do OpsGov. `finance` = só MANAGER+ (a API é quem barra).
 const TABS = [
+  { segment: '', label: 'Prontidão', finance: false },
+  { segment: 'licitacoes', label: 'Licitações', finance: false },
   { segment: 'empresa', label: 'Empresa', finance: false },
   { segment: 'receita', label: 'Receita', finance: true },
   { segment: 'simulador', label: 'Simulador do Simples', finance: false },
   { segment: 'obrigacoes', label: 'Obrigações e certidões', finance: false },
+  { segment: 'atestados', label: 'Atestados', finance: false },
   { segment: 'contador', label: 'Contador', finance: false },
 ];
 
@@ -28,8 +31,8 @@ export default function OpsGovLayout({ children }: { children: React.ReactNode }
         <h1 className="text-h1">OpsGov</h1>
         <nav className="flex gap-1 overflow-x-auto border-b border-border" aria-label="Seções do OpsGov">
           {TABS.filter((tab) => !tab.finance || seesFinance).map((tab) => {
-            const href = `${basePath}/${tab.segment}`;
-            const active = pathname?.startsWith(href);
+            const href = tab.segment ? `${basePath}/${tab.segment}` : basePath;
+            const active = tab.segment ? pathname?.startsWith(href) : pathname === basePath;
             return (
               <Link
                 key={tab.segment}

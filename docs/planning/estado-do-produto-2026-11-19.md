@@ -134,7 +134,7 @@ licitações. Regras em todo o módulo:
 | `/opsgov/simulador` | Compara Anexo III e Anexo V, calcula o Fator R, o pró-labore mínimo para 28% e a economia. Três cenários editáveis mais um com o RBT12 real. Aviso fixo "Estimativa, não é parecer contábil" | 3 | ✅ |
 | `/opsgov/obrigacoes` | Obrigações (DAS, DASN, DEFIS, taxas…) com vencimento e recorrência, cumprimento com guia ou recibo e dispensa com motivo. Certidões com validade e status calculado (válida, vencendo, vencida). O worker avisa em D-7/D-1 (obrigações) e D-15/D-0 (certidões), sem repetir | 4 | ✅ |
 | `/opsgov/contador` | Propostas de escritórios (cenário A ou B, custos, PDF) com comparativo de 1º ano e 2º ano em diante, somando os tributos do simulador. Quadro com as 13 decisões pendentes, respostas com histórico, decisão final e reabertura | 5 | ✅ |
-| `/opsgov` (Prontidão geral) e `/opsgov/licitacoes` | Atestados técnicos, oportunidades de licitação (RADAR→ANÁLISE→PROPOSTA→DISPUTA→GANHA/PERDIDA), checklist do edital, score de prontidão com bloqueadores e conversão GANHA→cliente+contrato | 6 | ⏳ A fazer |
+| `/opsgov` (Prontidão geral), `/opsgov/licitacoes`, `/opsgov/atestados` | Atestados técnicos, licitações (RADAR→ANÁLISE→PROPOSTA→DISPUTA→GANHA/PERDIDA/DESCARTADA, com histórico e motivo), checklist do edital, prontidão na data da sessão com bloqueadores e conversão GANHA→cliente+contrato | 6 | ✅ |
 | Assistente IA | Tools de leitura: status de conformidade, simulação, prontidão e resumo de exigências do edital (só sugere; a confirmação é humana). Eval com prompt injection dentro de edital | 7 | ⏳ A fazer |
 
 Qualidade: lint, typecheck, 841 testes na API, 235 no worker e 233 em shared-types. E2e de isolamento entre
@@ -154,7 +154,8 @@ funciona por dentro. Status de cada um:
 - 🔴 Envio real: falta domínio de envio, deploy público (webhooks) e descadastro (unsubscribe).
 - 🔴 Resposta: não é guardada, nem classificada, nem gera tarefa ou próximo passo.
 - 🟡 Negócio→proposta→assinatura funciona, mas sem aprovação de proposta nem preço com margem.
-- 🟡 Ganho→contrato: o Financeiro mostra "negócios ganhos sem contrato", mas criar o contrato é manual.
+- ✅ Ganho→contrato: o negócio ganho vira contrato (com tarefas de implantação) pelo card na página do negócio
+  (`POST .../finance/contracts/from-deal/:dealId`). Corrigido: a primeira versão deste documento dizia que era manual.
 
 ### F2. Relacionamento com o cliente
 `Cliente → Negócios → Tarefas/Reuniões → Notas → Automação de inatividade`
@@ -200,7 +201,7 @@ Agrupado por prioridade, do que bloqueia o uso real ao que é refinamento.
 
 5. **Respostas de outreach** (Roadmap Fase 4): guardar, classificar, gerar próximo passo e tratar opt-out
    automaticamente.
-6. **Ganhou → contrato** em um clique, partindo do negócio (o mesmo padrão do OpsGov GANHA→cliente+contrato).
+6. ~~Ganhou → contrato~~: já existe (card na página do negócio).
 7. **Página de Documentos**: listar, baixar e ver onde cada documento é usado (comprovantes, propostas, editais).
 8. **Dashboard "Hoje"**: aprovações pendentes, tarefas vencidas, follow-ups, obrigações e certidões vencendo, e
    negócios parados.

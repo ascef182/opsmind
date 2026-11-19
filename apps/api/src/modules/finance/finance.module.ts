@@ -19,7 +19,8 @@ import { FinanceController } from './finance.controller';
     TenantGuard,
     RolesGuard,
   ],
-  // Exportado para a AI tool de leitura e para o resumo executivo do dashboard.
-  exports: [FinanceReportsService, FinanceEntriesService],
+  // Reports/Entries: AI tool de leitura e resumo do dashboard. Contracts: conversão
+  // de licitação ganha em contrato (OpsGov), sem duplicar a regra.
+  exports: [FinanceReportsService, FinanceEntriesService, FinanceContractsService],
 })
 export class FinanceModule {}

@@ -220,55 +220,59 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships             Membership[]
-  invitations             Invitation[]
-  auditLogs               AuditLog[]
-  customers               Customer[]
-  tasks                   Task[]
-  activityLogs            ActivityLog[]
-  notifications           Notification[]
-  aiRequests              AIRequest[]
-  automations             Automation[]
-  automationRuns          AutomationRun[]
-  documents               Document[]
-  documentChunks          DocumentChunk[]
-  serviceOfferings        ServiceOffering[]
-  scrapeJobs              ScrapeJob[]
-  leads                   Lead[]
-  leadEnrichments         LeadEnrichment[]
-  outreachMessages        OutreachMessage[]
-  prospectingTargets      ProspectingTarget[]
-  redditWatchTopics       RedditWatchTopic[]
-  marketOpportunities     MarketOpportunity[]
-  leadSignals             LeadSignal[]
-  signalCodes             SignalCode[]
-  deals                   Deal[]
-  meetings                Meeting[]
-  dealSignatureRequests   DealSignatureRequest[]
-  internalNotes           InternalNote[]
-  contracts               Contract[]
-  financialEntries        FinancialEntry[]
-  financialPayments       FinancialPayment[]
-  recurringEntries        RecurringEntry[]
-  pipelineTransitions     PipelineStageTransition[]
-  costEvents              CostEvent[]
-  revenueSettings         OrganizationRevenueSettings?
-  salesCampaigns          SalesCampaign[]
-  harveyAgent             HarveyAgent?
-  campaignLeads           CampaignLead[]
-  leadDuplicateCandidates LeadDuplicateCandidate[]
-  harveyRuns              HarveyRun[]
-  harveyActivities        HarveyActivity[]
-  companyProfile          CompanyProfile?
-  registrationPeriods     CompanyRegistrationPeriod[]
-  taxRegimePeriods        TaxRegimePeriod[]
-  companyActivities       CompanyActivity[]
-  complianceObligations   ComplianceObligation[]
-  obligationCompletions   ComplianceObligationCompletion[]
-  certificates            Certificate[]
-  complianceReminders     ComplianceReminder[]
-  accountingProposals     AccountingProposal[]
-  accountingDecisions     AccountingDecision[]
+  memberships              Membership[]
+  invitations              Invitation[]
+  auditLogs                AuditLog[]
+  customers                Customer[]
+  tasks                    Task[]
+  activityLogs             ActivityLog[]
+  notifications            Notification[]
+  aiRequests               AIRequest[]
+  automations              Automation[]
+  automationRuns           AutomationRun[]
+  documents                Document[]
+  documentChunks           DocumentChunk[]
+  serviceOfferings         ServiceOffering[]
+  scrapeJobs               ScrapeJob[]
+  leads                    Lead[]
+  leadEnrichments          LeadEnrichment[]
+  outreachMessages         OutreachMessage[]
+  prospectingTargets       ProspectingTarget[]
+  redditWatchTopics        RedditWatchTopic[]
+  marketOpportunities      MarketOpportunity[]
+  leadSignals              LeadSignal[]
+  signalCodes              SignalCode[]
+  deals                    Deal[]
+  meetings                 Meeting[]
+  dealSignatureRequests    DealSignatureRequest[]
+  internalNotes            InternalNote[]
+  contracts                Contract[]
+  financialEntries         FinancialEntry[]
+  financialPayments        FinancialPayment[]
+  recurringEntries         RecurringEntry[]
+  pipelineTransitions      PipelineStageTransition[]
+  costEvents               CostEvent[]
+  revenueSettings          OrganizationRevenueSettings?
+  salesCampaigns           SalesCampaign[]
+  harveyAgent              HarveyAgent?
+  campaignLeads            CampaignLead[]
+  leadDuplicateCandidates  LeadDuplicateCandidate[]
+  harveyRuns               HarveyRun[]
+  harveyActivities         HarveyActivity[]
+  companyProfile           CompanyProfile?
+  registrationPeriods      CompanyRegistrationPeriod[]
+  taxRegimePeriods         TaxRegimePeriod[]
+  companyActivities        CompanyActivity[]
+  complianceObligations    ComplianceObligation[]
+  obligationCompletions    ComplianceObligationCompletion[]
+  certificates             Certificate[]
+  complianceReminders      ComplianceReminder[]
+  accountingProposals      AccountingProposal[]
+  accountingDecisions      AccountingDecision[]
+  technicalCertificates    TechnicalCertificate[]
+  procurementOpportunities ProcurementOpportunity[]
+  procurementStatusChanges ProcurementStatusChange[]
+  procurementRequirements  ProcurementRequirement[]
 
   @@map("organizations")
 }
@@ -436,20 +440,22 @@ model Customer {
   createdAt      DateTime       @default(now()) @map("created_at")
   updatedAt      DateTime       @updatedAt @map("updated_at")
 
-  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  owner            User?            @relation("CustomerOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  tasks            Task[]
-  activityLogs     ActivityLog[]
-  documents        Document[]
+  organization             Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technicalCertificates    TechnicalCertificate[]
+  procurementOpportunities ProcurementOpportunity[]
+  owner                    User?                    @relation("CustomerOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  tasks                    Task[]
+  activityLogs             ActivityLog[]
+  documents                Document[]
   // Leads convertidos em cliente (Lead.convertedCustomerId) — permite navegar
   // de um Customer de volta ao(s) Lead(s) de prospecção que o originaram.
-  originLeads      Lead[]
-  deals            Deal[]
+  originLeads              Lead[]
+  deals                    Deal[]
   // Financeiro: registros de dinheiro nunca somem junto com o cliente (Customer
   // usa soft-delete), por isso as FKs de contrato/lançamento são RESTRICT.
-  contracts        Contract[]
-  financialEntries FinancialEntry[]
-  recurringEntries RecurringEntry[]
+  contracts                Contract[]
+  financialEntries         FinancialEntry[]
+  recurringEntries         RecurringEntry[]
 
   @@index([organizationId, status])
   @@index([organizationId, lastActivityAt])
@@ -873,12 +879,15 @@ model Document {
   uploadedBy   User            @relation(fields: [uploadedByUserId], references: [id])
   chunks       DocumentChunk[]
 
-  registrationPeriods   CompanyRegistrationPeriod[]      @relation("RegistrationPeriodDocument")
-  taxRegimePeriods      TaxRegimePeriod[]                @relation("TaxRegimePeriodDocument")
-  companyActivities     CompanyActivity[]                @relation("CompanyActivityDocument")
-  obligationCompletions ComplianceObligationCompletion[] @relation("ObligationCompletionDocument")
-  certificates          Certificate[]                    @relation("CertificateDocument")
-  accountingProposals   AccountingProposal[]             @relation("AccountingProposalDocument")
+  registrationPeriods     CompanyRegistrationPeriod[]      @relation("RegistrationPeriodDocument")
+  taxRegimePeriods        TaxRegimePeriod[]                @relation("TaxRegimePeriodDocument")
+  companyActivities       CompanyActivity[]                @relation("CompanyActivityDocument")
+  obligationCompletions   ComplianceObligationCompletion[] @relation("ObligationCompletionDocument")
+  certificates            Certificate[]                    @relation("CertificateDocument")
+  accountingProposals     AccountingProposal[]             @relation("AccountingProposalDocument")
+  technicalCertificates   TechnicalCertificate[]           @relation("TechnicalCertificateDocument")
+  procurementEditais      ProcurementOpportunity[]         @relation("ProcurementEditalDocument")
+  procurementRequirements ProcurementRequirement[]         @relation("ProcurementRequirementDocument")
 
   @@index([organizationId, status])
   @@index([organizationId, customerId])
@@ -1487,11 +1496,13 @@ model Contract {
   createdAt      DateTime          @default(now()) @map("created_at")
   updatedAt      DateTime          @updatedAt @map("updated_at")
 
-  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer         Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  deal             Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  entries          FinancialEntry[]
-  recurringEntries RecurringEntry[]
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technicalCertificates  TechnicalCertificate[]
+  procurementOpportunity ProcurementOpportunity?
+  customer               Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  deal                   Deal?                   @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  entries                FinancialEntry[]
+  recurringEntries       RecurringEntry[]
 
   @@index([organizationId, status])
   @@index([organizationId, customerId])
@@ -2050,8 +2061,9 @@ model CompanyActivity {
   actorId        String?        @map("actor_id")
   createdAt      DateTime       @default(now()) @map("created_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  document     Document?    @relation("CompanyActivityDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technicalCertificates TechnicalCertificate[]
+  document              Document?              @relation("CompanyActivityDocument", fields: [documentId], references: [id], onDelete: SetNull)
 
   financialEntries FinancialEntry[]
 
@@ -2297,4 +2309,154 @@ model LeadDuplicateCandidate {
   @@unique([leadAId, leadBId])
   @@index([organizationId, status])
   @@map("lead_duplicate_candidates")
+}
+
+// ── OpsGov Fase 6: prontidão para licitações ─────────────────────────────
+// Ver migration 20261120120000_opsgov_procurement.
+
+enum ProcurementStatus {
+  RADAR
+  ANALISE
+  PROPOSTA
+  DISPUTA
+  GANHA
+  PERDIDA
+  DESCARTADA
+}
+
+enum ProcurementModality {
+  PREGAO_ELETRONICO
+  PREGAO_PRESENCIAL
+  CONCORRENCIA
+  DISPENSA
+  INEXIGIBILIDADE
+  CREDENCIAMENTO
+  OUTRA
+}
+
+enum ProcurementRequirementType {
+  DOCUMENTO
+  CERTIDAO
+  ATESTADO
+  CNAE
+  DECLARACAO
+}
+
+enum ProcurementRequirementSource {
+  MANUAL
+  AI_SUGGESTION_CONFIRMED
+}
+
+// Atestado de capacidade técnica: prova de um serviço já prestado.
+model TechnicalCertificate {
+  id                String         @id @default(uuid())
+  organizationId    String         @map("organization_id")
+  issuer            String
+  object            String         @db.Text
+  periodStart       DateTime       @map("period_start") @db.Date
+  periodEnd         DateTime?      @map("period_end") @db.Date
+  valueCents        Int?           @map("value_cents")
+  companyActivityId String?        @map("company_activity_id")
+  customerId        String?        @map("customer_id")
+  contractId        String?        @map("contract_id")
+  documentId        String?        @map("document_id")
+  notes             String?        @db.Text
+  actorType         AuditActorType @map("actor_type")
+  actorId           String?        @map("actor_id")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  organization    Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  companyActivity CompanyActivity?         @relation(fields: [companyActivityId], references: [id], onDelete: SetNull)
+  customer        Customer?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  contract        Contract?                @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  document        Document?                @relation("TechnicalCertificateDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  requirements    ProcurementRequirement[]
+
+  @@index([organizationId, periodStart])
+  @@map("technical_certificates")
+}
+
+model ProcurementOpportunity {
+  id                  String              @id @default(uuid())
+  organizationId      String              @map("organization_id")
+  agency              String
+  // UASG ou código do órgão no portal.
+  agencyCode          String?             @map("agency_code")
+  processNumber       String?             @map("process_number")
+  modality            ProcurementModality
+  object              String              @db.Text
+  editalUrl           String?             @map("edital_url")
+  sessionDate         DateTime?           @map("session_date") @db.Date
+  proposalDeadline    DateTime?           @map("proposal_deadline") @db.Date
+  estimatedValueCents Int?                @map("estimated_value_cents")
+  editalDocumentId    String?             @map("edital_document_id")
+  status              ProcurementStatus   @default(RADAR)
+  statusChangedAt     DateTime            @default(now()) @map("status_changed_at")
+  notes               String?             @db.Text
+  customerId          String?             @map("customer_id")
+  contractId          String?             @unique @map("contract_id")
+  convertedAt         DateTime?           @map("converted_at")
+  actorType           AuditActorType      @map("actor_type")
+  actorId             String?             @map("actor_id")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  editalDocument Document?                 @relation("ProcurementEditalDocument", fields: [editalDocumentId], references: [id], onDelete: SetNull)
+  customer       Customer?                 @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  contract       Contract?                 @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  requirements   ProcurementRequirement[]
+  statusChanges  ProcurementStatusChange[]
+
+  @@index([organizationId, status, sessionDate])
+  @@map("procurement_opportunities")
+}
+
+// Histórico append-only das mudanças de status.
+model ProcurementStatusChange {
+  id             String             @id @default(uuid())
+  organizationId String             @map("organization_id")
+  opportunityId  String             @map("opportunity_id")
+  fromStatus     ProcurementStatus? @map("from_status")
+  toStatus       ProcurementStatus  @map("to_status")
+  reason         String?            @db.Text
+  actorType      AuditActorType     @map("actor_type")
+  actorId        String?            @map("actor_id")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  opportunity  ProcurementOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, opportunityId, createdAt])
+  @@map("procurement_status_changes")
+}
+
+model ProcurementRequirement {
+  id                     String                       @id @default(uuid())
+  organizationId         String                       @map("organization_id")
+  opportunityId          String                       @map("opportunity_id")
+  type                   ProcurementRequirementType
+  description            String                       @db.Text
+  // CERTIDAO: o tipo, não uma certidão específica — renovar não quebra o vínculo.
+  certificateType        CertificateType?             @map("certificate_type")
+  requiredCnae           String?                      @map("required_cnae")
+  technicalCertificateId String?                      @map("technical_certificate_id")
+  // DOCUMENTO/DECLARACAO: marcado por uma pessoa, com comprovante opcional.
+  manuallyMet            Boolean                      @default(false) @map("manually_met")
+  documentId             String?                      @map("document_id")
+  source                 ProcurementRequirementSource @default(MANUAL)
+  notes                  String?                      @db.Text
+  actorType              AuditActorType               @map("actor_type")
+  actorId                String?                      @map("actor_id")
+  createdAt              DateTime                     @default(now()) @map("created_at")
+  updatedAt              DateTime                     @updatedAt @map("updated_at")
+
+  organization         Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  opportunity          ProcurementOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  technicalCertificate TechnicalCertificate?  @relation(fields: [technicalCertificateId], references: [id], onDelete: SetNull)
+  document             Document?              @relation("ProcurementRequirementDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, opportunityId])
+  @@map("procurement_requirements")
 }

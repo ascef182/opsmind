@@ -408,4 +408,131 @@ describe('OpsGov (e2e)', () => {
       expect(deleted?.metadata).toEqual(expect.objectContaining({ proposal: expect.objectContaining({ firm: 'Contábil Alfa' }) }));
     });
   });
+
+  describe('Fase 6 — licitações', () => {
+    it('checklist, prontidão na data da sessão, máquina de estados, conversão única e isolamento', async () => {
+      const org = await newOrg('procurement');
+      const root = `/organizations/${org.organizationId}/opsgov`;
+      const http = () => request(app.getHttpServer());
+
+      await http().put(`${root}/company/profile`).set(org.auth).send({ razaoSocial: 'CazaTech' }).expect(200);
+      await http()
+        .post(`${root}/company/registrations`)
+        .set(org.auth)
+        .send({ naturezaJuridica: 'MEI', cnpj: '11222333000181', validFrom: '2024-03-01' })
+        .expect(201);
+      await http().post(`${root}/company/regimes`).set(org.auth).send({ regime: 'SIMEI', ibsCbsMode: 'NAO_SE_APLICA', validFrom: '2024-03-01' }).expect(201);
+      await http()
+        .post(`${root}/company/activities`)
+        .set(org.auth)
+        .send({ cnae: '8219-9/99', description: 'Documentos', isPrimary: true, validFrom: '2024-03-01' })
+        .expect(201);
+      await http()
+        .post(`${root}/compliance/certificates`)
+        .set(org.auth)
+        .send({ type: 'CND_FEDERAL', issuedOn: '2026-06-01', validUntil: '2026-12-01' })
+        .expect(201);
+      const atestado = await http()
+        .post(`${root}/technical-certificates`)
+        .set(org.auth)
+        .send({ issuer: 'Universidade X', object: 'Legendagem', periodStart: '2026-01-10', valueCents: 1_000_000 })
+        .expect(201);
+
+      const created = await http()
+        .post(`${root}/procurement`)
+        .set(org.auth)
+        .send({ agency: 'Prefeitura de Exemplo', modality: 'PREGAO_ELETRONICO', object: 'Tradução', processNumber: '90001/2026', sessionDate: '2026-12-10' })
+        .expect(201);
+      const id = created.body.id as string;
+      expect(created.body).toEqual(expect.objectContaining({ status: 'RADAR', nextStatuses: ['ANALISE', 'DESCARTADA'] }));
+
+      const reqs = `${root}/procurement/${id}/requirements`;
+      await http().post(reqs).set(org.auth).send({ type: 'CERTIDAO', description: 'CND Federal', certificateType: 'CND_FEDERAL' }).expect(201);
+      await http().post(reqs).set(org.auth).send({ type: 'CNAE', description: 'Ramo', requiredCnae: '82199/99' }).expect(201);
+      await http().post(reqs).set(org.auth).send({ type: 'ATESTADO', description: 'Atestado', technicalCertificateId: atestado.body.id }).expect(201);
+      const decl = await http().post(reqs).set(org.auth).send({ type: 'DECLARACAO', description: 'Declaração ME/EPP' }).expect(201);
+      expect(decl.body).toEqual(expect.objectContaining({ met: false, reason: 'Pendente' }));
+      // Campo de outro tipo: a API ignora, e o banco recusa mesmo por fora dela.
+      await expect(
+        prisma.procurementRequirement.create({
+          data: {
+            organizationId: org.organizationId,
+            opportunityId: id,
+            type: 'DOCUMENTO',
+            description: 'x',
+            requiredCnae: '8219-9/99',
+            actorType: 'USER',
+          },
+        }),
+      ).rejects.toThrow(/procurement_requirements_fields_chk/);
+
+      // A certidão vale hoje mas vence antes da sessão: bloqueia.
+      let detail = await http().get(`${root}/procurement/${id}`).set(org.auth).expect(200);
+      expect(detail.body.readiness).toEqual(
+        expect.objectContaining({ referenceDate: '2026-12-10', metCount: 2, total: 4, score: 50, ready: false }),
+      );
+      expect(detail.body.readiness.blockers).toEqual([
+        'CND Federal: Vence em 01/12/2026, antes da sessão',
+        'Declaração ME/EPP: Pendente',
+      ]);
+
+      await http()
+        .post(`${root}/compliance/certificates`)
+        .set(org.auth)
+        .send({ type: 'CND_FEDERAL', issuedOn: '2026-11-15', validUntil: '2027-05-14' })
+        .expect(201);
+      await http().patch(`${reqs}/${decl.body.id}`).set(org.auth).send({ manuallyMet: true }).expect(200);
+      detail = await http().get(`${root}/procurement/${id}`).set(org.auth).expect(200);
+      expect(detail.body.readiness).toEqual(expect.objectContaining({ score: 100, ready: true, blockers: [] }));
+
+      const status = (to: string, reason?: string) => http().post(`${root}/procurement/${id}/status`).set(org.auth).send({ status: to, reason });
+      await status('GANHA').expect(409);
+      await status('ANALISE').expect(201);
+      await status('PROPOSTA').expect(201);
+      await status('DISPUTA').expect(201);
+      const convertBody = { billing: 'ONE_TIME', valueCents: 4_500_000, startDate: '2027-01-15', generateBilling: false };
+      await http().post(`${root}/procurement/${id}/convert`).set(org.auth).send(convertBody).expect(409);
+      const won = await status('GANHA').expect(201);
+      expect(won.body.statusChanges.map((c: { toStatus: string }) => c.toStatus)).toEqual(['RADAR', 'ANALISE', 'PROPOSTA', 'DISPUTA', 'GANHA']);
+      await http().post(reqs).set(org.auth).send({ type: 'DOCUMENTO', description: 'tarde demais' }).expect(409);
+
+      const converted = await http().post(`${root}/procurement/${id}/convert`).set(org.auth).send(convertBody).expect(201);
+      expect(converted.body.contractId).toEqual(expect.any(String));
+      const contract = await prisma.contract.findUniqueOrThrow({ where: { id: converted.body.contractId }, include: { customer: true } });
+      expect(contract).toEqual(expect.objectContaining({ valueCents: 4_500_000, title: 'Licitação 90001/2026: Prefeitura de Exemplo' }));
+      expect(contract.customer).toEqual(expect.objectContaining({ name: 'Prefeitura de Exemplo', tags: ['licitação'] }));
+      await http().post(`${root}/procurement/${id}/convert`).set(org.auth).send(convertBody).expect(409);
+
+      const panel = await http().get(`${root}/readiness`).set(org.auth).expect(200);
+      expect(panel.body.technicalCertificatesByGroup).toEqual([{ revenueGroup: null, count: 1, totalValueCents: 1_000_000 }]);
+      expect(panel.body.issues).toEqual(expect.arrayContaining([{ severity: 'WARNING', message: 'Certidão FGTS (CRF) não registrada' }]));
+      expect(panel.body.openOpportunities).toEqual([]);
+
+      const other = await newOrg('procurement-b', 'bob');
+      const otherRoot = `/organizations/${other.organizationId}/opsgov`;
+      await http().get(`${root}/procurement`).set(other.auth).expect(403);
+      await http().get(`${otherRoot}/procurement/${id}`).set(other.auth).expect(404);
+      await http().patch(`${otherRoot}/technical-certificates/${atestado.body.id}`).set(other.auth).send({ notes: 'x' }).expect(404);
+      const otherOpp = await http()
+        .post(`${otherRoot}/procurement`)
+        .set(other.auth)
+        .send({ agency: 'Órgão B', modality: 'DISPENSA', object: 'x' })
+        .expect(201);
+      await http()
+        .post(`${otherRoot}/procurement/${otherOpp.body.id}/requirements`)
+        .set(other.auth)
+        .send({ type: 'ATESTADO', description: 'atestado alheio', technicalCertificateId: atestado.body.id })
+        .expect(404);
+      const rls = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_org_id', ${other.organizationId}, true)`;
+        return Promise.all([
+          tx.procurementOpportunity.count({ where: { organizationId: org.organizationId } }),
+          tx.procurementRequirement.count({ where: { organizationId: org.organizationId } }),
+          tx.procurementStatusChange.count({ where: { organizationId: org.organizationId } }),
+          tx.technicalCertificate.count({ where: { organizationId: org.organizationId } }),
+        ]);
+      });
+      expect(rls).toEqual([0, 0, 0, 0]);
+    });
+  });
 });
