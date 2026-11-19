@@ -144,20 +144,41 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      # Sem as chaves cadastradas a suite não tem como rodar; pular com aviso no
+      # resumo é mais honesto que um job vermelho em todo push.
+      - name: Check API keys
+        id: keys
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ] && [ -n "$OPENAI_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Eval pulado: ANTHROPIC_API_KEY/OPENAI_API_KEY não cadastradas nos secrets do repositório." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - run: pnpm --filter @opsmind/database exec prisma generate
+      - if: steps.keys.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
 
-      - run: pnpm --filter @opsmind/database exec prisma migrate deploy
+      - if: steps.keys.outputs.present == 'true'
+        run: pnpm --filter @opsmind/database exec prisma generate
+
+      - name: Enable pgvector extension
+        if: steps.keys.outputs.present == 'true'
+        run: pnpm --filter @opsmind/database exec prisma db execute --file ../../infra/docker/init/01-extensions.sql --url "$DATABASE_URL"
+
+      - if: steps.keys.outputs.present == 'true'
+        run: pnpm --filter @opsmind/database exec prisma migrate deploy
 
       - name: Create restricted app role for RLS
+        if: steps.keys.outputs.present == 'true'
         run: pnpm --filter @opsmind/database exec prisma db execute --file ../../infra/docker/init/02-app-role.sql --url "$DATABASE_URL"
 
       - name: Run AI eval suite
+        if: steps.keys.outputs.present == 'true'
         run: pnpm --filter api eval
 
       - name: Publish eval report to job summary
-        if: always()
+        if: always() && steps.keys.outputs.present == 'true'
         run: |
           echo "## AI Eval Report" >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
