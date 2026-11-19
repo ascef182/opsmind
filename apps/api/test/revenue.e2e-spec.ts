@@ -133,6 +133,7 @@ describe('Revenue Engine (e2e)', () => {
       data: {
         organizationId,
         leadId: lead.body.id,
+        campaignId: lead.body.campaignId,
         channel: 'EMAIL',
         subject: 'Hi',
         body: 'Hello',
@@ -185,6 +186,7 @@ describe('Revenue Engine (e2e)', () => {
         {
           organizationId,
           leadId: lead.body.id,
+          campaignId: lead.body.campaignId,
           channel: 'WHATSAPP',
           body: 'texto editado',
           originalBody: 'texto da IA',
@@ -200,6 +202,7 @@ describe('Revenue Engine (e2e)', () => {
         {
           organizationId,
           leadId: lead.body.id,
+          campaignId: lead.body.campaignId,
           channel: 'WHATSAPP',
           body: 'antigo',
           evidenceQuotes: [],

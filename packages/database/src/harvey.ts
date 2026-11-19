@@ -87,7 +87,12 @@ export async function checkHarveyMayProceed(
   const campaign = await db.salesCampaign.findFirst({
     where: { id: input.campaignId, organizationId: input.organizationId },
   });
-  if (!campaign || campaign.status !== 'ACTIVE') return { ok: false, reason: 'CAMPAIGN_INACTIVE' };
+  // Lead cadastrado à mão não pertence a uma busca: segue só o estado do agente,
+  // como antes das campanhas de prospecção.
+  if (campaign?.kind === 'MANUAL_ENTRY') return { ok: true, runId: null };
+  if (!campaign || campaign.kind !== 'STANDARD' || campaign.status !== 'ACTIVE') {
+    return { ok: false, reason: 'CAMPAIGN_INACTIVE' };
+  }
   if (!isWithinWorkingHours(now, campaign)) return { ok: false, reason: 'OUTSIDE_WORKING_HOURS' };
 
   const run = await db.harveyRun.findUnique({

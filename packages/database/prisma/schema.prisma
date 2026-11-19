@@ -220,43 +220,45 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships           Membership[]
-  invitations           Invitation[]
-  auditLogs             AuditLog[]
-  customers             Customer[]
-  tasks                 Task[]
-  activityLogs          ActivityLog[]
-  notifications         Notification[]
-  aiRequests            AIRequest[]
-  automations           Automation[]
-  automationRuns        AutomationRun[]
-  documents             Document[]
-  documentChunks        DocumentChunk[]
-  serviceOfferings      ServiceOffering[]
-  scrapeJobs            ScrapeJob[]
-  leads                 Lead[]
-  leadEnrichments       LeadEnrichment[]
-  outreachMessages      OutreachMessage[]
-  prospectingTargets    ProspectingTarget[]
-  redditWatchTopics     RedditWatchTopic[]
-  marketOpportunities   MarketOpportunity[]
-  leadSignals           LeadSignal[]
-  signalCodes           SignalCode[]
-  deals                 Deal[]
-  meetings              Meeting[]
-  dealSignatureRequests DealSignatureRequest[]
-  internalNotes         InternalNote[]
-  contracts             Contract[]
-  financialEntries      FinancialEntry[]
-  financialPayments     FinancialPayment[]
-  recurringEntries      RecurringEntry[]
-  pipelineTransitions   PipelineStageTransition[]
-  costEvents            CostEvent[]
-  revenueSettings       OrganizationRevenueSettings?
-  salesCampaigns        SalesCampaign[]
-  harveyAgent           HarveyAgent?
-  harveyRuns            HarveyRun[]
-  harveyActivities      HarveyActivity[]
+  memberships             Membership[]
+  invitations             Invitation[]
+  auditLogs               AuditLog[]
+  customers               Customer[]
+  tasks                   Task[]
+  activityLogs            ActivityLog[]
+  notifications           Notification[]
+  aiRequests              AIRequest[]
+  automations             Automation[]
+  automationRuns          AutomationRun[]
+  documents               Document[]
+  documentChunks          DocumentChunk[]
+  serviceOfferings        ServiceOffering[]
+  scrapeJobs              ScrapeJob[]
+  leads                   Lead[]
+  leadEnrichments         LeadEnrichment[]
+  outreachMessages        OutreachMessage[]
+  prospectingTargets      ProspectingTarget[]
+  redditWatchTopics       RedditWatchTopic[]
+  marketOpportunities     MarketOpportunity[]
+  leadSignals             LeadSignal[]
+  signalCodes             SignalCode[]
+  deals                   Deal[]
+  meetings                Meeting[]
+  dealSignatureRequests   DealSignatureRequest[]
+  internalNotes           InternalNote[]
+  contracts               Contract[]
+  financialEntries        FinancialEntry[]
+  financialPayments       FinancialPayment[]
+  recurringEntries        RecurringEntry[]
+  pipelineTransitions     PipelineStageTransition[]
+  costEvents              CostEvent[]
+  revenueSettings         OrganizationRevenueSettings?
+  salesCampaigns          SalesCampaign[]
+  harveyAgent             HarveyAgent?
+  campaignLeads           CampaignLead[]
+  leadDuplicateCandidates LeadDuplicateCandidate[]
+  harveyRuns              HarveyRun[]
+  harveyActivities        HarveyActivity[]
 
   @@map("organizations")
 }
@@ -270,21 +272,22 @@ model User {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  memberships              Membership[]
-  refreshTokens            RefreshToken[]
-  emailVerificationTokens  EmailVerificationToken[]
-  sentInvitations          Invitation[]             @relation("InvitedBy")
-  ownedCustomers           Customer[]               @relation("CustomerOwner")
-  assignedTasks            Task[]                   @relation("TaskAssignee")
-  notifications            Notification[]
-  aiRequests               AIRequest[]
-  uploadedDocuments        Document[]
-  approvedOutreachMessages OutreachMessage[]        @relation("OutreachApprovedBy")
-  readOutreachMessages     OutreachMessage[]        @relation("OutreachReadBy")
-  authoredInternalNotes    InternalNote[]           @relation("InternalNoteAuthor")
-  dealsOwned               Deal[]                   @relation("DealOwner")
-  assignedLeads            Lead[]                   @relation("LeadAssignee")
-  harveyControlChanges     HarveyAgent[]            @relation("HarveyControlChangedBy")
+  memberships                 Membership[]
+  refreshTokens               RefreshToken[]
+  emailVerificationTokens     EmailVerificationToken[]
+  sentInvitations             Invitation[]             @relation("InvitedBy")
+  ownedCustomers              Customer[]               @relation("CustomerOwner")
+  assignedTasks               Task[]                   @relation("TaskAssignee")
+  notifications               Notification[]
+  aiRequests                  AIRequest[]
+  uploadedDocuments           Document[]
+  approvedOutreachMessages    OutreachMessage[]        @relation("OutreachApprovedBy")
+  readOutreachMessages        OutreachMessage[]        @relation("OutreachReadBy")
+  authoredInternalNotes       InternalNote[]           @relation("InternalNoteAuthor")
+  dealsOwned                  Deal[]                   @relation("DealOwner")
+  assignedLeads               Lead[]                   @relation("LeadAssignee")
+  harveyControlChanges        HarveyAgent[]            @relation("HarveyControlChangedBy")
+  reviewedDuplicateCandidates LeadDuplicateCandidate[] @relation("DuplicateCandidateReviewer")
 
   @@map("users")
 }
@@ -965,9 +968,11 @@ model ScrapeJob {
   prospectingTarget   ProspectingTarget? @relation(fields: [prospectingTargetId], references: [id], onDelete: SetNull)
   harveyRun           HarveyRun?         @relation(fields: [harveyRunId], references: [id], onDelete: SetNull)
 
-  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  leads            Lead[]
-  harveyActivities HarveyActivity[]
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads              Lead[]
+  harveyActivities   HarveyActivity[]
+  campaignLeadsFirst CampaignLead[]   @relation("CampaignLeadFirstJob")
+  campaignLeadsLast  CampaignLead[]   @relation("CampaignLeadLastJob")
 
   @@index([organizationId, status])
   @@index([organizationId, createdAt])
@@ -977,37 +982,37 @@ model ScrapeJob {
 }
 
 model Lead {
-  id                  String           @id @default(uuid())
-  organizationId      String           @map("organization_id")
-  scrapeJobId         String?          @map("scrape_job_id")
-  sourceType          ScrapeSourceType @default(MANUAL) @map("source_type")
-  name                String
-  address             String?
-  city                String?
-  state               String?
-  phone               String?
-  email               String?
-  website             String?
-  googleCategory      String?          @map("google_category")
-  rating              Decimal?         @db.Decimal(2, 1)
-  reviewCount         Int?             @map("review_count")
-  placeId             String?          @map("place_id")
+  id                     String           @id @default(uuid())
+  organizationId         String           @map("organization_id")
+  scrapeJobId            String?          @map("scrape_job_id")
+  sourceType             ScrapeSourceType @default(MANUAL) @map("source_type")
+  name                   String
+  address                String?
+  city                   String?
+  state                  String?
+  phone                  String?
+  email                  String?
+  website                String?
+  googleCategory         String?          @map("google_category")
+  rating                 Decimal?         @db.Decimal(2, 1)
+  reviewCount            Int?             @map("review_count")
+  placeId                String?          @map("place_id")
   // Texto livre usado pelo fallback de keyword-match do fonte Camoufox —
   // scoring textual sobre leads não-estruturados quando não há campos
   // normalizados suficientes (ex.: Camoufox não devolve google_category).
-  rawContent          String?          @map("raw_content") @db.Text
-  rawSnapshot         Json?            @map("raw_snapshot")
-  status              LeadStatus       @default(DISCOVERED)
-  score               Int?
-  scoreBreakdown      Json?            @map("score_breakdown")
-  suggestedOfferingId String?          @map("suggested_offering_id")
-  convertedCustomerId String?          @map("converted_customer_id")
+  rawContent             String?          @map("raw_content") @db.Text
+  rawSnapshot            Json?            @map("raw_snapshot")
+  status                 LeadStatus       @default(DISCOVERED)
+  score                  Int?
+  scoreBreakdown         Json?            @map("score_breakdown")
+  suggestedOfferingId    String?          @map("suggested_offering_id")
+  convertedCustomerId    String?          @map("converted_customer_id")
   // Atribuição de dono (plano pensando-como-empresa-com-agile-beaver.md,
   // trilha B — roteamento) — round-robin por carga (`pickRoundRobinAssignee`,
   // packages/shared-types) na criação do Lead, nunca automático depois: uma
   // reatribuição manual sempre vence e nunca é sobrescrita por um scan
   // futuro.
-  assignedUserId      String?          @map("assigned_user_id")
+  assignedUserId         String?          @map("assigned_user_id")
   // Número confirmado como WhatsApp — nem sempre igual a `phone`. Promovido a
   // coluna própria (não fica só dentro de `socialLinks`) porque é o canal de
   // maior prioridade no outreach (Task 10/11) e precisa ser filtrável direto
@@ -1018,7 +1023,7 @@ model Lead {
   // (`extractWhatsappPhone`, apps/worker/src/lead-scrape-processor.ts) —
   // `OutreachService` injeta este valor no prompt como "Contato WhatsApp:
   // <número>" e `CreateLeadDto` limita a 40 caracteres.
-  whatsapp            String?          @map("whatsapp")
+  whatsapp               String?          @map("whatsapp")
   // Candidato (NÃO confirmado) a WhatsApp — true quando a fonte estruturada
   // (Apify Google Maps/Explorium) devolveu telefone E confirmou ausência de
   // site (`websiteConfirmedAbsent`, apps/worker/src/lead-scrape-processor.ts).
@@ -1029,14 +1034,14 @@ model Lead {
   // candidato da passada atual), nunca preservado via `undefined` como
   // `whatsapp`/`socialLinks` — um rescan sem telefone/sem essa confirmação
   // deve zerar o sinal, não manter um valor desatualizado.
-  isWhatsappCandidate Boolean          @default(false) @map("is_whatsapp_candidate")
+  isWhatsappCandidate    Boolean          @default(false) @map("is_whatsapp_candidate")
   // Nome do dono/responsável, quando identificável — opcional, sem tensão
   // com a flexibilidade de `socialLinks`.
-  contactName         String?          @map("contact_name")
+  contactName            String?          @map("contact_name")
   // Perfis sociais descobertos por enrichment (ex.: Instagram/LinkedIn) —
   // continua flexível (JSON livre) porque a forma varia por fonte, "o que for
   // encontrado" — não uma lista fixa de colunas por rede.
-  socialLinks         Json?            @map("social_links")
+  socialLinks            Json?            @map("social_links")
   // Opt-out de outreach (CAN-SPAM/LGPD) — ortogonal a `status` (pipeline de
   // venda): um lead pode pedir pra não ser mais contatado em qualquer etapa.
   // Setado manualmente por um humano (`LeadsController POST :leadId/unsubscribe`)
@@ -1044,27 +1049,37 @@ model Lead {
   // WhatsApp) — nenhum fluxo automático seta isto ainda, ver comentário de
   // `LeadsService.unsubscribe`. Checado por `OutreachService.send()` ANTES de
   // todo envio real; nunca apagado depois de setado.
-  unsubscribedAt      DateTime?        @map("unsubscribed_at")
-  actorType           AuditActorType   @map("actor_type")
-  actorId             String?          @map("actor_id")
-  discoveredAt        DateTime         @default(now()) @map("discovered_at")
-  // Campanha de origem (busca do Harvey). Nulo para lead manual.
-  campaignId          String?          @map("campaign_id")
-  createdAt           DateTime         @default(now()) @map("created_at")
-  updatedAt           DateTime         @updatedAt @map("updated_at")
+  unsubscribedAt         DateTime?        @map("unsubscribed_at")
+  actorType              AuditActorType   @map("actor_type")
+  actorId                String?          @map("actor_id")
+  discoveredAt           DateTime         @default(now()) @map("discovered_at")
+  // Campanha mais recente em que a empresa apareceu (o histórico completo
+  // fica em CampaignLead). O Harvey decide trabalho automático por ela.
+  campaignId             String?          @map("campaign_id")
+  entityType             LeadEntityType   @default(UNKNOWN) @map("entity_type")
+  disqualificationReason String?          @map("disqualification_reason")
+  // Só preenchido por confirmação humana de um LeadDuplicateCandidate.
+  duplicateOfLeadId      String?          @map("duplicate_of_lead_id")
+  createdAt              DateTime         @default(now()) @map("created_at")
+  updatedAt              DateTime         @updatedAt @map("updated_at")
 
-  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  scrapeJob         ScrapeJob?        @relation(fields: [scrapeJobId], references: [id], onDelete: SetNull)
-  suggestedOffering ServiceOffering?  @relation("SuggestedOffering", fields: [suggestedOfferingId], references: [id], onDelete: SetNull)
-  convertedCustomer Customer?         @relation(fields: [convertedCustomerId], references: [id], onDelete: SetNull)
-  assignedTo        User?             @relation("LeadAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  enrichments       LeadEnrichment[]
-  outreachMessages  OutreachMessage[]
-  signals           LeadSignal[]
-  deals             Deal[]
-  internalNotes     InternalNote[]
-  campaign          SalesCampaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  harveyActivities  HarveyActivity[]
+  organization         Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  scrapeJob            ScrapeJob?               @relation(fields: [scrapeJobId], references: [id], onDelete: SetNull)
+  suggestedOffering    ServiceOffering?         @relation("SuggestedOffering", fields: [suggestedOfferingId], references: [id], onDelete: SetNull)
+  convertedCustomer    Customer?                @relation(fields: [convertedCustomerId], references: [id], onDelete: SetNull)
+  assignedTo           User?                    @relation("LeadAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  enrichments          LeadEnrichment[]
+  outreachMessages     OutreachMessage[]
+  signals              LeadSignal[]
+  deals                Deal[]
+  internalNotes        InternalNote[]
+  campaign             SalesCampaign?           @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  harveyActivities     HarveyActivity[]
+  campaignLeads        CampaignLead[]
+  duplicateOf          Lead?                    @relation("LeadDuplicateOf", fields: [duplicateOfLeadId], references: [id], onDelete: SetNull)
+  duplicates           Lead[]                   @relation("LeadDuplicateOf")
+  duplicateCandidatesA LeadDuplicateCandidate[] @relation("DuplicateCandidateA")
+  duplicateCandidatesB LeadDuplicateCandidate[] @relation("DuplicateCandidateB")
 
   @@unique([organizationId, placeId])
   @@index([organizationId, status])
@@ -1096,30 +1111,30 @@ model LeadEnrichment {
 }
 
 model OutreachMessage {
-  id                 String          @id @default(uuid())
-  organizationId     String          @map("organization_id")
-  leadId             String          @map("lead_id")
-  serviceOfferingId  String?         @map("service_offering_id")
-  channel            OutreachChannel
-  subject            String?
-  body               String          @db.Text
-  evidenceQuotes     Json            @map("evidence_quotes")
-  status             OutreachStatus  @default(DRAFT)
-  generatedByModel   String?         @map("generated_by_model")
-  aiRequestId        String?         @map("ai_request_id")
-  approvedByUserId   String?         @map("approved_by_user_id")
-  approvedAt         DateTime?       @map("approved_at")
-  rejectedReason     String?         @map("rejected_reason")
-  sentAt             DateTime?       @map("sent_at")
-  repliedAt          DateTime?       @map("replied_at")
+  id                  String                      @id @default(uuid())
+  organizationId      String                      @map("organization_id")
+  leadId              String                      @map("lead_id")
+  serviceOfferingId   String?                     @map("service_offering_id")
+  channel             OutreachChannel
+  subject             String?
+  body                String                      @db.Text
+  evidenceQuotes      Json                        @map("evidence_quotes")
+  status              OutreachStatus              @default(DRAFT)
+  generatedByModel    String?                     @map("generated_by_model")
+  aiRequestId         String?                     @map("ai_request_id")
+  approvedByUserId    String?                     @map("approved_by_user_id")
+  approvedAt          DateTime?                   @map("approved_at")
+  rejectedReason      String?                     @map("rejected_reason")
+  sentAt              DateTime?                   @map("sent_at")
+  repliedAt           DateTime?                   @map("replied_at")
   // Id retornado pelo Resend no envio real (`OutreachService.send`) —
   // correlaciona uma resposta recebida via webhook inbound de volta a esta
   // linha, sem adivinhar organização/lead por endereço de email (evita
   // ambiguidade cross-tenant). Ver migration `outreach_reply_tracking`.
-  providerMessageId  String?         @map("provider_message_id")
+  providerMessageId   String?                     @map("provider_message_id")
   // Dedup do scan de follow-up do worker (`outreach-followup-scan.ts`) —
   // nunca notifica duas vezes a mesma mensagem sem resposta.
-  followUpNotifiedAt DateTime?       @map("follow_up_notified_at")
+  followUpNotifiedAt  DateTime?                   @map("follow_up_notified_at")
   // Leitura COMPARTILHADA de equipe (plano
   // pensando-como-empresa-com-agile-beaver.md, trilha B — inbox
   // compartilhada), não por usuário: uma vez que alguém do time marca como
@@ -1127,33 +1142,38 @@ model OutreachMessage {
   // compartilhada de verdade, deliberadamente diferente de
   // `Notification.readAt` (que é por usuário). `readByUserId` só registra
   // quem foi.
-  readAt             DateTime?       @map("read_at")
-  readByUserId       String?         @map("read_by_user_id")
+  readAt              DateTime?                   @map("read_at")
+  readByUserId        String?                     @map("read_by_user_id")
   // Sales Copy Intelligence: abordagem escolhida por regra
   // (`OutreachStrategy`, shared-types), revisão de qualidade feita antes de
   // salvar, texto original da IA (antes de edição humana) e versão do prompt.
   // Base do relatório de desempenho de copy por abordagem.
-  strategy           String?
-  qualityReview      Json?           @map("quality_review")
-  originalBody       String?         @map("original_body") @db.Text
-  promptVersion      String?         @map("prompt_version")
+  strategy            String?
+  qualityReview       Json?                       @map("quality_review")
+  originalBody        String?                     @map("original_body") @db.Text
+  promptVersion       String?                     @map("prompt_version")
   // Envio idempotente: momento da reivindicação, quem iniciou (USER/HARVEY),
   // payload exato enviado ao provedor (reenviado igual na reconciliação) e
   // último erro do provedor.
-  sendClaimedAt      DateTime?       @map("send_claimed_at")
-  sendInitiator      String?         @map("send_initiator")
-  sendRequest        Json?           @map("send_request")
-  sendError          String?         @map("send_error")
-  actorType          AuditActorType  @map("actor_type")
-  actorId            String?         @map("actor_id")
-  createdAt          DateTime        @default(now()) @map("created_at")
-  updatedAt          DateTime        @updatedAt @map("updated_at")
+  sendClaimedAt       DateTime?                   @map("send_claimed_at")
+  sendInitiator       String?                     @map("send_initiator")
+  sendRequest         Json?                       @map("send_request")
+  sendError           String?                     @map("send_error")
+  // Campanha em que o rascunho foi gerado. Obrigatória para DRAFT_CONTEXT
+  // (CHECK no SQL); FK NO ACTION porque campanha nunca é apagada, só arquivada.
+  campaignId          String?                     @map("campaign_id")
+  campaignAttribution OutreachCampaignAttribution @default(DRAFT_CONTEXT) @map("campaign_attribution")
+  actorType           AuditActorType              @map("actor_type")
+  actorId             String?                     @map("actor_id")
+  createdAt           DateTime                    @default(now()) @map("created_at")
+  updatedAt           DateTime                    @updatedAt @map("updated_at")
 
   organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   lead             Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
   serviceOffering  ServiceOffering? @relation(fields: [serviceOfferingId], references: [id], onDelete: SetNull)
   approvedBy       User?            @relation("OutreachApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
   readBy           User?            @relation("OutreachReadBy", fields: [readByUserId], references: [id], onDelete: SetNull)
+  campaign         SalesCampaign?   @relation(fields: [campaignId], references: [id], onDelete: NoAction)
   harveyActivities HarveyActivity[]
 
   @@index([organizationId, status])
@@ -1161,6 +1181,7 @@ model OutreachMessage {
   @@index([status, sentAt])
   @@index([organizationId, status, readAt])
   @@index([organizationId, strategy])
+  @@index([organizationId, campaignId, status])
   @@map("outreach_messages")
 }
 
@@ -1680,7 +1701,53 @@ model OrganizationRevenueSettings {
 
 enum CampaignStatus {
   ACTIVE
+  PAUSED
+  COMPLETED
   ARCHIVED
+}
+
+// STANDARD = segmento + cidade + estado. GENERAL = "Campanha padrão" da Fase 1.
+// LEGACY = leads antigos sem campanha comprovável. MANUAL_ENTRY = leads cadastrados à mão.
+enum CampaignKind {
+  STANDARD
+  GENERAL
+  LEGACY
+  MANUAL_ENTRY
+}
+
+enum CampaignCreationSource {
+  USER
+  AUTO_FROM_SEARCH
+  MIGRATION
+}
+
+enum CampaignLeadOrigin {
+  SEARCH
+  MANUAL
+  BACKFILL_EXACT
+  LEGACY
+}
+
+enum LeadEntityType {
+  BUSINESS
+  PROFESSIONAL
+  DIRECTORY
+  INTERNAL_PAGE
+  IRRELEVANT
+  UNKNOWN
+}
+
+// UNIDENTIFIED_LEGACY só existe em mensagens anteriores às campanhas; toda
+// mensagem nova nasce DRAFT_CONTEXT e exige campaign_id (CHECK no SQL).
+enum OutreachCampaignAttribution {
+  DRAFT_CONTEXT
+  UNIDENTIFIED_LEGACY
+}
+
+enum DuplicateCandidateStatus {
+  PENDING
+  CONFIRMED
+  DISMISSED
 }
 
 enum HarveyControlState {
@@ -1714,25 +1781,35 @@ enum HarveyActivityStatus {
 }
 
 model SalesCampaign {
-  id                          String            @id @default(uuid())
-  organizationId              String            @map("organization_id")
+  id                          String                 @id @default(uuid())
+  organizationId              String                 @map("organization_id")
   name                        String
-  status                      CampaignStatus    @default(ACTIVE)
+  status                      CampaignStatus         @default(ACTIVE)
   country                     String
-  regionLabel                 String?           @map("region_label")
+  regionLabel                 String?                @map("region_label")
   language                    String
   timezone                    String
-  workingDays                 Int[]             @default([1, 2, 3, 4, 5]) @map("working_days")
-  workStartMinute             Int               @default(540) @map("work_start_minute")
-  workEndMinute               Int               @default(1080) @map("work_end_minute")
-  dailyResearchGoal           Int               @default(30) @map("daily_research_goal")
-  dailyQualifiedGoal          Int               @default(15) @map("daily_qualified_goal")
-  dailyOutreachGoal           Int               @default(10) @map("daily_outreach_goal")
-  enabledChannels             OutreachChannel[] @default([EMAIL]) @map("enabled_channels")
-  monthlyBudgetUsd            Decimal?          @map("monthly_budget_usd") @db.Decimal(10, 2)
-  requireFirstContactApproval Boolean           @default(true) @map("require_first_contact_approval")
-  createdAt                   DateTime          @default(now()) @map("created_at")
-  updatedAt                   DateTime          @updatedAt @map("updated_at")
+  workingDays                 Int[]                  @default([1, 2, 3, 4, 5]) @map("working_days")
+  workStartMinute             Int                    @default(540) @map("work_start_minute")
+  workEndMinute               Int                    @default(1080) @map("work_end_minute")
+  dailyResearchGoal           Int                    @default(30) @map("daily_research_goal")
+  dailyQualifiedGoal          Int                    @default(15) @map("daily_qualified_goal")
+  dailyOutreachGoal           Int                    @default(10) @map("daily_outreach_goal")
+  enabledChannels             OutreachChannel[]      @default([EMAIL]) @map("enabled_channels")
+  monthlyBudgetUsd            Decimal?               @map("monthly_budget_usd") @db.Decimal(10, 2)
+  requireFirstContactApproval Boolean                @default(true) @map("require_first_contact_approval")
+  // Identidade da campanha (só STANDARD): segmento + cidade + estado, e a
+  // chave normalizada usada no índice único parcial (ver migration).
+  kind                        CampaignKind           @default(STANDARD)
+  creationSource              CampaignCreationSource @default(USER) @map("creation_source")
+  segment                     String?
+  city                        String?
+  state                       String?
+  identityKey                 String?                @map("identity_key")
+  completedAt                 DateTime?              @map("completed_at")
+  archivedAt                  DateTime?              @map("archived_at")
+  createdAt                   DateTime               @default(now()) @map("created_at")
+  updatedAt                   DateTime               @updatedAt @map("updated_at")
 
   organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   prospectingTargets ProspectingTarget[]
@@ -1740,6 +1817,8 @@ model SalesCampaign {
   leads              Lead[]
   runs               HarveyRun[]
   activities         HarveyActivity[]
+  campaignLeads      CampaignLead[]
+  outreachMessages   OutreachMessage[]
 
   @@unique([organizationId, name])
   @@index([organizationId, status])
@@ -1826,4 +1905,56 @@ model HarveyActivity {
   @@index([organizationId, leadId])
   @@index([runId, type, status])
   @@map("harvey_activities")
+}
+
+// Participação de uma empresa (Lead) numa campanha. Uma linha por par; nova
+// descoberta só atualiza last_* e times_found, nunca a primeira ocorrência.
+model CampaignLead {
+  id               String             @id @default(uuid())
+  organizationId   String             @map("organization_id")
+  campaignId       String             @map("campaign_id")
+  leadId           String             @map("lead_id")
+  origin           CampaignLeadOrigin
+  firstScrapeJobId String?            @map("first_scrape_job_id")
+  lastScrapeJobId  String?            @map("last_scrape_job_id")
+  firstFoundAt     DateTime           @map("first_found_at")
+  lastFoundAt      DateTime           @map("last_found_at")
+  timesFound       Int                @default(1) @map("times_found")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign       SalesCampaign @relation(fields: [campaignId], references: [id], onDelete: NoAction)
+  lead           Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  firstScrapeJob ScrapeJob?    @relation("CampaignLeadFirstJob", fields: [firstScrapeJobId], references: [id], onDelete: SetNull)
+  lastScrapeJob  ScrapeJob?    @relation("CampaignLeadLastJob", fields: [lastScrapeJobId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, leadId])
+  @@index([organizationId, leadId])
+  @@index([organizationId, campaignId, lastFoundAt])
+  @@map("campaign_leads")
+}
+
+// Candidato a duplicata para revisão humana. Par ordenado (lead_a_id < lead_b_id,
+// CHECK no SQL). Nunca funde nada sozinho.
+model LeadDuplicateCandidate {
+  id               String                   @id @default(uuid())
+  organizationId   String                   @map("organization_id")
+  leadAId          String                   @map("lead_a_id")
+  leadBId          String                   @map("lead_b_id")
+  reasons          String[]
+  status           DuplicateCandidateStatus @default(PENDING)
+  reviewedByUserId String?                  @map("reviewed_by_user_id")
+  reviewedAt       DateTime?                @map("reviewed_at")
+  createdAt        DateTime                 @default(now()) @map("created_at")
+  updatedAt        DateTime                 @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leadA        Lead         @relation("DuplicateCandidateA", fields: [leadAId], references: [id], onDelete: Cascade)
+  leadB        Lead         @relation("DuplicateCandidateB", fields: [leadBId], references: [id], onDelete: Cascade)
+  reviewedBy   User?        @relation("DuplicateCandidateReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([leadAId, leadBId])
+  @@index([organizationId, status])
+  @@map("lead_duplicate_candidates")
 }

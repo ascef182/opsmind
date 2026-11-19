@@ -210,7 +210,7 @@ async function tickOrganization(
   await flagStuckSends(tx, orgId, now, outcome);
   await scheduleReconciliations(tx, deps, orgId, now, outcome);
 
-  const campaigns = await tx.salesCampaign.findMany({ where: { organizationId: orgId, status: 'ACTIVE' } });
+  const campaigns = await tx.salesCampaign.findMany({ where: { organizationId: orgId, kind: 'STANDARD', status: 'ACTIVE' } });
   const signatureParts: string[] = [control];
   for (const campaign of campaigns) {
     const run = await reconcileRun(tx, orgId, campaign, control, now, outcome);
@@ -387,6 +387,8 @@ const RUN_END_TITLES: Record<HarveyRunEndReason, string> = {
   NO_WORK_AVAILABLE: 'Ciclo concluído: sem mais trabalho disponível hoje',
   BUDGET_EXCEEDED: 'Ciclo concluído: orçamento do mês atingido',
   DAY_ENDED_WHILE_PAUSED: 'Ciclo encerrado: o dia terminou com o Harvey pausado',
+  CAMPAIGN_PAUSED: 'Ciclo encerrado: campanha pausada',
+  CAMPAIGN_CLOSED: 'Ciclo encerrado: campanha finalizada ou arquivada',
 };
 
 // Decide o trabalho do ciclo: próxima busca, leads pendentes de análise de
@@ -487,7 +489,8 @@ async function planWork(
 }
 
 function pendingLeadWhere(orgId: string, campaignId: string): Prisma.LeadWhereInput {
-  return { organizationId: orgId, campaignId, status: 'QUALIFIED', outreachMessages: { none: {} } };
+  // Duplicata confirmada por uma pessoa sai do trabalho automático.
+  return { organizationId: orgId, campaignId, status: 'QUALIFIED', duplicateOfLeadId: null, outreachMessages: { none: {} } };
 }
 
 // Uma tentativa automática por lead: só uma pausa (chave `:skipped:`) não conta.

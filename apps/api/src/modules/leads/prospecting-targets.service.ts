@@ -40,9 +40,11 @@ export class ProspectingTargetsService {
     dto: CreateProspectingTargetDto,
     actorUserId: string,
   ): Promise<ProspectingTarget> {
+    // Alvo é uma busca recorrente dentro da campanha do seu segmento + cidade + estado.
     const campaign = dto.campaignId
       ? await this.campaignsService.findByIdOrThrow(organizationId, dto.campaignId)
-      : await this.campaignsService.getDefault(organizationId);
+      : await this.campaignsService.findOrCreateForSearch(organizationId, dto);
+    this.campaignsService.assertTargetMatchesCampaign(campaign, dto);
     try {
       const target = await this.prisma.prospectingTarget.create({
         data: {
@@ -118,8 +120,22 @@ export class ProspectingTargetsService {
     actorUserId: string,
   ): Promise<ProspectingTarget> {
     const existing = await this.findByIdOrThrow(organizationId, id);
-    // A campanha precisa ser da mesma organização (a FK aceitaria qualquer id).
-    if (dto.campaignId) await this.campaignsService.findByIdOrThrow(organizationId, dto.campaignId);
+    // A campanha precisa ser da mesma organização (a FK aceitaria qualquer id)
+    // e ter o mesmo segmento + cidade + estado do alvo depois da edição.
+    // Sem campanha explícita, mudar segmento/cidade/estado leva o alvo para a
+    // campanha da nova combinação.
+    const identity = {
+      businessType: dto.businessType ?? existing.businessType,
+      city: dto.city ?? existing.city,
+      state: dto.state ?? existing.state,
+    };
+    const current = await this.campaignsService.findByIdOrThrow(organizationId, dto.campaignId ?? existing.campaignId);
+    const identityChanged =
+      !dto.campaignId &&
+      (identity.businessType !== existing.businessType || identity.city !== existing.city || identity.state !== existing.state);
+    const campaign = identityChanged ? await this.campaignsService.findOrCreateForSearch(organizationId, identity) : current;
+    this.campaignsService.assertTargetMatchesCampaign(campaign, identity);
+    if (identityChanged && campaign.id !== existing.campaignId) dto = { ...dto, campaignId: campaign.id };
 
     try {
       const updated = await this.prisma.prospectingTarget.update({ where: { id }, data: dto });

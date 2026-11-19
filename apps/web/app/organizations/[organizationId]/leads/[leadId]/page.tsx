@@ -7,6 +7,8 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { isSafeHttpUrl } from '@opsmind/shared-types';
+import { useLeadParticipations } from '@/lib/campaigns/use-campaigns';
+import { ORIGIN_LABELS } from '@/lib/campaigns/types';
 import { useCurrentMembership, useMembers } from '@/lib/memberships/use-memberships';
 import { useAssignLead, useLead, useConvertLead, useScoreLead } from '@/lib/leads/use-leads';
 import { useEnrichLead, useAnalyzeLeadPotential } from '@/lib/leads/use-lead-enrichment';
@@ -432,6 +434,30 @@ function LeadIntelligencePanel({
   );
 }
 
+// Em quais campanhas esta empresa apareceu (uma empresa, várias campanhas).
+function CampaignParticipations({ organizationId, leadId }: { organizationId: string; leadId: string }) {
+  const participations = useLeadParticipations(organizationId, leadId);
+  if (!participations.data || participations.data.length === 0) return null;
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <h2 className="mb-3 text-sm font-medium text-foreground">Campanhas</h2>
+      <ul className="flex flex-col gap-2 text-sm">
+        {participations.data.map((item) => (
+          <li key={item.campaign.id} className="flex flex-wrap items-baseline justify-between gap-2">
+            <Link href={`/organizations/${organizationId}/campaigns/${item.campaign.id}`} className="text-foreground hover:underline">
+              {item.campaign.name}
+            </Link>
+            <span className="text-xs text-muted-foreground">
+              {ORIGIN_LABELS[item.origin]} · desde {new Date(item.firstFoundAt).toLocaleDateString('pt-BR')}
+              {item.timesFound > 1 && ` · encontrada ${item.timesFound} vezes`}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function LeadDetailPage() {
   const { organizationId, leadId } = useParams<{ organizationId: string; leadId: string }>();
   const router = useRouter();
@@ -583,6 +609,8 @@ export default function LeadDetailPage() {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="flex flex-col gap-6">
+          <CampaignParticipations organizationId={organizationId} leadId={leadId} />
+
           <section className="rounded-lg border border-border bg-card p-4">
             <h2 className="mb-3 text-sm font-medium text-foreground">Histórico de enriquecimento</h2>
             {enrichments.length === 0 ? (

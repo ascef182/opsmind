@@ -98,6 +98,7 @@ function buildDeps() {
 const baseLead = {
   id: 'lead-1',
   organizationId: 'org-1',
+  campaignId: 'camp-1',
   status: 'QUALIFIED',
   name: 'Padaria Central',
   address: 'Rua X, 100',
@@ -1094,6 +1095,23 @@ describe('OutreachService.generateDraft — Sales Copy Intelligence', () => {
     expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ serviceOfferingId: 'site-1', strategy: 'NO_WEBSITE' }),
     });
+  });
+
+  it('grava a campanha do lead no rascunho', async () => {
+    const { service, prisma, gateway } = setup();
+    gateway.sendMessage.mockResolvedValue(mockGatewayResponse(cleanDraft));
+    await service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'SYSTEM' });
+    expect(prisma.outreachMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ campaignId: 'camp-1' }) });
+  });
+
+  it('lead sem campanha não gera rascunho e não gasta IA', async () => {
+    const { service, leadsService, gateway, prisma } = setup();
+    leadsService.findByIdOrThrow.mockResolvedValue({ ...baseLead, campaignId: null });
+    await expect(service.generateDraft('org-1', 'lead-1', { channel: 'WHATSAPP' }, { type: 'USER', userId: 'u1' } as never)).rejects.toThrow(
+      'campanha',
+    );
+    expect(gateway.sendMessage).not.toHaveBeenCalled();
+    expect(prisma.outreachMessage.create).not.toHaveBeenCalled();
   });
 
   it('academia sem site com WhatsApp vai de DeskComm', async () => {

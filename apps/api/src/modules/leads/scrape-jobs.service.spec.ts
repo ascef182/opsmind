@@ -12,7 +12,7 @@ describe('ScrapeJobsService', () => {
     auditService = { log: jest.fn() };
     queueService = { enqueue: jest.fn() };
     service = new ScrapeJobsService(prisma as never, auditService as never, queueService as never, {
-      getDefault: jest.fn().mockResolvedValue({ id: 'camp-1' }),
+      findOrCreateForSearch: jest.fn().mockResolvedValue({ id: 'camp-1' }),
     } as never);
   });
 

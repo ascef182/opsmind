@@ -4,6 +4,7 @@ const campaign = {
   id: 'camp-1',
   organizationId: 'org-1',
   status: 'ACTIVE',
+  kind: 'STANDARD',
   timezone: 'America/Sao_Paulo',
   workingDays: [1, 2, 3, 4, 5],
   workStartMinute: 540,
@@ -61,6 +62,20 @@ describe('checkHarveyMayProceed', () => {
 
   it('send only checks the control state', async () => {
     await expect(check(buildDb({}), 'send', outsideHours)).resolves.toEqual({ ok: true, runId: null });
+  });
+
+  it('manual-entry leads follow only the agent state, as before campaigns existed', async () => {
+    const db = buildDb({});
+    db.salesCampaign.findFirst.mockResolvedValue({ ...campaign, kind: 'MANUAL_ENTRY' });
+    await expect(check(db, 'outreach_draft', outsideHours)).resolves.toEqual({ ok: true, runId: null });
+  });
+
+  it('legacy, general, paused and completed campaigns get no automatic work', async () => {
+    for (const override of [{ kind: 'LEGACY' }, { kind: 'GENERAL' }, { status: 'PAUSED' }, { status: 'COMPLETED' }]) {
+      const db = buildDb({});
+      db.salesCampaign.findFirst.mockResolvedValue({ ...campaign, ...override });
+      await expect(check(db, 'outreach_draft')).resolves.toEqual({ ok: false, reason: 'CAMPAIGN_INACTIVE' });
+    }
   });
 
   it('refuses outside working hours', async () => {

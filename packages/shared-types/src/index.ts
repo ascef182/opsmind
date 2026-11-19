@@ -21,3 +21,6 @@ export * from './region-codes';
 export * from './business-website';
 export * from './outreach-strategy';
 export * from './harvey';
+export * from './campaign-identity';
+export * from './lead-classification';
+export * from './lead-duplicates';

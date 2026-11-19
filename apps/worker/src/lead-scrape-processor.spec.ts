@@ -11,7 +11,6 @@ import {
   normalizeUrlForDedup,
   extractWhatsappPhone,
   extractInstagramHandle,
-  looksLikeDirectoryOrListicle,
 } from './lead-scrape-processor';
 import { isOverBudget, recordSpend } from './budget';
 
@@ -79,47 +78,6 @@ describe('normalizeUrlForDedup', () => {
   });
 });
 
-describe('looksLikeDirectoryOrListicle', () => {
-  it('descarta domínio de portal conhecido', () => {
-    expect(
-      looksLikeDirectoryOrListicle({
-        title: 'Imobiliárias em São Paulo | SP Imóvel',
-        url: 'https://www.imovelweb.com.br/imobiliarias-sao-paulo.html',
-      }),
-    ).toBe(true);
-  });
-
-  it('descarta título estilo listicle ("melhores")', () => {
-    expect(
-      looksLikeDirectoryOrListicle({
-        title: 'As 20 melhores barbearias em São Paulo (SP) · AvataReel',
-        url: 'https://avatareel.com.br/melhores-barbearias-sp',
-      }),
-    ).toBe(true);
-  });
-
-  it('descarta título estilo listicle ("N ... em <cidade>")', () => {
-    expect(
-      looksLikeDirectoryOrListicle({
-        title: '766 imobiliárias em São Paulo Estado de São Paulo - Imovelweb',
-        url: 'https://www.imovelweb.com.br/imobiliarias-sao-paulo.html',
-      }),
-    ).toBe(true);
-  });
-
-  it('NÃO descarta um negócio real (domínio desconhecido, título é só o nome do negócio)', () => {
-    expect(
-      looksLikeDirectoryOrListicle({ title: 'Padaria Central', url: 'https://padariacentral.com.br' }),
-    ).toBe(false);
-    expect(
-      looksLikeDirectoryOrListicle({ title: 'Imóveis Silva', url: 'https://imoveissilva.com.br/contato' }),
-    ).toBe(false);
-  });
-
-  it('sem título (null) e domínio desconhecido não descarta', () => {
-    expect(looksLikeDirectoryOrListicle({ title: null, url: 'https://negocio-qualquer.com.br' })).toBe(false);
-  });
-});
 
 describe('processLeadScrapeJob', () => {
   const jobData = {
@@ -171,7 +129,11 @@ describe('processLeadScrapeJob', () => {
         create: jest.fn(),
         update: jest.fn(),
         groupBy: jest.fn().mockResolvedValue([]),
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      leadDuplicateCandidate: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       // Roteamento (Trilha B) — default "nenhum membro elegível", testes que
       // não são sobre atribuição não precisam mockar isto (auto-assign
       // simplesmente não faz nada quando a lista vem vazia).
@@ -644,7 +606,7 @@ describe('processLeadScrapeJob', () => {
   // Fase 2: filtro de ingestão — lote misto (2 portais/listicles + 1 negócio
   // real) só persiste o negócio real. Complementa o teste de scoring acima:
   // aqui o lixo nem chega a virar `Lead`.
-  it('CAMOFOX_GOOGLE_SEARCH: lote misto de portal/listicle + negócio real só persiste o negócio real', async () => {
+  it('CAMOFOX_GOOGLE_SEARCH: portal, listicle e página interna viram leads desqualificados com motivo, nunca qualificados', async () => {
     const tx = setupTx();
     (isOverBudget as jest.Mock).mockResolvedValue(false);
     const prisma = buildPrisma();
@@ -678,13 +640,14 @@ describe('processLeadScrapeJob', () => {
 
     await processLeadScrapeJob(prisma as never, gateways as never, fakeRedis as never, jobData);
 
-    expect(tx.lead.create).toHaveBeenCalledTimes(1);
-    expect(tx.lead.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ name: 'Imóveis Silva' }) }),
+    const saved = tx.lead.create.mock.calls.map(
+      ([args]: [{ data: { name: string; status: string; entityType: string; disqualificationReason: string } }]) => args.data,
     );
-    expect(tx.scrapeJob.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ leadsFound: 1 }) }),
-    );
+    expect(saved.map(({ name, status, entityType, disqualificationReason }) => ({ name, status, entityType, disqualificationReason }))).toEqual([
+      expect.objectContaining({ status: 'DISQUALIFIED', entityType: 'DIRECTORY', disqualificationReason: 'DIRECTORY_DOMAIN' }),
+      expect.objectContaining({ status: 'DISQUALIFIED', entityType: 'DIRECTORY', disqualificationReason: 'LISTICLE_TITLE' }),
+      expect.objectContaining({ name: 'Imóveis Silva', status: 'DISQUALIFIED', entityType: 'INTERNAL_PAGE', disqualificationReason: 'INTERNAL_PAGE_PATH' }),
+    ]);
   });
 
   it('orçamento estourado: job falha sem chamar nenhum gateway nem gastar nada', async () => {
@@ -2315,7 +2278,12 @@ describe('processLeadScrapeJob', () => {
       expect(tx.harveyActivity.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ type: 'research.search', status: 'STARTED', queueJobId: 'job-7' }),
       });
-      expect(tx.lead.update).toHaveBeenCalledWith({ where: { id: 'lead-new' }, data: { campaignId: 'camp-1' } });
+      // Participação na campanha (CampaignLead) + ponteiro da campanha mais recente.
+      expect(tx.$executeRaw).toHaveBeenCalled();
+      expect(tx.lead.updateMany).toHaveBeenCalledWith({
+        where: { id: 'lead-new', organizationId: 'org-1' },
+        data: { campaignId: 'camp-1' },
+      });
       expect(tx.harveyActivity.upsert).toHaveBeenCalledWith(
         expect.objectContaining({ create: expect.objectContaining({ type: 'research.lead_found', leadId: 'lead-new' }) }),
       );

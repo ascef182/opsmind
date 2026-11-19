@@ -32,7 +32,9 @@ export type HarveyRunEndReason =
   | 'STOPPED_BY_USER'
   | 'NO_WORK_AVAILABLE'
   | 'BUDGET_EXCEEDED'
-  | 'DAY_ENDED_WHILE_PAUSED';
+  | 'DAY_ENDED_WHILE_PAUSED'
+  | 'CAMPAIGN_PAUSED'
+  | 'CAMPAIGN_CLOSED';
 
 // Quem originou um job: só trabalho automático depende do estado do agente.
 export type HarveyJobTrigger = 'AUTOMATIC' | 'MANUAL';

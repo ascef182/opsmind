@@ -192,7 +192,7 @@ export class HarveyControlService {
     const [agent, campaigns, inProgressRows, pendingApprovals, anyRun] = await Promise.all([
       this.prisma.harveyAgent.findUnique({ where: { organizationId } }),
       this.prisma.salesCampaign.findMany({
-        where: { organizationId, status: 'ACTIVE' },
+        where: { organizationId, kind: 'STANDARD', status: 'ACTIVE' },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.harveyActivity.findMany({

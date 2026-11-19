@@ -60,10 +60,8 @@ describe('OrganizationsService', () => {
       expect(tx.membership.create).toHaveBeenCalledWith({
         data: { userId: 'user-1', organizationId: 'org-1', role: 'OWNER' },
       });
-      // Toda organização nasce com a campanha padrão e o Harvey parado.
-      expect(tx.salesCampaign.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ organizationId: 'org-1', name: 'Campanha padrão' }),
-      });
+      // Toda organização nasce com o Harvey parado; campanhas nascem de buscas.
+      expect(tx.salesCampaign.create).not.toHaveBeenCalled();
       expect(tx.harveyAgent.create).toHaveBeenCalledWith({ data: { organizationId: 'org-1' } });
       expect(result).toBe(org);
     });

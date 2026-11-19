@@ -43,9 +43,9 @@ export class ScrapeJobsService {
     actorUserId: string,
     origin: { campaignId?: string; prospectingTargetId?: string } = {},
   ): Promise<ScrapeJob> {
-    // Busca manual também pertence a uma campanha, para os leads dela entrarem
-    // no acompanhamento do Harvey.
-    const campaignId = origin.campaignId ?? (await this.campaignsService.getDefault(organizationId)).id;
+    // Toda busca pertence a uma campanha: a do alvo (Harvey) ou, numa busca
+    // avulsa, a campanha viva do mesmo segmento + cidade + estado.
+    const campaignId = origin.campaignId ?? (await this.campaignsService.findOrCreateForSearch(organizationId, dto)).id;
     const job = await this.prisma.scrapeJob.create({
       data: {
         organizationId,

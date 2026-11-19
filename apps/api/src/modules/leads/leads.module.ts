@@ -29,6 +29,9 @@ import { BudgetService } from '../ai/services/budget.service';
 import { AiOneShotRunner } from '../ai/services/ai-one-shot-runner';
 import { AI_GATEWAY } from '../ai/gateway/ai-gateway.interface';
 import { ClaudeGatewayService } from '../ai/gateway/claude-gateway.service';
+import { CampaignWorkspaceService } from './campaign-workspace.service';
+import { CampaignWorkspaceController } from './campaign-workspace.controller';
+import { LeadDuplicatesService } from './lead-duplicates.service';
 import { TenantGuard } from '../../shared/guards/tenant.guard';
 import { RolesGuard } from '../../shared/guards/roles.guard';
 
@@ -60,6 +63,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     NotificationsModule,
   ],
   controllers: [
+    CampaignWorkspaceController,
     ServiceOfferingsController,
     ScrapeJobsController,
     ProspectingTargetsController,
@@ -68,6 +72,8 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
     SignalCodesController,
   ],
   providers: [
+    CampaignWorkspaceService,
+    LeadDuplicatesService,
     ServiceOfferingsService,
     ScrapeJobsService,
     ProspectingTargetsService,

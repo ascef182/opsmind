@@ -71,7 +71,15 @@ export interface HarveySnapshot {
 export interface Campaign {
   id: string;
   name: string;
-  status: 'ACTIVE' | 'ARCHIVED';
+  status: CampaignStatus;
+  kind: CampaignKind;
+  creationSource: 'USER' | 'AUTO_FROM_SEARCH' | 'MIGRATION';
+  segment: string | null;
+  city: string | null;
+  state: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  archivedAt: string | null;
   country: string;
   regionLabel: string | null;
   language: string;
@@ -86,7 +94,12 @@ export interface Campaign {
   monthlyBudgetUsd: number | null;
 }
 
-export type CampaignPatch = Partial<Omit<Campaign, 'id'>>;
+export type CampaignStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED';
+export type CampaignKind = 'STANDARD' | 'GENERAL' | 'LEGACY' | 'MANUAL_ENTRY';
+
+export type CampaignPatch = Partial<
+  Omit<Campaign, 'id' | 'status' | 'kind' | 'creationSource' | 'segment' | 'city' | 'state' | 'createdAt' | 'completedAt' | 'archivedAt'>
+>;
 
 export const HARVEY_CONTROL_ROLES = ['OWNER', 'ADMIN'] as const;
 
@@ -136,6 +149,8 @@ export const END_REASON_LABELS: Record<string, string> = {
   NO_WORK_AVAILABLE: 'sem mais trabalho disponível',
   BUDGET_EXCEEDED: 'orçamento atingido',
   DAY_ENDED_WHILE_PAUSED: 'o dia terminou pausado',
+  CAMPAIGN_PAUSED: 'campanha pausada',
+  CAMPAIGN_CLOSED: 'campanha finalizada ou arquivada',
 };
 
 export const WEEKDAYS: { value: number; label: string }[] = [

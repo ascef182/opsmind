@@ -149,6 +149,8 @@ export class OutreachAutodraftConsumer implements OnModuleInit, OnModuleDestroy 
     // (trigger MANUAL) roda mesmo com o agente pausado.
     const trigger = job.data.trigger ?? 'AUTOMATIC';
     let runId: string | null = null;
+    // Duplicata confirmada por uma pessoa não recebe rascunho automático.
+    if (trigger === 'AUTOMATIC' && lead.duplicateOfLeadId) return;
     if (trigger === 'AUTOMATIC') {
       const check = await checkHarveyMayProceed(this.prisma, {
         organizationId,

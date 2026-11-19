@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Building2, Gauge, Handshake, LayoutDashboard, Lightbulb, ListTodo, MessageCircle, Send, Sparkles, Tag, Target, TrendingUp, Users, UsersRound, Wallet, Zap } from 'lucide-react';
+import { Building2, FolderKanban, Gauge, Handshake, LayoutDashboard, Lightbulb, ListTodo, MessageCircle, Send, Sparkles, Tag, Target, TrendingUp, Users, UsersRound, Wallet, Zap } from 'lucide-react';
 import type { Role } from '@opsmind/shared-types';
 
 export interface NavItem {
@@ -17,6 +17,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', segment: 'dashboard', icon: LayoutDashboard, group: 'workspace' },
   { label: 'Revenue Engine', segment: 'revenue', icon: TrendingUp, group: 'workspace' },
+  { label: 'Campanhas', segment: 'campaigns', icon: FolderKanban, group: 'workspace' },
   { label: 'Leads', segment: 'leads', icon: Users, group: 'workspace' },
   { label: 'Aprovações', segment: 'outreach', icon: Send, group: 'workspace' },
   { label: 'Alvos de prospecção', segment: 'prospecting-targets', icon: Target, group: 'workspace' },
