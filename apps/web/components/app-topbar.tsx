@@ -51,6 +51,14 @@ function describeNotification(notification: Notification): string {
       return `Contrato assinado${typeof payload.dealTitle === 'string' ? `: ${payload.dealTitle}` : ''} — mova para Ganho`;
     case 'note.mention':
       return 'Você foi mencionado em uma nota interna';
+    case 'opsgov.obligation_due': {
+      const days = typeof payload.daysLeft === 'number' ? payload.daysLeft : null;
+      const when =
+        days === null ? 'vence em breve' : days < 0 ? 'está vencida' : days === 0 ? 'vence hoje' : days === 1 ? 'vence amanhã' : `vence em ${days} dias`;
+      return `Obrigação ${when}${typeof payload.title === 'string' ? `: ${payload.title}` : ''}`;
+    }
+    case 'opsgov.certificate_expiring':
+      return payload.offsetDays === 0 ? 'Certidão vence hoje — renove antes de licitar' : 'Certidão vencendo em até 15 dias';
     default:
       return notification.type;
   }

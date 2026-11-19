@@ -194,3 +194,89 @@ export interface RealSimulation {
   regimeVigente: TaxRegimePeriod | null;
   simulation: SimulationResult | null;
 }
+
+// ── Fase 4: obrigações e certidões ─────────────────────────────────────────
+export type ComplianceObligationType = 'DAS' | 'DASN_SIMEI' | 'DEFIS' | 'TAXA_MUNICIPAL' | 'CERTIFICADO_DIGITAL' | 'OUTRA';
+export type ObligationRecurrence = 'MONTHLY' | 'YEARLY' | 'ONCE';
+export type ObligationStatus = 'PENDENTE' | 'CUMPRIDA' | 'DISPENSADA';
+export type CertificateType = 'CND_FEDERAL' | 'ESTADUAL' | 'MUNICIPAL' | 'FGTS_CRF' | 'CNDT_TRABALHISTA' | 'FALENCIA';
+export type CertificateStatus = 'VALIDA' | 'VENCENDO' | 'VENCIDA';
+
+export const OBLIGATION_TYPE_LABELS: Record<ComplianceObligationType, string> = {
+  DAS: 'DAS',
+  DASN_SIMEI: 'DASN-SIMEI',
+  DEFIS: 'DEFIS',
+  TAXA_MUNICIPAL: 'Taxa municipal',
+  CERTIFICADO_DIGITAL: 'Certificado digital',
+  OUTRA: 'Outra',
+};
+export const RECURRENCE_LABELS: Record<ObligationRecurrence, string> = {
+  MONTHLY: 'Mensal',
+  YEARLY: 'Anual',
+  ONCE: 'Data única',
+};
+export const OBLIGATION_STATUS_LABELS: Record<ObligationStatus, string> = {
+  PENDENTE: 'Pendente',
+  CUMPRIDA: 'Cumprida',
+  DISPENSADA: 'Dispensada',
+};
+export const CERTIFICATE_TYPE_LABELS: Record<CertificateType, string> = {
+  CND_FEDERAL: 'CND Federal (Receita/PGFN)',
+  ESTADUAL: 'Certidão estadual',
+  MUNICIPAL: 'Certidão municipal',
+  FGTS_CRF: 'CRF do FGTS',
+  CNDT_TRABALHISTA: 'CNDT (trabalhista)',
+  FALENCIA: 'Certidão de falência',
+};
+export const CERTIFICATE_STATUS_LABELS: Record<CertificateStatus, string> = {
+  VALIDA: 'Válida',
+  VENCENDO: 'Vencendo',
+  VENCIDA: 'Vencida',
+};
+
+export interface Obligation {
+  id: string;
+  type: ComplianceObligationType;
+  title: string;
+  recurrence: ObligationRecurrence;
+  dueDay: number | null;
+  dueMonth: number | null;
+  nextDueDate: string;
+  daysUntilDue: number;
+  status: ObligationStatus;
+  notes: string | null;
+  lastCompletion: { dueDate: string; completedOn: string; documentId: string | null } | null;
+}
+
+export interface Certificate {
+  id: string;
+  type: CertificateType;
+  issuer: string | null;
+  code: string | null;
+  issuedOn: string;
+  validUntil: string;
+  daysUntilExpiry: number;
+  status: CertificateStatus;
+  isCurrent: boolean;
+  notes: string | null;
+  documentId: string | null;
+}
+
+export interface CreateObligationInput {
+  type: ComplianceObligationType;
+  title: string;
+  recurrence: ObligationRecurrence;
+  dueDay?: number;
+  dueMonth?: number;
+  firstDueDate?: string;
+  notes?: string;
+}
+
+export interface CreateCertificateInput {
+  type: CertificateType;
+  issuer?: string;
+  code?: string;
+  issuedOn: string;
+  validUntil: string;
+  notes?: string;
+}

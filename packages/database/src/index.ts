@@ -103,3 +103,14 @@ export type {
   AnexoSimples,
   RevenueGroup,
 } from '@prisma/client';
+export type {
+  ComplianceObligation,
+  ComplianceObligationCompletion,
+  Certificate,
+  ComplianceReminder,
+  ComplianceObligationType,
+  ObligationRecurrence,
+  ObligationStatus,
+  CertificateType,
+  ComplianceSubjectType,
+} from '@prisma/client';

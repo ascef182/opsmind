@@ -32,6 +32,7 @@ import { scanOutreachFollowups } from './outreach-followup-scan';
 import { scanTaskDueReminders } from './task-due-reminder-scan';
 import { scanMeetingReminders } from './meeting-reminder-scan';
 import { scanSpendAlerts } from './spend-alert-scan';
+import { scanComplianceReminders } from './opsgov-compliance-scan';
 import { processAutomationJob } from './automation-processor';
 import { processLeadScrapeJob, type LeadScrapeGateways } from './lead-scrape-processor';
 import { processWebsiteProfileJob } from './website-profiler-processor';
@@ -424,6 +425,22 @@ async function main(): Promise<void> {
 
   await runSpendAlertScan();
   setInterval(runSpendAlertScan, SPEND_ALERT_SCAN_INTERVAL_MS);
+
+  // Lembretes do OpsGov (obrigações D-7/D-1, certidões D-15/D-0). De hora em
+  // hora: idempotente por ComplianceReminder, e um intervalo diário poderia
+  // perder o próprio dia do D-0 dependendo de quando o worker subiu.
+  const COMPLIANCE_REMINDER_SCAN_INTERVAL_MS = 3_600_000;
+  async function runComplianceReminderScan(): Promise<void> {
+    try {
+      const notified = await scanComplianceReminders(prisma);
+      if (notified > 0) logger.info({ notified }, 'scan de lembretes do OpsGov notificou responsáveis');
+    } catch (error) {
+      logger.error({ err: error }, 'scan de lembretes do OpsGov falhou');
+      Sentry.captureException(error);
+    }
+  }
+  await runComplianceReminderScan();
+  setInterval(runComplianceReminderScan, COMPLIANCE_REMINDER_SCAN_INTERVAL_MS);
 
   logger.info(
     `OpsMind worker rodando — filas "${queue.name}" (scan a cada ${SCAN_INTERVAL_MS}ms), "${leadScrapeQueue.name}" e "${redditTopicScanWorker.name}"`,

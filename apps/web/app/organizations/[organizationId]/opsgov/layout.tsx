@@ -11,6 +11,7 @@ const TABS = [
   { segment: 'empresa', label: 'Empresa', finance: false },
   { segment: 'receita', label: 'Receita', finance: true },
   { segment: 'simulador', label: 'Simulador do Simples', finance: false },
+  { segment: 'obrigacoes', label: 'Obrigações e certidões', finance: false },
 ];
 
 export default function OpsGovLayout({ children }: { children: React.ReactNode }) {

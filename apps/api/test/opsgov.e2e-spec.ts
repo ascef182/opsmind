@@ -24,9 +24,17 @@ describe('OpsGov (e2e)', () => {
     await app.close();
   });
 
-  async function newOrg(label: string) {
-    const owner = await registerUser(app, `opsgov-${label}-${randomUUID()}@opsmind.test`);
-    const auth = { Authorization: `Bearer ${owner.accessToken}` };
+  // Dois usuários para o arquivo inteiro: /auth/register tem limite de 10/min
+  // por instância. "alice" é dona das organizações de cada teste; "bob" é dono
+  // das organizações de fora, que nunca podem enxergar as da alice.
+  const users: Record<'alice' | 'bob', { Authorization: string }> = {} as never;
+
+  async function newOrg(label: string, owner: 'alice' | 'bob' = 'alice') {
+    if (!users[owner]) {
+      const registered = await registerUser(app, `opsgov-${owner}-${randomUUID()}@opsmind.test`);
+      users[owner] = { Authorization: `Bearer ${registered.accessToken}` };
+    }
+    const auth = users[owner];
     const res = await request(app.getHttpServer())
       .post('/organizations')
       .set(auth)
@@ -117,7 +125,7 @@ describe('OpsGov (e2e)', () => {
 
   it('outra organização não lê o cadastro alheio, nem via RLS', async () => {
     const a = await newOrg('tenant-a');
-    const b = await newOrg('tenant-b');
+    const b = await newOrg('tenant-b', 'bob');
     await request(app.getHttpServer())
       .post(`${a.base}/regimes`)
       .set(a.auth)
@@ -214,7 +222,7 @@ describe('OpsGov (e2e)', () => {
 
     it('outra organização não classifica nem lê a receita alheia', async () => {
       const a = await newOrg('rev-a');
-      const b = await newOrg('rev-b');
+      const b = await newOrg('rev-b', 'bob');
       await request(app.getHttpServer())
         .post(`${a.base}/activities`)
         .set(a.auth)
@@ -274,8 +282,74 @@ describe('OpsGov (e2e)', () => {
       expect(real.body.rbt12.rbt12Cents).toBe(6_000_000);
       expect(real.body.simulation).toEqual(expect.objectContaining({ rbt12Cents: 6_000_000, faturamentoMensalCents: 500_000 }));
 
-      const outsider = await newOrg('simples-out');
+      const outsider = await newOrg('simples-out', 'bob');
       await request(app.getHttpServer()).get(`${simples}/real`).set(outsider.auth).expect(403);
+    });
+  });
+
+  describe('Fase 4 — obrigações e certidões', () => {
+    it('cumprir guarda o histórico e avança; certidão tem status calculado; outra org não enxerga', async () => {
+      const org = await newOrg('compliance');
+      const base = `/organizations/${org.organizationId}/opsgov/compliance`;
+      const http = () => request(app.getHttpServer());
+
+      const das = await http()
+        .post(`${base}/obligations`)
+        .set(org.auth)
+        .send({ type: 'DAS', title: 'DAS mensal', recurrence: 'MONTHLY', dueDay: 20, firstDueDate: '2026-12-20' })
+        .expect(201);
+      await http().post(`${base}/obligations`).set(org.auth).send({ type: 'DEFIS', title: 'DEFIS', recurrence: 'YEARLY', dueDay: 31 }).expect(400);
+
+      const done = await http()
+        .post(`${base}/obligations/${das.body.id}/complete`)
+        .set(org.auth)
+        .send({ completedOn: '2026-12-18' })
+        .expect(201);
+      expect(done.body).toEqual(
+        expect.objectContaining({ nextDueDate: '2027-01-20', status: 'PENDENTE', lastCompletion: expect.objectContaining({ dueDate: '2026-12-20' }) }),
+      );
+      expect(await prisma.complianceObligationCompletion.count({ where: { obligationId: das.body.id } })).toBe(1);
+
+      // Dois cliques ao mesmo tempo cumprem um vencimento só.
+      const both = await Promise.all(
+        [0, 1].map(() => http().post(`${base}/obligations/${das.body.id}/complete`).set(org.auth).send({})),
+      );
+      expect(both.map((r) => r.status)).toEqual([201, 201]);
+      const completions = await prisma.complianceObligationCompletion.findMany({ where: { obligationId: das.body.id }, orderBy: { dueDate: 'asc' } });
+      expect(completions.map((c) => c.dueDate.toISOString().slice(0, 10))).toEqual(['2026-12-20', '2027-01-20', '2027-02-20']);
+
+      await http()
+        .post(`${base}/certificates`)
+        .set(org.auth)
+        .send({ type: 'CND_FEDERAL', issuedOn: '2020-01-01', validUntil: '2020-06-29' })
+        .expect(201);
+      await http()
+        .post(`${base}/certificates`)
+        .set(org.auth)
+        .send({ type: 'CND_FEDERAL', issuedOn: '2026-01-01', validUntil: '2099-12-31' })
+        .expect(201);
+      const certs = await http().get(`${base}/certificates`).set(org.auth).expect(200);
+      expect(certs.body.map((c: { status: string; isCurrent: boolean }) => [c.status, c.isCurrent])).toEqual([
+        ['VALIDA', true],
+        ['VENCIDA', false],
+      ]);
+
+      const other = await newOrg('compliance-b', 'bob');
+      await http().get(`${base}/obligations`).set(other.auth).expect(403);
+      await http()
+        .post(`/organizations/${other.organizationId}/opsgov/compliance/obligations/${das.body.id}/complete`)
+        .set(other.auth)
+        .send({})
+        .expect(404);
+      const rls = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_org_id', ${other.organizationId}, true)`;
+        return Promise.all([
+          tx.complianceObligation.count({ where: { organizationId: org.organizationId } }),
+          tx.complianceObligationCompletion.count({ where: { organizationId: org.organizationId } }),
+          tx.certificate.count({ where: { organizationId: org.organizationId } }),
+        ]);
+      });
+      expect(rls).toEqual([0, 0, 0]);
     });
   });
 });

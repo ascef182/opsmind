@@ -15,6 +15,7 @@ import {
 } from '@opsmind/shared-types';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { assertDocumentOfOrganization } from './assert-document';
 import type {
   AddActivityDto,
   ChangeActivityDto,
@@ -326,13 +327,8 @@ export class CompanyProfileService {
     }
   }
 
-  private async assertDocument(organizationId: string, documentId: string | undefined): Promise<void> {
-    if (!documentId) return;
-    const document = await this.prisma.document.findFirst({
-      where: { id: documentId, organizationId, deletedAt: null },
-      select: { id: true },
-    });
-    if (!document) throw new NotFoundException('Documento comprobatório não encontrado');
+  private assertDocument(organizationId: string, documentId: string | undefined): Promise<void> {
+    return assertDocumentOfOrganization(this.prisma, organizationId, documentId);
   }
 
   private audit(

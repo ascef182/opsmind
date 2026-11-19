@@ -261,6 +261,10 @@ model Organization {
   registrationPeriods   CompanyRegistrationPeriod[]
   taxRegimePeriods      TaxRegimePeriod[]
   companyActivities     CompanyActivity[]
+  complianceObligations ComplianceObligation[]
+  obligationCompletions ComplianceObligationCompletion[]
+  certificates          Certificate[]
+  complianceReminders   ComplianceReminder[]
 
   @@map("organizations")
 }
@@ -864,9 +868,11 @@ model Document {
   uploadedBy   User            @relation(fields: [uploadedByUserId], references: [id])
   chunks       DocumentChunk[]
 
-  registrationPeriods CompanyRegistrationPeriod[] @relation("RegistrationPeriodDocument")
-  taxRegimePeriods    TaxRegimePeriod[]           @relation("TaxRegimePeriodDocument")
-  companyActivities   CompanyActivity[]           @relation("CompanyActivityDocument")
+  registrationPeriods   CompanyRegistrationPeriod[]      @relation("RegistrationPeriodDocument")
+  taxRegimePeriods      TaxRegimePeriod[]                @relation("TaxRegimePeriodDocument")
+  companyActivities     CompanyActivity[]                @relation("CompanyActivityDocument")
+  obligationCompletions ComplianceObligationCompletion[] @relation("ObligationCompletionDocument")
+  certificates          Certificate[]                    @relation("CertificateDocument")
 
   @@index([organizationId, status])
   @@index([organizationId, customerId])
@@ -1969,4 +1975,130 @@ model CompanyActivity {
 
   @@index([organizationId, cnae, validFrom])
   @@map("company_activities")
+}
+
+// ── OpsGov: obrigações, certidões e lembretes ────────────────────────────
+// Ver migration 20261119150000_opsgov_compliance. Status de certidão é
+// calculado (certificateStatus, shared-types), nunca gravado.
+
+enum ComplianceObligationType {
+  DAS
+  DASN_SIMEI
+  DEFIS
+  TAXA_MUNICIPAL
+  CERTIFICADO_DIGITAL
+  OUTRA
+}
+
+enum ObligationRecurrence {
+  MONTHLY
+  YEARLY
+  ONCE
+}
+
+enum ObligationStatus {
+  PENDENTE
+  CUMPRIDA
+  DISPENSADA
+}
+
+enum CertificateType {
+  CND_FEDERAL
+  ESTADUAL
+  MUNICIPAL
+  FGTS_CRF
+  CNDT_TRABALHISTA
+  FALENCIA
+}
+
+enum ComplianceSubjectType {
+  OBLIGATION
+  CERTIFICATE
+}
+
+model ComplianceObligation {
+  id             String                   @id @default(uuid())
+  organizationId String                   @map("organization_id")
+  type           ComplianceObligationType
+  title          String
+  recurrence     ObligationRecurrence
+  dueDay         Int?                     @map("due_day")
+  dueMonth       Int?                     @map("due_month")
+  nextDueDate    DateTime                 @map("next_due_date") @db.Date
+  status         ObligationStatus         @default(PENDENTE)
+  notes          String?                  @db.Text
+  actorType      AuditActorType           @map("actor_type")
+  actorId        String?                  @map("actor_id")
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  updatedAt      DateTime                 @updatedAt @map("updated_at")
+
+  organization Organization                     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  completions  ComplianceObligationCompletion[]
+
+  @@index([organizationId, status, nextDueDate])
+  @@map("compliance_obligations")
+}
+
+// Histórico de cumprimento: cada vencimento cumprido vira uma linha (o
+// `nextDueDate` da obrigação avança, o registro do que foi feito fica).
+model ComplianceObligationCompletion {
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
+  obligationId   String         @map("obligation_id")
+  dueDate        DateTime       @map("due_date") @db.Date
+  completedOn    DateTime       @map("completed_on") @db.Date
+  notes          String?        @db.Text
+  documentId     String?        @map("document_id")
+  actorType      AuditActorType @map("actor_type")
+  actorId        String?        @map("actor_id")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  obligation   ComplianceObligation @relation(fields: [obligationId], references: [id], onDelete: Cascade)
+  document     Document?            @relation("ObligationCompletionDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@unique([obligationId, dueDate])
+  @@index([organizationId])
+  @@map("compliance_obligation_completions")
+}
+
+model Certificate {
+  id             String          @id @default(uuid())
+  organizationId String          @map("organization_id")
+  type           CertificateType
+  issuer         String?
+  code           String?
+  issuedOn       DateTime        @map("issued_on") @db.Date
+  // Inclusiva: no próprio dia a certidão ainda vale.
+  validUntil     DateTime        @map("valid_until") @db.Date
+  notes          String?         @db.Text
+  documentId     String?         @map("document_id")
+  actorType      AuditActorType  @map("actor_type")
+  actorId        String?         @map("actor_id")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     Document?    @relation("CertificateDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, type, validUntil])
+  @@map("certificates")
+}
+
+// Log de idempotência do scan de lembretes: um vencimento + offset notifica
+// uma vez só, mesmo com várias réplicas do worker ou reinícios.
+model ComplianceReminder {
+  id             String                @id @default(uuid())
+  organizationId String                @map("organization_id")
+  subjectType    ComplianceSubjectType @map("subject_type")
+  subjectId      String                @map("subject_id")
+  dueDate        DateTime              @map("due_date") @db.Date
+  offsetDays     Int                   @map("offset_days")
+  createdAt      DateTime              @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectType, subjectId, dueDate, offsetDays])
+  @@index([organizationId])
+  @@map("compliance_reminders")
 }
