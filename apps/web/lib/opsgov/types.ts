@@ -281,3 +281,62 @@ export interface CreateCertificateInput {
   notes?: string;
   documentId?: string;
 }
+
+// ── Fase 5: espaço do contador ─────────────────────────────────────────────
+export type AccountingScenario = 'A_TRANSFORMAR' | 'B_NOVO_CNPJ';
+export type AccountingDecisionStatus = 'PENDENTE' | 'EM_ANALISE' | 'DECIDIDO';
+
+export const SCENARIO_LABELS: Record<AccountingScenario, string> = {
+  A_TRANSFORMAR: 'A · transformar o CNPJ do MEI',
+  B_NOVO_CNPJ: 'B · CNPJ novo',
+};
+export const DECISION_STATUS_LABELS: Record<AccountingDecisionStatus, string> = {
+  PENDENTE: 'Pendentes',
+  EM_ANALISE: 'Em análise',
+  DECIDIDO: 'Decididas',
+};
+
+export interface AccountingProposal {
+  id: string;
+  firm: string;
+  contactName: string | null;
+  scenario: AccountingScenario;
+  setupCents: number;
+  monthlyFeeCents: number;
+  annualCents: number;
+  includes: string[];
+  notes: string | null;
+  documentId: string | null;
+  createdAt: string;
+}
+
+export interface ProposalInput {
+  firm: string;
+  contactName?: string;
+  scenario: AccountingScenario;
+  setupCents: number;
+  monthlyFeeCents: number;
+  annualCents?: number;
+  includes?: string[];
+  notes?: string;
+  documentId?: string;
+}
+
+export interface DecisionAnswer {
+  text: string;
+  author: string;
+  authorUserId: string | null;
+  at: string;
+}
+
+export interface AccountingDecision {
+  id: string;
+  seedKey: string | null;
+  topic: string;
+  question: string;
+  answers: DecisionAnswer[];
+  finalDecision: string | null;
+  decidedAt: string | null;
+  status: AccountingDecisionStatus;
+  updatedAt: string;
+}

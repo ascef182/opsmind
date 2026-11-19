@@ -352,4 +352,60 @@ describe('OpsGov (e2e)', () => {
       expect(rls).toEqual([0, 0, 0]);
     });
   });
+
+  describe('Fase 5 — espaço do contador', () => {
+    it('propostas, decisões padrão idempotentes, histórico de respostas e isolamento', async () => {
+      const org = await newOrg('accounting');
+      const base = `/organizations/${org.organizationId}/opsgov/accounting`;
+      const http = () => request(app.getHttpServer());
+
+      const proposal = await http()
+        .post(`${base}/proposals`)
+        .set(org.auth)
+        .send({ firm: 'Contábil Alfa', scenario: 'B_NOVO_CNPJ', setupCents: 150_000, monthlyFeeCents: 39_900, includes: ['DAS', 'Folha', 'DAS'] })
+        .expect(201);
+      expect(proposal.body).toEqual(expect.objectContaining({ annualCents: 0, includes: ['DAS', 'Folha'] }));
+      await http().post(`${base}/proposals`).set(org.auth).send({ firm: 'X', scenario: 'C', setupCents: 0, monthlyFeeCents: 0 }).expect(400);
+
+      const first = await http().post(`${base}/decisions/defaults`).set(org.auth).expect(201);
+      const again = await http().post(`${base}/decisions/defaults`).set(org.auth).expect(201);
+      expect([first.body.created, again.body.created]).toEqual([13, 0]);
+
+      const decisions = await http().get(`${base}/decisions`).set(org.auth).expect(200);
+      const regime = decisions.body.find((d: { seedKey: string }) => d.seedKey === 'regime');
+      await http().post(`${base}/decisions/${regime.id}/answers`).set(org.auth).send({ text: 'Simples compensa', author: 'Contador Alfa' }).expect(201);
+      await http().post(`${base}/decisions/${regime.id}/decide`).set(org.auth).send({ finalDecision: 'Simples Nacional' }).expect(201);
+      const reopened = await http().post(`${base}/decisions/${regime.id}/status`).set(org.auth).send({ status: 'EM_ANALISE' }).expect(201);
+      expect(reopened.body).toEqual(expect.objectContaining({ status: 'EM_ANALISE', finalDecision: null }));
+      expect(reopened.body.answers.map((a: { text: string }) => a.text)).toEqual([
+        'Simples compensa',
+        'Decisão reaberta. Decisão anterior: Simples Nacional',
+      ]);
+      // O banco não aceita DECIDIDO sem decisão final.
+      await expect(
+        prisma.accountingDecision.update({ where: { id: regime.id }, data: { status: 'DECIDIDO' } }),
+      ).rejects.toThrow(/accounting_decisions_decided_chk/);
+
+      const other = await newOrg('accounting-b', 'bob');
+      await http().get(`${base}/decisions`).set(other.auth).expect(403);
+      await http()
+        .post(`/organizations/${other.organizationId}/opsgov/accounting/decisions/${regime.id}/decide`)
+        .set(other.auth)
+        .send({ finalDecision: 'invasão' })
+        .expect(404);
+      await http().delete(`/organizations/${other.organizationId}/opsgov/accounting/proposals/${proposal.body.id}`).set(other.auth).expect(404);
+      const rls = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_org_id', ${other.organizationId}, true)`;
+        return Promise.all([
+          tx.accountingProposal.count({ where: { organizationId: org.organizationId } }),
+          tx.accountingDecision.count({ where: { organizationId: org.organizationId } }),
+        ]);
+      });
+      expect(rls).toEqual([0, 0]);
+
+      await http().delete(`${base}/proposals/${proposal.body.id}`).set(org.auth).expect(204);
+      const deleted = await prisma.auditLog.findFirst({ where: { organizationId: org.organizationId, action: 'opsgov.accounting_proposal.deleted' } });
+      expect(deleted?.metadata).toEqual(expect.objectContaining({ proposal: expect.objectContaining({ firm: 'Contábil Alfa' }) }));
+    });
+  });
 });

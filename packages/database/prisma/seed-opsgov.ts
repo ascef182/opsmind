@@ -1,6 +1,7 @@
 /**
  * Seed opcional do OpsGov para uma organização existente (CazaTech): regime
- * SIMEI vigente, cadastro MEI (se o CNPJ for informado) e os CNAEs atuais.
+ * SIMEI vigente, cadastro MEI (se o CNPJ for informado), os CNAEs atuais e as
+ * decisões pendentes com o contador (DEFAULT_ACCOUNTING_DECISIONS).
  *
  * Uso: pnpm --filter @opsmind/database seed:opsgov -- --org <slug> --since AAAA-MM-DD [--cnpj <cnpj>]
  *
@@ -10,7 +11,7 @@
  * devem ser conferidos na tela (uma correção vira nova versão, não edição).
  */
 import { PrismaClient } from '@prisma/client';
-import { normalizeCnpj } from '@opsmind/shared-types';
+import { DEFAULT_ACCOUNTING_DECISIONS, normalizeCnpj } from '@opsmind/shared-types';
 
 const CNAES = [
   { cnae: '8219-9/99', description: 'Preparação de documentos e serviços especializados de apoio administrativo', isPrimary: true, revenueGroup: 'TRADUCAO_LEGENDAGEM' },
@@ -58,6 +59,17 @@ async function main() {
       });
       console.log(`${CNAES.length} CNAEs criados`);
     }
+    const decisions = await tx.accountingDecision.createMany({
+      data: DEFAULT_ACCOUNTING_DECISIONS.map((d) => ({
+        organizationId: org.id,
+        seedKey: d.key,
+        topic: d.topic,
+        question: d.question,
+        ...actor,
+      })),
+      skipDuplicates: true,
+    });
+    if (decisions.count > 0) console.log(`${decisions.count} decisões com o contador criadas`);
   });
 }
 

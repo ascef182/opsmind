@@ -265,6 +265,8 @@ model Organization {
   obligationCompletions ComplianceObligationCompletion[]
   certificates          Certificate[]
   complianceReminders   ComplianceReminder[]
+  accountingProposals   AccountingProposal[]
+  accountingDecisions   AccountingDecision[]
 
   @@map("organizations")
 }
@@ -873,6 +875,7 @@ model Document {
   companyActivities     CompanyActivity[]                @relation("CompanyActivityDocument")
   obligationCompletions ComplianceObligationCompletion[] @relation("ObligationCompletionDocument")
   certificates          Certificate[]                    @relation("CertificateDocument")
+  accountingProposals   AccountingProposal[]             @relation("AccountingProposalDocument")
 
   @@index([organizationId, status])
   @@index([organizationId, customerId])
@@ -2101,4 +2104,66 @@ model ComplianceReminder {
   @@unique([subjectType, subjectId, dueDate, offsetDays])
   @@index([organizationId])
   @@map("compliance_reminders")
+}
+
+// ── OpsGov: espaço do contador ───────────────────────────────────────────
+// Ver migration 20261119170000_opsgov_accounting.
+
+enum AccountingScenario {
+  A_TRANSFORMAR
+  B_NOVO_CNPJ
+}
+
+enum AccountingDecisionStatus {
+  PENDENTE
+  EM_ANALISE
+  DECIDIDO
+}
+
+model AccountingProposal {
+  id              String             @id @default(uuid())
+  organizationId  String             @map("organization_id")
+  firm            String
+  contactName     String?            @map("contact_name")
+  scenario        AccountingScenario
+  setupCents      Int                @map("setup_cents")
+  monthlyFeeCents Int                @map("monthly_fee_cents")
+  annualCents     Int                @default(0) @map("annual_cents")
+  includes        String[]           @default([])
+  notes           String?            @db.Text
+  documentId      String?            @map("document_id")
+  actorType       AuditActorType     @map("actor_type")
+  actorId         String?            @map("actor_id")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     Document?    @relation("AccountingProposalDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@map("accounting_proposals")
+}
+
+model AccountingDecision {
+  id             String                   @id @default(uuid())
+  organizationId String                   @map("organization_id")
+  // Chave das decisões padrão (DEFAULT_ACCOUNTING_DECISIONS); nula nas criadas à mão.
+  seedKey        String?                  @map("seed_key")
+  topic          String
+  question       String                   @db.Text
+  // Lista append-only de { text, author, at }: respostas nunca são editadas.
+  answers        Json                     @default("[]")
+  finalDecision  String?                  @map("final_decision") @db.Text
+  decidedAt      DateTime?                @map("decided_at")
+  status         AccountingDecisionStatus @default(PENDENTE)
+  actorType      AuditActorType           @map("actor_type")
+  actorId        String?                  @map("actor_id")
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  updatedAt      DateTime                 @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, seedKey])
+  @@index([organizationId, status])
+  @@map("accounting_decisions")
 }

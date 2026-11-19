@@ -26,3 +26,4 @@ export * from './opsgov-validity';
 export * from './rbt12';
 export * from './simples-nacional';
 export * from './compliance-calendar';
+export * from './accounting';

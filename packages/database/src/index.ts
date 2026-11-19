@@ -114,3 +114,4 @@ export type {
   CertificateType,
   ComplianceSubjectType,
 } from '@prisma/client';
+export type { AccountingProposal, AccountingDecision, AccountingScenario, AccountingDecisionStatus } from '@prisma/client';
