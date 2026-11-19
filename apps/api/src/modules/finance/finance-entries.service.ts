@@ -4,6 +4,7 @@ import {
   fromDateKey,
   isCategoryOfDirection,
   statusFromPaid,
+  toDateKey,
   todayInSaoPaulo,
   type FinancialCategory,
   type FinancialDirection,
@@ -231,6 +232,12 @@ export class FinanceEntriesService {
           iofCents: foreign.iofCents,
           customerId: links.customerId,
           contractId: links.contractId,
+          // A classificação por atividade (OpsGov) aponta para a versão do CNAE
+          // vigente na emissão: lançamento que vira pessoal ou muda de data
+          // volta a "não classificado" em vez de manter um vínculo inválido.
+          ...(scope === 'PERSONAL' || (dto.issueDate !== undefined && dto.issueDate !== toDateKey(current.issueDate))
+            ? { companyActivityId: null }
+            : {}),
         },
       });
       // O valor pode ter caído até igualar o que já foi pago (vira PAID).

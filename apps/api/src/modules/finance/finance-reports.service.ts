@@ -91,9 +91,15 @@ export interface ProfitabilityReport {
 }
 
 interface Dataset {
-  entries: EntryRow[];
-  payments: PaymentRow[];
+  entries: Array<EntryRow & { companyActivityId: string | null }>;
+  payments: Array<PaymentRow & { companyActivityId: string | null }>;
   contracts: ContractRow[];
+}
+
+/** Receita da empresa (BUSINESS/INCOME) com a atividade de cada lançamento — base do OpsGov. */
+export interface BusinessIncomeDataset {
+  entries: Dataset['entries'];
+  payments: Dataset['payments'];
 }
 
 /**
@@ -269,6 +275,18 @@ export class FinanceReportsService {
   }
 
   /**
+   * Faturamento da empresa para o OpsGov (receita por atividade, RBT12). Mesmo
+   * carregamento e normalização dos relatórios — PERSONAL nunca entra.
+   */
+  async businessIncomeDataset(organizationId: string, from: string, to: string): Promise<BusinessIncomeDataset> {
+    const data = await this.loadDataset(organizationId, from, to, 'BUSINESS');
+    return {
+      entries: data.entries.filter((e) => e.direction === 'INCOME'),
+      payments: data.payments.filter((p) => p.direction === 'INCOME'),
+    };
+  }
+
+  /**
    * Linhas relevantes para [from, to]: lançamentos que tocam o período (por
    * emissão, vencimento ou quitação) MAIS todos os ainda em aberto (precisam
    * para saldo a receber/pagar e para o "em aberto" da rentabilidade).
@@ -288,6 +306,7 @@ export class FinanceReportsService {
       issueDate: true,
       dueDate: true,
       settledAt: true,
+      companyActivityId: true,
     } satisfies Prisma.FinancialEntrySelect;
 
     const [entries, payments, contracts] = await Promise.all([
@@ -310,7 +329,7 @@ export class FinanceReportsService {
           entryId: true,
           amountCents: true,
           paidAt: true,
-          entry: { select: { direction: true, category: true, customerId: true, contractId: true } },
+          entry: { select: { direction: true, category: true, customerId: true, contractId: true, companyActivityId: true } },
         },
       }),
       // Contrato é sempre da empresa (representa receita combinada com um
@@ -350,6 +369,7 @@ export class FinanceReportsService {
         category: p.entry.category as FinancialCategory,
         customerId: p.entry.customerId,
         contractId: p.entry.contractId,
+        companyActivityId: p.entry.companyActivityId,
       })),
       contracts: contracts.map((c) => ({
         ...c,

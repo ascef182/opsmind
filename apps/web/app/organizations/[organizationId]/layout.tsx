@@ -26,7 +26,7 @@ export default function OrganizationLayout({ children }: { children: React.React
   return (
     <SidebarProvider style={{ '--sidebar-width': '15rem' } as React.CSSProperties}>
       <AppSidebar organizationId={organizationId} />
-      <SidebarInset>
+      <SidebarInset className="min-w-0">
         <AppTopbar organizationId={organizationId} organization={organization.data} />
         <main className="flex-1 p-6">{children}</main>
       </SidebarInset>

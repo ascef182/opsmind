@@ -40,10 +40,27 @@ import { EmptyState, Field } from '@/components/finance/finance-ui';
 
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 
+// validTo é exclusivo (o novo registro começa nesse dia): o último dia de valor é o anterior.
+function lastDay(to: string): string {
+  const date = new Date(`${to}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
 function Vigencia({ from, to }: { from: string; to: string | null }) {
+  const today = todayKey();
+  if (from > today) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        <span className="text-info-500">agendado</span> · a partir de {fmtDate(from)}
+        {to && ` até ${fmtDate(lastDay(to))}`}
+      </span>
+    );
+  }
   return (
     <span className="text-xs text-muted-foreground">
-      {fmtDate(from)} → {to ? fmtDate(to) : <span className="text-positive-500">vigente</span>}
+      {fmtDate(from)} → {to === null ? <span className="text-positive-500">vigente</span> : `${fmtDate(lastDay(to))}`}
+      {to !== null && to > today && <span className="text-positive-500"> · vigente</span>}
     </span>
   );
 }

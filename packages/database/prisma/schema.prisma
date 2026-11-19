@@ -1524,6 +1524,9 @@ model FinancialEntry {
   customerId         String?              @map("customer_id")
   contractId         String?              @map("contract_id")
   recurringEntryId   String?              @map("recurring_entry_id")
+  // OpsGov Fase 2: atividade (versão de CNAE vigente na emissão) que gerou a
+  // receita. Só INCOME/BUSINESS é classificado; nulo = ainda não classificado.
+  companyActivityId  String?              @map("company_activity_id")
   // 'YYYY-MM' do lançamento gerado por molde — chave de idempotência.
   referenceMonth     String?              @map("reference_month")
   // Valor bruto cobrado.
@@ -1556,11 +1559,12 @@ model FinancialEntry {
   createdAt          DateTime             @default(now()) @map("created_at")
   updatedAt          DateTime             @updatedAt @map("updated_at")
 
-  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer       Customer?          @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  contract       Contract?          @relation(fields: [contractId], references: [id], onDelete: SetNull)
-  recurringEntry RecurringEntry?    @relation(fields: [recurringEntryId], references: [id], onDelete: SetNull)
-  payments       FinancialPayment[]
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer        Customer?          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contract        Contract?          @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  recurringEntry  RecurringEntry?    @relation(fields: [recurringEntryId], references: [id], onDelete: SetNull)
+  companyActivity CompanyActivity?   @relation(fields: [companyActivityId], references: [id], onDelete: SetNull)
+  payments        FinancialPayment[]
 
   // Idempotência do gerador de recorrência: o mesmo molde nunca gera dois
   // lançamentos para o mesmo mês (NULLs são distintos em Postgres, então
@@ -1571,6 +1575,7 @@ model FinancialEntry {
   @@index([organizationId, dueDate])
   @@index([organizationId, customerId])
   @@index([organizationId, contractId])
+  @@index([organizationId, companyActivityId])
   @@map("financial_entries")
 }
 
@@ -1959,6 +1964,8 @@ model CompanyActivity {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   document     Document?    @relation("CompanyActivityDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  financialEntries FinancialEntry[]
 
   @@index([organizationId, cnae, validFrom])
   @@map("company_activities")

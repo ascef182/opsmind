@@ -140,4 +140,101 @@ describe('OpsGov (e2e)', () => {
     });
     expect(counts).toEqual([0, 0, 0, 0]);
   });
+
+  describe('Fase 2 — receita por atividade', () => {
+    async function entry(org: { auth: Record<string, string>; organizationId: string }, body: Record<string, unknown>) {
+      const res = await request(app.getHttpServer())
+        .post(`/organizations/${org.organizationId}/finance/entries`)
+        .set(org.auth)
+        .send({ direction: 'INCOME', category: 'PROJECT', ...body })
+        .expect(201);
+      return res.body.id as string;
+    }
+
+    it('classifica em lote pela versão vigente, separa por grupo e calcula o RBT12 sem PERSONAL', async () => {
+      const org = await newOrg('revenue');
+      const company = org.base;
+      const revenue = `/organizations/${org.organizationId}/opsgov/revenue`;
+      const http = () => request(app.getHttpServer());
+
+      await http()
+        .post(`${company}/registrations`)
+        .set(org.auth)
+        .send({ naturezaJuridica: 'MEI', cnpj: '11222333000181', validFrom: '2024-03-01' })
+        .expect(201);
+      const trad = await http()
+        .post(`${company}/activities`)
+        .set(org.auth)
+        .send({ cnae: '8219-9/99', description: 'Tradução', isPrimary: true, revenueGroup: 'TRADUCAO_LEGENDAGEM', validFrom: '2024-03-01' })
+        .expect(201);
+      const dev = await http()
+        .post(`${company}/activities`)
+        .set(org.auth)
+        .send({ cnae: '6201-5/01', description: 'Software', revenueGroup: 'TECNOLOGIA', validFrom: '2026-01-01' })
+        .expect(201);
+
+      const e1 = await entry(org, { description: 'Legendas', amountCents: 300_000, issueDate: '2026-05-10', dueDate: '2026-05-20' });
+      const e2 = await entry(org, { description: 'Site', amountCents: 1_200_000, issueDate: '2026-06-10', dueDate: '2026-06-20' });
+      const loose = await entry(org, { description: 'Avulso', amountCents: 50_000, issueDate: '2026-06-15', dueDate: '2026-06-25' });
+      const personal = await entry(org, { description: 'Pessoal', amountCents: 999_000, scope: 'PERSONAL', issueDate: '2026-06-01', dueDate: '2026-06-05' });
+
+      const pending = await http().get(`${revenue}/unclassified`).set(org.auth).expect(200);
+      expect(pending.body.map((e: { id: string }) => e.id).sort()).toEqual([e1, e2, loose].sort());
+
+      // Lote com um lançamento pessoal é recusado por inteiro.
+      await http().patch(`${revenue}/classify`).set(org.auth).send({ entryIds: [e1, personal], companyActivityId: trad.body.id }).expect(400);
+      // CNAE de tecnologia só vale a partir de 2026-01: receita anterior não pode ir para ele.
+      const old = await entry(org, { description: 'Antigo', amountCents: 10_000, issueDate: '2025-11-10', dueDate: '2025-11-20' });
+      await http().patch(`${revenue}/classify`).set(org.auth).send({ entryIds: [old], companyActivityId: dev.body.id }).expect(400);
+
+      await http().patch(`${revenue}/classify`).set(org.auth).send({ entryIds: [e1], companyActivityId: trad.body.id }).expect(200);
+      await http().patch(`${revenue}/classify`).set(org.auth).send({ entryIds: [e2], companyActivityId: dev.body.id }).expect(200);
+
+      const report = await http().get(`${revenue}/by-activity?from=2026-05&to=2026-06`).set(org.auth).expect(200);
+      expect(report.body.rows).toEqual([
+        expect.objectContaining({ cnae: '6201-5/01', monthsCents: [0, 1_200_000] }),
+        expect.objectContaining({ cnae: '8219-9/99', monthsCents: [300_000, 0] }),
+      ]);
+      expect(report.body.unclassified.totalCents).toBe(50_000);
+      expect(report.body.totals.totalCents).toBe(1_550_000);
+      expect(Object.fromEntries(report.body.groups.map((g: { revenueGroup: string; totalCents: number }) => [g.revenueGroup, g.totalCents]))).toEqual({
+        TECNOLOGIA: 1_200_000,
+        TRADUCAO_LEGENDAGEM: 300_000,
+        OUTROS: 0,
+      });
+
+      const rbt12 = await http().get(`${revenue}/rbt12?month=2027-01`).set(org.auth).expect(200);
+      expect(rbt12.body).toEqual(expect.objectContaining({ rbt12Cents: 1_550_000, method: 'TWELVE_MONTHS', activityStartMonth: '2024-03' }));
+
+      // O banco também recusa classificar receita pessoal, mesmo fora do service.
+      await expect(
+        prisma.financialEntry.update({ where: { id: personal }, data: { companyActivityId: trad.body.id } }),
+      ).rejects.toThrow(/financial_entries_activity_only_business_income_chk/);
+    });
+
+    it('outra organização não classifica nem lê a receita alheia', async () => {
+      const a = await newOrg('rev-a');
+      const b = await newOrg('rev-b');
+      await request(app.getHttpServer())
+        .post(`${a.base}/activities`)
+        .set(a.auth)
+        .send({ cnae: '8219-9/99', description: 'Tradução', validFrom: '2024-03-01' })
+        .expect(201);
+      const entryA = await entry(a, { description: 'Receita A', amountCents: 100_000, issueDate: '2026-05-10', dueDate: '2026-05-20' });
+      const bActivity = await request(app.getHttpServer())
+        .post(`${b.base}/activities`)
+        .set(b.auth)
+        .send({ cnae: '8219-9/99', description: 'Tradução', validFrom: '2024-03-01' })
+        .expect(201);
+
+      const bRevenue = `/organizations/${b.organizationId}/opsgov/revenue`;
+      await request(app.getHttpServer()).patch(`${bRevenue}/classify`).set(b.auth).send({ entryIds: [entryA], companyActivityId: bActivity.body.id }).expect(404);
+      await request(app.getHttpServer()).get(`/organizations/${a.organizationId}/opsgov/revenue/rbt12`).set(b.auth).expect(403);
+      const own = await request(app.getHttpServer()).get(`${bRevenue}/by-activity?from=2026-05&to=2026-05`).set(b.auth).expect(200);
+      expect(own.body.totals.totalCents).toBe(0);
+
+      const stillUnclassified = await prisma.financialEntry.findUniqueOrThrow({ where: { id: entryA } });
+      expect(stillUnclassified.companyActivityId).toBeNull();
+    });
+  });
 });

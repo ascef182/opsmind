@@ -272,6 +272,24 @@ describe('FinanceEntriesService.update', () => {
     );
   });
 
+  it('virar PESSOAL ou mudar a emissão desfaz a classificação por atividade (OpsGov)', async () => {
+    const personal = setup(entryRow({ scope: 'BUSINESS', companyActivityId: 'act-1' }));
+    await personal.service.update(ORG, 'e1', { scope: 'PERSONAL' }, ACTOR);
+    expect(personal.tx.financialEntry.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ companyActivityId: null }) }),
+    );
+
+    const redated = setup(entryRow({ companyActivityId: 'act-1' }));
+    await redated.service.update(ORG, 'e1', { issueDate: '2026-12-01' }, ACTOR);
+    expect(redated.tx.financialEntry.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ companyActivityId: null }) }),
+    );
+
+    const untouched = setup(entryRow({ companyActivityId: 'act-1' }));
+    await untouched.service.update(ORG, 'e1', { description: 'Site novo', issueDate: '2026-11-01' }, ACTOR);
+    expect(untouched.tx.financialEntry.update.mock.calls[0][0].data).not.toHaveProperty('companyActivityId');
+  });
+
   it('virar PESSOAL sem soltar o contrato é rejeitado (contrato é sempre da empresa)', async () => {
     const { service, tx } = setup(entryRow({ scope: 'BUSINESS', contractId: 'contract-1' }));
     await expect(service.update(ORG, 'e1', { scope: 'PERSONAL' }, ACTOR)).rejects.toBeInstanceOf(BadRequestException);

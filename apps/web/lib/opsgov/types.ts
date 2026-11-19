@@ -136,3 +136,51 @@ export function formatCnpj(digits: string | null): string {
   if (!digits || digits.length !== 14) return digits ?? '—';
   return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
 }
+
+// ── Fase 2: receita por atividade ──────────────────────────────────────────
+export const OPSGOV_FINANCE_ROLES: Role[] = ['OWNER', 'ADMIN', 'MANAGER'];
+
+export type RevenueBasis = 'COMPETENCIA' | 'CAIXA';
+export const REVENUE_BASIS_LABELS: Record<RevenueBasis, string> = {
+  COMPETENCIA: 'Competência (emissão)',
+  CAIXA: 'Caixa (recebimento)',
+};
+
+export interface UnclassifiedEntry {
+  id: string;
+  description: string;
+  customerName: string | null;
+  amountCents: number;
+  status: string;
+  issueDate: string;
+}
+
+export interface RevenueLine {
+  monthsCents: number[];
+  totalCents: number;
+}
+
+export interface RevenueByActivity {
+  basis: RevenueBasis;
+  months: string[];
+  rows: Array<RevenueLine & { cnae: string; description: string; revenueGroup: RevenueGroup }>;
+  groups: Array<RevenueLine & { revenueGroup: RevenueGroup }>;
+  unclassified: RevenueLine;
+  totals: RevenueLine;
+}
+
+export type Rbt12Method = 'TWELVE_MONTHS' | 'START_MONTH' | 'START_AVERAGE';
+export const RBT12_METHOD_LABELS: Record<Rbt12Method, string> = {
+  TWELVE_MONTHS: 'Soma dos 12 meses anteriores',
+  START_MONTH: 'Início de atividade: receita do mês × 12',
+  START_AVERAGE: 'Início de atividade: média dos meses anteriores × 12',
+};
+
+export interface Rbt12 {
+  month: string;
+  rbt12Cents: number;
+  method: Rbt12Method;
+  monthsConsidered: string[];
+  basis: RevenueBasis;
+  activityStartMonth: string | null;
+}

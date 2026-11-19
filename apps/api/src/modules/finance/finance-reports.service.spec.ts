@@ -133,3 +133,32 @@ describe('FinanceReportsService.profitability', () => {
     expect(entryScopes.every((s: string | undefined) => s === 'BUSINESS')).toBe(true);
   });
 });
+
+describe('FinanceReportsService.businessIncomeDataset', () => {
+  it('só lê BUSINESS e devolve apenas receitas, com a atividade de cada linha', async () => {
+    const prisma = {
+      financialEntry: {
+        findMany: jest.fn().mockResolvedValue([
+          entryRow({ id: 'in', direction: 'INCOME', category: 'PROJECT', companyActivityId: 'act-1' }),
+          entryRow({ id: 'out', companyActivityId: null }),
+        ]),
+      },
+      financialPayment: {
+        findMany: jest.fn().mockResolvedValue([
+          paymentRow({ entryId: 'in', entry: { direction: 'INCOME', category: 'PROJECT', customerId: null, contractId: null, companyActivityId: 'act-1' } }),
+          paymentRow({ entry: { direction: 'EXPENSE', category: 'TOOLS', customerId: null, contractId: null, companyActivityId: null } }),
+        ]),
+      },
+      contract: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new FinanceReportsService(prisma as unknown as PrismaService);
+
+    const data = await service.businessIncomeDataset(ORG, '2026-01-01', '2026-12-31');
+
+    expect(prisma.financialEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ organizationId: ORG, scope: 'BUSINESS' }) }),
+    );
+    expect(data.entries.map((e) => [e.id, e.companyActivityId])).toEqual([['in', 'act-1']]);
+    expect(data.payments).toEqual([expect.objectContaining({ entryId: 'in', companyActivityId: 'act-1', paidAt: '2026-11-05' })]);
+  });
+});

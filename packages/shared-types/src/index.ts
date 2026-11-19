@@ -23,3 +23,4 @@ export * from './outreach-strategy';
 export * from './harvey';
 export * from './opsgov';
 export * from './opsgov-validity';
+export * from './rbt12';

@@ -2,14 +2,21 @@
 
 import Link from 'next/link';
 import { useParams, usePathname } from 'next/navigation';
+import { useCurrentMembership } from '@/lib/memberships/use-memberships';
+import { OPSGOV_FINANCE_ROLES } from '@/lib/opsgov/types';
 import { cn } from '@/lib/utils';
 
-// Abas crescem a cada fase do OpsGov (receita, simulador, obrigações, contador, licitações).
-const TABS = [{ segment: 'empresa', label: 'Empresa' }];
+// Abas crescem a cada fase do OpsGov. `finance` = só MANAGER+ (a API é quem barra).
+const TABS = [
+  { segment: 'empresa', label: 'Empresa', finance: false },
+  { segment: 'receita', label: 'Receita', finance: true },
+];
 
 export default function OpsGovLayout({ children }: { children: React.ReactNode }) {
   const { organizationId } = useParams<{ organizationId: string }>();
   const pathname = usePathname();
+  const { membership } = useCurrentMembership(organizationId);
+  const seesFinance = Boolean(membership && OPSGOV_FINANCE_ROLES.includes(membership.role));
   const basePath = `/organizations/${organizationId}/opsgov`;
 
   return (
@@ -17,7 +24,7 @@ export default function OpsGovLayout({ children }: { children: React.ReactNode }
       <header className="flex flex-col gap-3">
         <h1 className="text-h1">OpsGov</h1>
         <nav className="flex gap-1 overflow-x-auto border-b border-border" aria-label="Seções do OpsGov">
-          {TABS.map((tab) => {
+          {TABS.filter((tab) => !tab.finance || seesFinance).map((tab) => {
             const href = `${basePath}/${tab.segment}`;
             const active = pathname?.startsWith(href);
             return (
