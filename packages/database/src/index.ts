@@ -63,7 +63,17 @@ export type {
   CostEvent,
   CostCategory,
   OrganizationRevenueSettings,
+  CampaignLead,
+  CampaignLeadOrigin,
+  CampaignKind,
+  CampaignCreationSource,
+  LeadEntityType,
+  LeadDuplicateCandidate,
+  DuplicateCandidateStatus,
+  OutreachCampaignAttribution,
 } from '@prisma/client';
+export { recordCampaignLead, syncDuplicateCandidates } from './campaigns';
+export type { CampaignLeadInput } from './campaigns';
 export {
   recordStageTransition,
   recordCostEvent,

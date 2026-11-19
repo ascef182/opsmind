@@ -43,7 +43,12 @@ describe('Harvey orchestrator (e2e)', () => {
     const campaign = await replicaA.salesCampaign.create({
       data: {
         organizationId: organization.id,
-        name: 'Campanha padrão',
+        name: 'Dentista — Campinas/SP',
+        kind: 'STANDARD',
+        segment: 'dentista',
+        city: 'Campinas',
+        state: 'SP',
+        identityKey: `dentista|campinas|sp|${suffix}`,
         country: 'BR',
         language: 'pt-BR',
         timezone: 'UTC',

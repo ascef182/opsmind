@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -233,6 +234,12 @@ export class OutreachService {
     actor: OutreachDraftActor,
   ): Promise<OutreachMessage> {
     const lead = await this.leadsService.findByIdOrThrow(organizationId, leadId);
+    // Toda mensagem nova nasce ligada à campanha em que foi gerada (a mais
+    // recente do lead). Checado antes de gastar com a IA.
+    if (!lead.campaignId) {
+      throw new ConflictException('Este lead não está em nenhuma campanha; não é possível gerar o rascunho.');
+    }
+    const campaignId = lead.campaignId;
     const signals = await this.latestSignals(organizationId, leadId);
     const computed = selectOutreachStrategy({
       website: lead.website,
@@ -320,6 +327,7 @@ export class OutreachService {
       data: {
         organizationId,
         leadId,
+        campaignId,
         serviceOfferingId: offering.id,
         channel: dto.channel,
         subject: best.subject,

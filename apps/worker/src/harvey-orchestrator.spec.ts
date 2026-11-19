@@ -12,7 +12,8 @@ const TODAY = new Date('2026-11-18');
 const campaign = {
   id: 'camp-1',
   organizationId: 'org-1',
-  name: 'Campanha padrão',
+  name: 'Metalúrgica — Campinas/SP',
+  kind: 'STANDARD',
   status: 'ACTIVE',
   timezone: 'America/Sao_Paulo',
   workingDays: [1, 2, 3, 4, 5],

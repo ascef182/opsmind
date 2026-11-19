@@ -98,6 +98,10 @@ const COLORS: Record<string, string> = {
   OK: 'bg-positive-500/15 text-positive-500',
   ERROR: 'bg-negative-500/15 text-negative-500',
   SKIPPED_BUDGET: 'bg-ink-800 text-ink-300',
+
+  // CampaignStatus — ACTIVE e COMPLETED já mapeados acima.
+  PAUSED: 'bg-accent-500/15 text-accent-500',
+  ARCHIVED: 'bg-ink-800 text-ink-300',
 };
 
 // `value` é usado como chave de cor em `COLORS` e, por padrão, também como

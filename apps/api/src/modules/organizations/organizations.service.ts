@@ -3,7 +3,6 @@ import type { Organization } from '@opsmind/database';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
-import { defaultCampaignData } from '../harvey/campaigns.service';
 
 function slugify(name: string): string {
   return name
@@ -34,7 +33,6 @@ export class OrganizationsService {
         await tx.membership.create({
           data: { userId, organizationId: org.id, role: 'OWNER' },
         });
-        await tx.salesCampaign.create({ data: defaultCampaignData(org.id) });
         await tx.harveyAgent.create({ data: { organizationId: org.id } });
         return org;
       });

@@ -39,11 +39,20 @@ describe('Harvey (e2e)', () => {
     return res.body.id;
   }
 
+  async function createCampaign(auth: { Authorization: string }, base: string, segment = 'Dentista') {
+    const res = await request(app.getHttpServer())
+      .post(`${base}/revenue/campaigns`)
+      .set(auth)
+      .send({ segment, city: 'Campinas', state: 'SP' })
+      .expect(201);
+    return res.body as { id: string; name: string };
+  }
+
   async function command(auth: { Authorization: string }, base: string, cmd: string, expected = 201) {
     return request(app.getHttpServer()).post(`${base}/revenue/harvey/commands`).set(auth).send({ command: cmd }).expect(expected);
   }
 
-  it('nova organização nasce com campanha padrão e Harvey parado', async () => {
+  it('nova organização nasce sem campanhas e com o Harvey parado', async () => {
     const owner = await registerUser(app, `harvey-new-${randomUUID()}@opsmind.test`);
     const auth = { Authorization: `Bearer ${owner.accessToken}` };
     const organizationId = await createOrg(owner.accessToken, 'Harvey New');
@@ -51,12 +60,16 @@ describe('Harvey (e2e)', () => {
 
     const snapshot = await request(app.getHttpServer()).get(`${base}/revenue/harvey`).set(auth).expect(200);
     expect(snapshot.body).toEqual(expect.objectContaining({ status: 'IDLE', controlState: 'STOPPED' }));
-    expect(snapshot.body.runs).toHaveLength(1);
-    expect(snapshot.body.runs[0]).toEqual(expect.objectContaining({ campaignName: 'Campanha padrão', status: null }));
+    expect(snapshot.body.runs).toHaveLength(0);
+    const empty = await request(app.getHttpServer()).get(`${base}/revenue/campaigns`).set(auth).expect(200);
+    expect(empty.body).toEqual([]);
 
+    await createCampaign(auth, base);
+    const after = await request(app.getHttpServer()).get(`${base}/revenue/harvey`).set(auth).expect(200);
+    expect(after.body.runs[0]).toEqual(expect.objectContaining({ campaignName: 'Dentista — Campinas/SP', status: null }));
     const campaigns = await request(app.getHttpServer()).get(`${base}/revenue/campaigns`).set(auth).expect(200);
     expect(campaigns.body).toEqual([
-      expect.objectContaining({ name: 'Campanha padrão', dailyResearchGoal: 30, enabledChannels: ['EMAIL'] }),
+      expect.objectContaining({ kind: 'STANDARD', dailyResearchGoal: 30, enabledChannels: ['EMAIL'], timezone: 'America/Sao_Paulo' }),
     ]);
   });
 
@@ -102,6 +115,7 @@ describe('Harvey (e2e)', () => {
       data: {
         organizationId,
         leadId: lead.body.id,
+        campaignId: lead.body.campaignId,
         channel: 'EMAIL',
         subject: 'Oi',
         body: 'Olá',
@@ -158,6 +172,7 @@ describe('Harvey (e2e)', () => {
       data: {
         organizationId,
         leadId: lead.body.id,
+        campaignId: lead.body.campaignId,
         channel: 'EMAIL',
         body: 'x',
         evidenceQuotes: [],
@@ -191,9 +206,17 @@ describe('Harvey (e2e)', () => {
 
     await request(app.getHttpServer()).get(`${base}/revenue/harvey`).set(memberAuth).expect(200);
     await command(memberAuth, base, 'START', 403);
-    const campaigns = await request(app.getHttpServer()).get(`${base}/revenue/campaigns`).set(memberAuth).expect(200);
+    const ownerAuth = { Authorization: `Bearer ${owner.accessToken}` };
+    const campaign = await createCampaign(ownerAuth, base);
+    await request(app.getHttpServer()).get(`${base}/revenue/campaigns`).set(memberAuth).expect(200);
     await request(app.getHttpServer())
-      .patch(`${base}/revenue/campaigns/${campaigns.body[0].id}`)
+      .post(`${base}/revenue/campaigns`)
+      .set(memberAuth)
+      .send({ segment: 'Padaria', city: 'Santos', state: 'SP' })
+      .expect(403);
+    await request(app.getHttpServer()).post(`${base}/revenue/campaigns/${campaign.id}/pause`).set(memberAuth).expect(403);
+    await request(app.getHttpServer())
+      .patch(`${base}/revenue/campaigns/${campaign.id}`)
       .set(memberAuth)
       .send({ dailyResearchGoal: 5 })
       .expect(403);
@@ -204,7 +227,7 @@ describe('Harvey (e2e)', () => {
     const auth = { Authorization: `Bearer ${owner.accessToken}` };
     const organizationId = await createOrg(owner.accessToken, 'Harvey Campaign');
     const base = `/organizations/${organizationId}/revenue/campaigns`;
-    const [campaign] = (await request(app.getHttpServer()).get(base).set(auth).expect(200)).body;
+    const campaign = await createCampaign(auth, `/organizations/${organizationId}`);
 
     await request(app.getHttpServer()).patch(`${base}/${campaign.id}`).set(auth).send({ timezone: 'Mars/Base' }).expect(400);
     await request(app.getHttpServer()).patch(`${base}/${campaign.id}`).set(auth).send({ workEndMinute: 300 }).expect(400);
@@ -231,7 +254,7 @@ describe('Harvey (e2e)', () => {
     const base = `/organizations/${organizationId}`;
 
     await command(ownerAuth, base, 'START');
-    const [campaign] = (await request(app.getHttpServer()).get(`${base}/revenue/campaigns`).set(ownerAuth)).body;
+    const campaign = await createCampaign(ownerAuth, base);
 
     await request(app.getHttpServer()).get(`${base}/revenue/harvey`).set(outsiderAuth).expect(403);
     await request(app.getHttpServer()).get(`${base}/revenue/harvey/activities`).set(outsiderAuth).expect(403);

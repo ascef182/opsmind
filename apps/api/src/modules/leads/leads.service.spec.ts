@@ -9,6 +9,7 @@ import type { SocialLinkDto } from './dto/social-link.dto';
 describe('LeadsService', () => {
   let service: LeadsService;
   let prisma: {
+    $executeRaw: jest.Mock;
     lead: {
       create: jest.Mock;
       findFirst: jest.Mock;
@@ -30,10 +31,12 @@ describe('LeadsService', () => {
   let websiteProfileQueueService: { enqueue: jest.Mock };
   let outreachAutodraftQueueService: { enqueue: jest.Mock };
   let pipelineHistory: { leadStatusChanged: jest.Mock; dealStageChanged: jest.Mock };
+  let campaignsService: { manualEntryCampaign: jest.Mock };
 
   beforeEach(() => {
     (Sentry.captureException as jest.Mock).mockClear();
     prisma = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       lead: {
         create: jest.fn(),
         findFirst: jest.fn(),
@@ -54,6 +57,7 @@ describe('LeadsService', () => {
     dealsService = { create: jest.fn().mockResolvedValue({ id: 'deal-1' }) };
     websiteProfileQueueService = { enqueue: jest.fn().mockResolvedValue(undefined) };
     outreachAutodraftQueueService = { enqueue: jest.fn().mockResolvedValue(undefined) };
+    campaignsService = { manualEntryCampaign: jest.fn().mockResolvedValue({ id: 'camp-manual' }) };
     pipelineHistory = { leadStatusChanged: jest.fn().mockResolvedValue(undefined), dealStageChanged: jest.fn().mockResolvedValue(undefined) };
     service = new LeadsService(
       prisma as never,
@@ -63,6 +67,7 @@ describe('LeadsService', () => {
       websiteProfileQueueService as never,
       outreachAutodraftQueueService as never,
       pipelineHistory as never,
+      campaignsService as never,
     );
   });
 
@@ -78,6 +83,7 @@ describe('LeadsService', () => {
           organizationId: 'org-1',
           sourceType: 'MANUAL',
           actorType: 'USER',
+          campaignId: 'camp-manual',
           actorId: 'user-1',
           name: 'Padaria Central',
         },
@@ -122,6 +128,7 @@ describe('LeadsService', () => {
           organizationId: 'org-1',
           sourceType: 'MANUAL',
           actorType: 'USER',
+          campaignId: 'camp-manual',
           actorId: 'user-1',
           name: 'Padaria Central',
           whatsapp: '+5511900000000',

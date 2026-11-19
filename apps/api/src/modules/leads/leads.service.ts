@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as Sentry from '@sentry/nestjs';
-import { Prisma, type Customer, type Lead, type LeadStatus } from '@opsmind/database';
+import { Prisma, recordCampaignLead, type Customer, type Lead, type LeadStatus } from '@opsmind/database';
 import {
   QUALIFICATION_THRESHOLD,
   scoreLead,
@@ -21,6 +21,7 @@ import { EXPLORIUM_GATEWAY, type ExploriumGateway } from '@opsmind/integrations'
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { DealsService } from '../deals/deals.service';
+import { CampaignsService } from '../harvey/campaigns.service';
 import { PipelineHistoryService } from '../revenue/pipeline-history.service';
 import { WebsiteProfileQueueService } from '../../infrastructure/queue/website-profile-queue.service';
 import { OutreachAutodraftQueueService } from '../../infrastructure/queue/outreach-autodraft-queue.service';
@@ -138,12 +139,15 @@ export class LeadsService {
     private readonly websiteProfileQueueService: WebsiteProfileQueueService,
     private readonly outreachAutodraftQueueService: OutreachAutodraftQueueService,
     private readonly pipelineHistory: PipelineHistoryService,
+    private readonly campaignsService: CampaignsService,
   ) {}
 
   async create(organizationId: string, dto: CreateLeadDto, actorUserId: string): Promise<Lead> {
-    const lead = await this.prisma.lead.create({
+    const manualCampaign = await this.campaignsService.manualEntryCampaign(organizationId);
+    const created = await this.prisma.lead.create({
       data: {
         organizationId,
+        campaignId: manualCampaign.id,
         sourceType: 'MANUAL',
         actorType: 'USER',
         actorId: actorUserId,
@@ -158,6 +162,14 @@ export class LeadsService {
           : undefined,
       },
     });
+    await recordCampaignLead(this.prisma, {
+      organizationId,
+      campaignId: manualCampaign.id,
+      leadId: created.id,
+      origin: 'MANUAL',
+      foundAt: created.discoveredAt,
+    });
+    const lead = created;
 
     await this.auditService.log({
       actorType: 'USER',

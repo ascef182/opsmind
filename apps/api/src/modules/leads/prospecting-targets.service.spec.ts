@@ -14,7 +14,7 @@ describe('ProspectingTargetsService', () => {
   };
   let auditService: { log: jest.Mock };
   let scrapeJobsService: { create: jest.Mock };
-  let campaignsService: { getDefault: jest.Mock; findByIdOrThrow: jest.Mock };
+  let campaignsService: { findOrCreateForSearch: jest.Mock; findByIdOrThrow: jest.Mock; assertTargetMatchesCampaign: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -29,7 +29,8 @@ describe('ProspectingTargetsService', () => {
     auditService = { log: jest.fn() };
     scrapeJobsService = { create: jest.fn().mockResolvedValue({ id: 'job-1' }) };
     campaignsService = {
-      getDefault: jest.fn().mockResolvedValue({ id: 'camp-1' }),
+      findOrCreateForSearch: jest.fn().mockResolvedValue({ id: 'camp-1' }),
+      assertTargetMatchesCampaign: jest.fn(),
       findByIdOrThrow: jest.fn().mockResolvedValue({ id: 'camp-1' }),
     };
     service = new ProspectingTargetsService(
@@ -265,6 +266,32 @@ describe('ProspectingTargetsService', () => {
         }),
       );
       expect(result).toBe(updated);
+    });
+
+    it('mudar a cidade leva o alvo para a campanha da nova combinação', async () => {
+      prisma.prospectingTarget.findFirst.mockResolvedValue({
+        id: 'target-1',
+        organizationId: 'org-1',
+        campaignId: 'camp-1',
+        businessType: 'Padaria',
+        city: 'Santos',
+        state: 'SP',
+        isActive: false,
+      });
+      campaignsService.findOrCreateForSearch.mockResolvedValue({ id: 'camp-2' });
+      prisma.prospectingTarget.update.mockResolvedValue({ id: 'target-1', isActive: false });
+
+      await service.update('org-1', 'target-1', { city: 'Campinas' }, 'user-1');
+
+      expect(campaignsService.findOrCreateForSearch).toHaveBeenCalledWith('org-1', {
+        businessType: 'Padaria',
+        city: 'Campinas',
+        state: 'SP',
+      });
+      expect(prisma.prospectingTarget.update).toHaveBeenCalledWith({
+        where: { id: 'target-1' },
+        data: { city: 'Campinas', campaignId: 'camp-2' },
+      });
     });
 
     it('lança 404 quando o alvo não existe', async () => {

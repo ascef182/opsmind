@@ -225,6 +225,20 @@ Camada comercial por cima de leads/outreach/deals, sem pipeline paralelo. Roadma
 - Filas: opções de job por fila em `packages/shared-types/src/queue-job-options.ts`, aplicadas no construtor da
   `Queue` dos dois lados (API e worker). `lead-scrape` nunca retenta (pagaria o provedor de novo).
 
+### Campanhas de prospecção (`modules/harvey/campaigns.*`, `modules/leads/campaign-workspace.*`, `apps/web/.../campaigns`)
+
+Design: `docs/superpowers/specs/2026-11-18-campanhas-prospeccao-design.md`. `SalesCampaign` é a campanha, identificada por
+segmento + cidade + estado (`identityKey` = `campaignIdentityKey()`, shared-types; índice único parcial só para campanhas vivas).
+`kind`: `STANDARD` (prospecção), `GENERAL` (antiga "Campanha padrão", arquivada), `LEGACY` (leads antigos sem origem
+comprovável), `MANUAL_ENTRY` (leads cadastrados à mão). `ProspectingTarget` = busca recorrente dentro da campanha (mesma
+identidade, checada por `assertTargetMatchesCampaign`); busca avulsa usa `findOrCreateForSearch` (reusa a viva, nunca reabre
+finalizada sozinha). Empresa = `Lead` (uma por org); participação em campanhas = `CampaignLead`, sempre via
+`recordCampaignLead` (`@opsmind/database`), que preserva a primeira ocorrência. Toda `OutreachMessage` nova exige
+`campaignId` (CHECK no banco). O Harvey só trabalha em campanha `STANDARD` + `ACTIVE`; lead `MANUAL_ENTRY` segue só o estado
+do agente. Resultados de busca passam por `classifyLeadCandidate` (diretório/página interna nunca qualifica, motivo em
+`disqualificationReason`). Duplicatas: `LeadDuplicateCandidate` gerado por `syncDuplicateCandidates`, revisão sempre humana,
+nunca funde. Rollback manual da migration: `packages/database/prisma/rollbacks/`.
+
 ### Harvey — agente do Revenue Engine (`apps/api/src/modules/harvey/`, `apps/worker/src/harvey-*.ts`)
 
 "Harvey" é o SDR do engine (Fase 1: controle). Não é um loop de LLM: é um **orquestrador determinístico** no worker

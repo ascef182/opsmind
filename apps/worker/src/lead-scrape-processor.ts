@@ -10,6 +10,8 @@ import {
   recordStageTransition,
   startHarveyActivity,
   type HarveyActivity,
+  recordCampaignLead,
+  syncDuplicateCandidates,
 } from '@opsmind/database';
 import type {
   LeadScoreBreakdown,
@@ -32,6 +34,8 @@ import {
   type ServiceOfferingIcp,
   type SocialLink,
   type SocialPlatform,
+  classifyLeadCandidate,
+  isQualifiableEntity,
 } from '@opsmind/shared-types';
 import type {
   ApifyGateway,
@@ -295,68 +299,6 @@ function mapCamofoxResult(r: CamofoxSearchResult): RawCandidate {
   };
 }
 
-// Domínios de portal/agregador BR conhecidos que aparecem com frequência nos
-// resultados de `@google_search` pra categorias de negócio genéricas
-// (imobiliária, barbearia etc.) — sempre a PRÓPRIA página do portal, nunca
-// um negócio individual. Heurística curta e deliberadamente NÃO exaustiva
-// (achado real: 2026-09, resultados como "766 imobiliárias em São Paulo... -
-// Imovelweb" virando lead QUALIFIED) — vai precisar de manutenção conforme
-// novos portais aparecerem nos resultados reais. Combinada com
-// `LISTICLE_TITLE_PATTERN` abaixo, não substitui o fix de scoring da Fase 1
-// (`websiteConfirmedAbsent`), só reduz o volume de lixo que chega a virar
-// `Lead` em primeiro lugar.
-const KNOWN_DIRECTORY_DOMAINS: ReadonlySet<string> = new Set([
-  'imovelweb.com.br',
-  'vivareal.com.br',
-  'zapimoveis.com.br',
-  'olx.com.br',
-  'lopes.com.br',
-  'lello.com.br',
-  'guiamais.com.br',
-  'apontador.com.br',
-  'telelistas.net',
-  'reclameaqui.com.br',
-]);
-
-// "As 20 melhores barbearias em São Paulo", "766 imobiliárias em São Paulo",
-// "8 barbearias incríveis em SP que todo homem deveria conhecer" — título de
-// listicle/blog sobre a categoria, não o negócio em si. Best-effort: nem
-// todo diretório usa essas palavras, e um negócio real cujo nome contenha
-// um número ("Barbearia Top 10") pode colidir — ver comentário de
-// `looksLikeDirectoryOrListicle`.
-const LISTICLE_TITLE_PATTERN = /\bmelhores?\b|\btop\s*\d+\b|\b\d+\s+\S+.*\bem\b/i;
-
-function extractHostname(rawUrl: string): string | null {
-  try {
-    const withProtocol = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
-    return new URL(withProtocol).hostname.toLowerCase().replace(/^www\./, '');
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Filtro best-effort aplicado só a `@google_search` (Camoufox) ANTES de virar
- * `RawCandidate`/`Lead` — descarta o que claramente é uma página de
- * diretório/portal/listicle sobre a categoria buscada, não um negócio local
- * individual. NÃO é uma garantia de correção: falso-negativo é certo (qualquer
- * domínio fora da denylist, ou título de listicle fraseado diferente, passa
- * batido) e falso-positivo é possível (negócio real com número no nome, ex.
- * "Restaurante 5 Estrelas"). Complementa, não substitui, o fix de scoring da
- * Fase 1 — a defesa real contra qualificar lixo é `websiteConfirmedAbsent`;
- * isto só reduz volume.
- */
-export function looksLikeDirectoryOrListicle(candidate: { title: string | null; url: string }): boolean {
-  const host = extractHostname(candidate.url);
-  if (host && KNOWN_DIRECTORY_DOMAINS.has(host)) {
-    return true;
-  }
-  if (candidate.title && LISTICLE_TITLE_PATTERN.test(candidate.title)) {
-    return true;
-  }
-  return false;
-}
-
 type SourceHandler = (job: ScrapeJob, gateways: LeadScrapeGateways) => Promise<RawCandidate[]>;
 
 /**
@@ -395,16 +337,10 @@ const SOURCE_REGISTRY: Record<ScrapeSourceType, SourceHandler> = {
     // Filtro de portal/listicle só faz sentido aqui — `@reddit_search`
     // (abaixo) é estruturalmente diferente (thread individual, não página de
     // diretório) e `runCamofoxFallback` busca perfil social, não candidato a
-    // lead (ver docstring de `looksLikeDirectoryOrListicle`).
-    const filtered = results.filter((r) => !looksLikeDirectoryOrListicle(r));
-    const discarded = results.length - filtered.length;
-    if (discarded > 0) {
-      // eslint-disable-next-line no-console -- visibilidade mínima da heurística de filtro (sem logger estruturado disponível nesta função pura)
-      console.info(
-        `[lead-scrape-processor] ${discarded}/${results.length} resultado(s) do Camoufox descartado(s) por parecer diretório/portal/listicle (scrapeJobId=${job.id}).`,
-      );
-    }
-    return filtered.map(mapCamofoxResult);
+    // lead.
+    // Diretório/portal/listicle não é mais descartado em silêncio: vira lead
+    // desqualificado com motivo (`classifyLeadCandidate`, em `upsertLead`).
+    return results.map(mapCamofoxResult);
   },
   CAMOFOX_REDDIT_SEARCH: async (job, gateways) => {
     const results = await gateways.camofox.search({
@@ -1035,7 +971,7 @@ async function upsertLead(
   const existingLead = candidate.placeId
     ? await tx.lead.findUnique({
         where: { organizationId_placeId: { organizationId: data.organizationId, placeId: candidate.placeId } },
-        select: { id: true, status: true, socialLinks: true },
+        select: { id: true, status: true, socialLinks: true, duplicateOfLeadId: true },
       })
     : await (dedupUrl
         ? tx.lead.findFirst({
@@ -1044,7 +980,7 @@ async function upsertLead(
               sourceType,
               rawSnapshot: { path: ['_dedupUrl'], equals: dedupUrl },
             },
-            select: { id: true, status: true, socialLinks: true },
+            select: { id: true, status: true, socialLinks: true, duplicateOfLeadId: true },
           })
         : tx.lead.findFirst({
             where: {
@@ -1054,7 +990,7 @@ async function upsertLead(
               city: candidate.city,
               state: candidate.state,
             },
-            select: { id: true, status: true, socialLinks: true },
+            select: { id: true, status: true, socialLinks: true, duplicateOfLeadId: true },
           }));
 
   const confirmedSignals = existingLead
@@ -1072,14 +1008,27 @@ async function upsertLead(
     confirmedSignals,
   };
   const breakdown = scoreLead(scoreInput, offeringsIcp);
-  const computedStatus: LeadStatus = breakdown.total >= QUALIFICATION_THRESHOLD ? 'QUALIFIED' : 'DISQUALIFIED';
+  // Diretório, página interna ou resultado genérico nunca qualifica, qualquer
+  // que seja o score.
+  const classification = classifyLeadCandidate({
+    name: candidate.name,
+    url: candidate.url ?? candidate.website,
+    structuredSource: STRUCTURED_WEBSITE_SOURCES.has(sourceType),
+  });
+  const qualifiable = isQualifiableEntity(classification.entityType);
+  const computedStatus: LeadStatus = qualifiable && breakdown.total >= QUALIFICATION_THRESHOLD ? 'QUALIFIED' : 'DISQUALIFIED';
+  const computedReason = !qualifiable
+    ? classification.reason
+    : computedStatus === 'DISQUALIFIED'
+      ? 'SCORE_BELOW_THRESHOLD'
+      : null;
   // Um rescan nunca regride um lead que já avançou além da qualificação
   // (rascunho gerado, contatado, convertido...) — mesma regra de
   // `LeadsService.score()` e do website profiler.
-  const status: LeadStatus =
-    existingLead && !RESCAN_WRITABLE_STATUSES.includes(existingLead.status)
-      ? existingLead.status
-      : computedStatus;
+  // Duplicata confirmada por uma pessoa também não é reescrita pelo rescan.
+  const keepStatus =
+    !!existingLead && (!RESCAN_WRITABLE_STATUSES.includes(existingLead.status) || !!existingLead.duplicateOfLeadId);
+  const status: LeadStatus = keepStatus ? existingLead!.status : computedStatus;
   const recordTransition = (lead: Lead): Promise<void> =>
     recordStageTransition(tx, {
       organizationId: data.organizationId,
@@ -1106,6 +1055,8 @@ async function upsertLead(
     placeId: candidate.placeId,
     rawContent: candidate.rawContent,
     status,
+    entityType: classification.entityType,
+    disqualificationReason: keepStatus ? undefined : computedReason,
     score: breakdown.total,
     scoreBreakdown: breakdown as unknown as Prisma.InputJsonValue,
     suggestedOfferingId: breakdown.matchedOfferingId,
@@ -1354,6 +1305,8 @@ async function maybeEnqueueApifyFallback(
         actorType: data.actorType,
         actorId: data.actorId ?? null,
         fallbackOfScrapeJobId: scrapeJob.id,
+        campaignId: scrapeJob.campaignId,
+        prospectingTargetId: null,
       },
     });
 
@@ -1689,6 +1642,7 @@ export async function processLeadScrapeJob(
         }
 
         let count = 0;
+        const touchedLeadIds: string[] = [];
         const autodraftJobs: OutreachAutodraftJobData[] = [];
         const websiteProfileJobs: WebsiteProfileJobData[] = [];
         for (const { candidate, firmographics, enrichmentRaw, contactEnrichment } of enriched) {
@@ -1736,9 +1690,17 @@ export async function processLeadScrapeJob(
           }
           count += 1;
 
-          if (scrapeJob.campaignId && !lead.campaignId) {
-            lead = await tx.lead.update({ where: { id: lead.id }, data: { campaignId: scrapeJob.campaignId } });
+          if (scrapeJob.campaignId) {
+            await recordCampaignLead(tx, {
+              organizationId: data.organizationId,
+              campaignId: scrapeJob.campaignId,
+              leadId: lead.id,
+              origin: 'SEARCH',
+              scrapeJobId: scrapeJob.id,
+            });
+            lead = { ...lead, campaignId: scrapeJob.campaignId };
           }
+          touchedLeadIds.push(lead.id);
           const isNewLead = lead.createdAt >= jobStartedAt;
           if (isNewLead) newLeads += 1;
           leadActivities.push(...(await recordLeadActivities(tx, data, scrapeJob, lead, isNewLead)));
@@ -1800,6 +1762,8 @@ export async function processLeadScrapeJob(
             }
           }
         }
+        // Candidatos a duplicata para revisão humana; nunca funde nada.
+        await syncDuplicateCandidates(tx, data.organizationId, touchedLeadIds);
         return { count, autodraftJobs, websiteProfileJobs };
       },
     );
